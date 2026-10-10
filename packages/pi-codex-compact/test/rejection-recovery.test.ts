@@ -16,6 +16,7 @@ import {
   latestCheckpoint,
 } from "../src/checkpoint.js";
 import { createCodexCompactExtension } from "../src/codex-compact.js";
+import { COMPACTION_REPLAY_MESSAGE } from "../src/context-management.js";
 import { resolveCompactionRoute } from "../src/model-api.js";
 import { RejectedRoutes, rejectionRouteKey } from "../src/rejection-state.js";
 import {
@@ -197,6 +198,7 @@ async function harness(
       getSystemPrompt: () => "original instructions",
       modelRegistry: {
         getProvider: () => provider,
+        getProviderAuth: async () => ({ auth: { apiKey: "secret-fixture" }, source: "stored credential" }),
         getApiKeyAndHeaders: async () => {
           options.onAuth?.(++authCalls);
           return {
@@ -404,7 +406,12 @@ test("Cancel setting avoids summary quota and preserves replay across repeated r
     },
     h.ctx,
   );
-  assert.deepEqual(replay, { input: [{ type: "compaction", encrypted_content: "opaque-assistant-only-fact" }] });
+  assert.deepEqual(replay, {
+    input: [
+      { type: "compaction", encrypted_content: "opaque-assistant-only-fact" },
+      { role: "developer", content: [{ type: "input_text", text: COMPACTION_REPLAY_MESSAGE }] },
+    ],
+  });
 });
 
 test("summary recovery failure cancels without changing opaque history", async () => {

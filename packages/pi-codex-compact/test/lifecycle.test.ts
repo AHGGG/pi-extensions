@@ -348,7 +348,9 @@ test("configured custom Codex Responses APIs compact and replay only while curre
     },
     replayContext,
   )) as { input: Record<string, unknown>[] };
-  assert.equal(rewritten.input.at(-2)?.type, "compaction");
+  assert.equal(rewritten.input.at(-3)?.type, "compaction");
+  assert.equal(rewritten.input.at(-2)?.role, "developer");
+  assert.match(JSON.stringify(rewritten.input.at(-2)), /PI_CONTEXT_COMPACTION_REPLAY_V1/);
   assert.match(JSON.stringify(rewritten.input.at(-1)), /later/);
 
   const differentModel = createMockContext({

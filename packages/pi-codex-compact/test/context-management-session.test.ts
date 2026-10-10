@@ -7,6 +7,7 @@ import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { test, vi } from "vitest";
 import { createMockContext, createMockPi } from "../../../test/support.js";
 import { createCheckpointDetails, fallbackSummary, latestCheckpoint } from "../src/checkpoint.js";
+import { COMPACTION_MAINTENANCE_MESSAGE, COMPACTION_REPLAY_MESSAGE } from "../src/context-management.js";
 import type { RemoteCompactionProtocol } from "../src/model-api.js";
 import { DEFAULT_CODEX_COMPACT_SETTINGS } from "../src/settings.js";
 
@@ -114,10 +115,15 @@ test("persisted server checkpoints replay after reload/resume/fork and stop befo
         { type: "before_provider_request", payload },
         ctx,
       )) as typeof payload;
-      assert.deepEqual(replayed.input, [...history, payload.input[1]]);
+      assert.deepEqual(replayed.input, [
+        ...history,
+        { role: "developer", content: [{ type: "input_text", text: COMPACTION_REPLAY_MESSAGE }] },
+        payload.input[1],
+      ]);
       assert.equal(replayed.instructions, payload.instructions);
       assert.deepEqual(replayed.tools, payload.tools);
-      assert.doesNotMatch(JSON.stringify(replayed), /old user history|old assistant-only fact|PI_CONTEXT_COMPACTION/);
+      assert.doesNotMatch(JSON.stringify(replayed), /old user history|old assistant-only fact/);
+      assert.ok(!JSON.stringify(replayed).includes(COMPACTION_MAINTENANCE_MESSAGE));
       assert.deepEqual(latestCheckpoint(current.getBranch())?.details.replacementHistory, history);
       const wrongModel = createMockContext({ model: { ...model, id: "other" }, sessionManager: current }).ctx;
       assert.equal(await mock.events.get("context")?.[0]?.({ type: "context", messages }, wrongModel), undefined);

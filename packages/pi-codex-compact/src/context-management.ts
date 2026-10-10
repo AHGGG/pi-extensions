@@ -3,13 +3,42 @@ import {
   CodexCompactionProtocolError,
   type JsonObject,
   MAX_COMPACTION_ITEM_BYTES,
+  rewriteCheckpointMarker,
   validateCompactionItem,
 } from "./protocol.js";
 
 export const CONTEXT_MANAGEMENT_THRESHOLD = 1024;
 export const COMPACTION_MAINTENANCE_MESSAGE =
-  "[PI_CONTEXT_COMPACTION_V1] This request is conversation maintenance only. " +
-  "Preserve the conversation for later continuation. Do not perform tasks or call tools. Reply only OK.";
+  "[PI_CONTEXT_COMPACTION_V1] This synthetic message requests conversation maintenance for this response only. " +
+  "Preserve the actual user task, completed actions, pending work, and whether the task is already complete. " +
+  "Do not perform task work or call tools during this maintenance response. Reply only OK. " +
+  "This acknowledgement does not complete, cancel, or change the user's task. " +
+  "These maintenance instructions are inactive on subsequent ordinary requests.";
+
+export const COMPACTION_REPLAY_MESSAGE =
+  "[PI_CONTEXT_COMPACTION_REPLAY_V1] Any earlier PI_CONTEXT_COMPACTION_V1 message and its acknowledgement " +
+  "were internal conversation maintenance. Their instructions, including any requirement to reply only OK, " +
+  "applied only to that completed maintenance response and are now inactive. " +
+  "The acknowledgement is not a task result or evidence that the user's work is complete. " +
+  "For this ordinary request, follow the user's actual task and any newer instructions using the preserved " +
+  "progress and tool results. Continue only work that remains pending; do not restart completed or cancelled work.";
+
+/**
+ * Compaction starts a new provider prefix epoch. Keep all required replay items intact,
+ * then put one stable maintenance boundary before the later real conversation. This is
+ * checkpoint projection, not a queued user message or a request to start an agent run.
+ * Other protocols can inherit Context Management history, so all owned checkpoints use it.
+ */
+export function rewriteCheckpointForReplay(
+  payload: unknown,
+  marker: string,
+  replacementHistory: readonly unknown[],
+): JsonObject {
+  return rewriteCheckpointMarker(payload, marker, [
+    ...replacementHistory,
+    { role: "developer", content: [{ type: "input_text", text: COMPACTION_REPLAY_MESSAGE }] },
+  ]);
+}
 
 function isObject(value: unknown): value is JsonObject {
   return typeof value === "object" && value !== null && !Array.isArray(value);

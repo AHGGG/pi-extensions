@@ -56,6 +56,24 @@ test("normalizes defaults and bounded user settings", () => {
   assert.equal(normalizeCodexCompactSettings({ replacementTokenBudget: 1_000_000 }), undefined);
 });
 
+test("request timeout supports fifteen minutes while preserving defaults and validation", async () => {
+  assert.equal(normalizeCodexCompactSettings({})?.requestTimeoutMs, 300_000);
+  for (const requestTimeoutMs of [30_000, 600_000, 900_000])
+    assert.equal(normalizeCodexCompactSettings({ requestTimeoutMs })?.requestTimeoutMs, requestTimeoutMs);
+  for (const requestTimeoutMs of [29_999, 900_001])
+    assert.equal(normalizeCodexCompactSettings({ requestTimeoutMs }), undefined);
+
+  const path = await tempSettingsPath();
+  const runtime = createCodexCompactSettingsRuntime(path);
+  await runtime.update({ requestTimeoutMs: 900_000 });
+  assert.equal((await runtime.reload()).settings.requestTimeoutMs, 900_000);
+  const saved = await readFile(path, "utf8");
+  assert.equal(JSON.parse(saved).requestTimeoutMs, 900_000);
+  await assert.rejects(runtime.update({ requestTimeoutMs: 900_001 }), /Refusing to save invalid/);
+  assert.equal(runtime.get().settings.requestTimeoutMs, 900_000);
+  assert.equal(await readFile(path, "utf8"), saved);
+});
+
 test("loads missing and valid files without consulting real user settings", async () => {
   const path = await tempSettingsPath();
   assert.equal((await loadCodexCompactSettings(path)).kind, "missing");
