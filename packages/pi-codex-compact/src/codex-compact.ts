@@ -310,10 +310,13 @@ async function compactRemotely(
     if (!checkpointPresent) return undefined;
     if (!checkpoint) return { cancel: true };
     if (settings.checkpointRecovery === "cancel") return { cancel: true };
+    let nativeFallbackAllowed = false;
     try {
       const current = projectedCurrentMessages(event, model, route);
       if (!current.prior) throw new Error("Checkpoint recovery lost its checkpoint");
       const messages = summaryPrefix(current.messages, keptMessages(event), fingerprintMessage);
+      // Native fallback is intentionally lossy, but never bypass projection or ownership checks.
+      nativeFallbackAllowed = true;
       const auth = await ctx.modelRegistry.getApiKeyAndHeaders(model);
       if (!stillCurrent()) return { cancel: true };
       if (!auth.ok) throw new Error(auth.error);
@@ -350,6 +353,7 @@ async function compactRemotely(
             // inference endpoint. Compare that exact public dispatch identity.
             if (route.protocol === "responses-compact") endpoint.pathname += "/compact";
             if (endpointObserved && rejectionRouteKey(model, route, endpoint.toString()) !== routeKey) {
+              nativeFallbackAllowed = false;
               return Response.json(
                 { error: { message: "Checkpoint recovery backend changed before dispatch" } },
                 { status: 400, headers: { "x-should-retry": "false" } },
@@ -363,13 +367,17 @@ async function compactRemotely(
       if (!stillCurrent()) return { cancel: true };
       return { compaction };
     } catch (recoveryError) {
-      if (stillCurrent() && ctx.hasUI && settings.notifyOnFallback) {
+      if (!stillCurrent()) return { cancel: true };
+      if (ctx.hasUI && settings.notifyOnFallback) {
+        const outcome = nativeFallbackAllowed
+          ? "using Pi native compaction. Older context stored only in the opaque checkpoint may be lost."
+          : "compaction cancelled and history preserved.";
         ctx.ui.notify(
-          `Checkpoint recovery could not complete; compaction cancelled and history preserved. ${compactionFailureDetail(recoveryError, requestValues)}`,
+          `Checkpoint recovery could not complete; ${outcome} ${compactionFailureDetail(recoveryError, requestValues)}`,
           "warning",
         );
       }
-      return { cancel: true };
+      return nativeFallbackAllowed ? undefined : { cancel: true };
     }
   } finally {
     remoteController.abort();
