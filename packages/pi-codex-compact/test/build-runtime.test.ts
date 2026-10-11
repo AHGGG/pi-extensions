@@ -37,6 +37,9 @@ test("generated runtime is loadable by Pi's Jiti resource loader", async () => {
     const extension = loaded.extensions[0];
     assert.ok(extension?.commands.has("codex-compact"));
     assert.ok(extension?.handlers.has("session_start"));
+    assert.ok(extension?.handlers.has("session_compact"));
+    assert.ok(extension?.handlers.has("agent_before_settle"));
+    assert.ok(extension?.handlers.has("agent_settled"));
     assert.ok(extension?.handlers.has("session_shutdown"));
   } finally {
     if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;

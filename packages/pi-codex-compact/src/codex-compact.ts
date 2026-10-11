@@ -16,6 +16,7 @@ import {
   fingerprintMessage,
   hasActiveCheckpointClaim,
   latestCheckpoint,
+  parseCheckpointDetails,
   REPLACEMENT_BYTE_BUDGET,
 } from "./checkpoint.js";
 import { projectedKeptMessages, projectSessionCheckpointContext } from "./checkpoint-projection.js";
@@ -42,6 +43,10 @@ import {
 import { terminalText } from "./terminal.js";
 
 const STATUS_KEY = "codex-compact";
+const CONTINUATION_TYPE = "codex-compact:continue-v1";
+const CONTINUATION_MESSAGE =
+  "Conversation compaction is complete. Continue unfinished work under the original conversation instructions, " +
+  "using tools when needed. If the work is already complete, provide the final result without repeating completed actions.";
 
 function activeCheckpoint(ctx: ExtensionContext) {
   return latestCheckpoint(ctx.sessionManager.getBranch());
@@ -380,11 +385,21 @@ export function createCodexCompactExtension(
   return (pi) => {
     const providerWarnings = new Set<string>();
     const settingsRuntime = options.settingsRuntime ?? createCodexCompactSettingsRuntime();
+    type ContinuationRun = {
+      used: boolean;
+      pending?: {
+        checkpointId: string;
+        routeKey: string;
+        settingsKey: string;
+        entryId?: string;
+      };
+    };
     type Owner = {
       controller: AbortController;
       rejected: RejectedRoutes;
       sessionId: string;
       operation?: AbortController;
+      run?: ContinuationRun;
     };
     const owners = new WeakMap<object, Owner>();
     const ownerFor = (ctx: ExtensionContext): Owner => {
@@ -486,8 +501,17 @@ export function createCodexCompactExtension(
       }
     });
 
+    // before_agent_start follows pre-prompt compaction and runs once per user run,
+    // unlike agent_start, which also fires for Pi retries and our continuation.
+    pi.on("before_agent_start", (_event, ctx) => {
+      const owner = ownerFor(ctx);
+      if (!owner.controller.signal.aborted) owner.run = { used: false };
+    });
+
     pi.on("session_before_compact", (event, ctx) => {
       const owner = ownerFor(ctx);
+      const run = owner.run;
+      if (run) run.pending = undefined;
       cancelOperation(ctx);
       const operation = new AbortController();
       owner.operation = operation;
@@ -516,10 +540,111 @@ export function createCodexCompactExtension(
         isCurrent,
         () => owners.get(ctx.sessionManager) === owner && owner.operation === operation,
         options.fetch,
-      ).finally(() => {
-        if (owner.operation === operation) owner.operation = undefined;
-        operation.abort();
-      });
+      )
+        .then((result) => {
+          const details =
+            result && "compaction" in result ? parseCheckpointDetails(result.compaction?.details) : undefined;
+          if (
+            run &&
+            owner.run === run &&
+            !run.used &&
+            isCurrent() &&
+            !owner.controller.signal.aborted &&
+            event.reason !== "manual" &&
+            !event.willRetry &&
+            route.kind === "remote" &&
+            route.protocol === "context-management" &&
+            key &&
+            details?.protocol === "context-management"
+          ) {
+            // A returned result is not yet a committed checkpoint. Only the matching
+            // session_compact event can arm it for the settlement boundary.
+            run.pending = { checkpointId: details.checkpointId, routeKey: key, settingsKey: JSON.stringify(settings) };
+          }
+          return result;
+        })
+        .finally(() => {
+          if (owner.operation === operation) owner.operation = undefined;
+          operation.abort();
+        });
+    });
+
+    pi.on("session_compact", (event, ctx) => {
+      const owner = owners.get(ctx.sessionManager);
+      const run = owner?.run;
+      const pending = run?.pending;
+      if (!owner || !run || !pending || pending.entryId) return;
+      const checkpoint = activeCheckpoint(ctx);
+      if (
+        !owner.controller.signal.aborted &&
+        owner.sessionId === ctx.sessionManager.getSessionId() &&
+        event.fromExtension &&
+        event.reason !== "manual" &&
+        !event.willRetry &&
+        checkpoint?.entry.id === event.compactionEntry.id &&
+        checkpoint.details.checkpointId === pending.checkpointId
+      ) {
+        pending.entryId = checkpoint.entry.id;
+      } else {
+        run.pending = undefined;
+      }
+    });
+
+    pi.on("agent_before_settle", (event, ctx) => {
+      const owner = owners.get(ctx.sessionManager);
+      const run = owner?.run;
+      const pending = run?.pending;
+      if (!owner || !run || !pending?.entryId) return;
+      // Consume the candidate even when another participant already continues.
+      // Repeated events cannot replay it at a later or unrelated boundary.
+      run.pending = undefined;
+      const settings = settingsRuntime.get().settings;
+      const route = resolveCompactionRoute(ctx.model, settings);
+      const checkpoint = activeCheckpoint(ctx);
+      if (
+        run.used ||
+        owner.controller.signal.aborted ||
+        ctx.signal?.aborted ||
+        owner.sessionId !== ctx.sessionManager.getSessionId() ||
+        event.outcome !== "completed" ||
+        route.kind !== "remote" ||
+        route.protocol !== "context-management" ||
+        !ctx.model ||
+        rejectionRouteKey(ctx.model, route) !== pending.routeKey ||
+        JSON.stringify(settings) !== pending.settingsKey ||
+        checkpoint?.entry.id !== pending.entryId ||
+        checkpoint.details.checkpointId !== pending.checkpointId ||
+        !isCheckpointCompatible(checkpoint.details, ctx.model, settings) ||
+        (event.continue && event.context.canContinue) ||
+        (event.context.pendingMessages.length > 0 && event.context.canContinue) ||
+        !projectSessionCheckpointContext(event.context.contextMessages, ctx.sessionManager.getBranch(), checkpoint)
+      ) {
+        return;
+      }
+      run.used = true;
+      return {
+        entries: [
+          ...event.entries,
+          {
+            type: "custom_message" as const,
+            customType: CONTINUATION_TYPE,
+            content: CONTINUATION_MESSAGE,
+            display: false,
+            details: { checkpointId: pending.checkpointId },
+          },
+        ],
+        continue: true,
+      };
+    });
+
+    pi.on("session_compact_failed", (_event, ctx) => {
+      const run = owners.get(ctx.sessionManager)?.run;
+      if (run) run.pending = undefined;
+    });
+
+    pi.on("agent_settled", (_event, ctx) => {
+      const owner = owners.get(ctx.sessionManager);
+      if (owner) owner.run = undefined;
     });
 
     pi.on("context", (event, ctx) => {
@@ -532,6 +657,10 @@ export function createCodexCompactExtension(
     });
 
     pi.on("before_provider_request", (event, ctx) => {
+      // This hook is for normal session requests, not the separate maintenance
+      // call. Mid-turn compaction and queued work already satisfy continuation.
+      const run = owners.get(ctx.sessionManager)?.run;
+      if (run?.pending?.entryId) run.pending = undefined;
       if (!settingsRuntime.get().settings.enabled) return undefined;
       const settings = settingsRuntime.get().settings;
       const checkpoint = activeCheckpoint(ctx);
@@ -541,10 +670,16 @@ export function createCodexCompactExtension(
       return rewriteCheckpointMarker(event.payload, marker, checkpoint.details.replacementHistory);
     });
 
-    pi.on("session_tree", (_event, ctx) => cancelOperation(ctx));
+    pi.on("session_tree", (_event, ctx) => {
+      cancelOperation(ctx);
+      const owner = owners.get(ctx.sessionManager);
+      if (owner) owner.run = undefined;
+    });
 
     pi.on("model_select", (event, ctx) => {
       cancelOperation(ctx);
+      const owner = owners.get(ctx.sessionManager);
+      if (owner) owner.run = undefined;
       if (!settingsRuntime.get().settings.enabled) return;
       const settings = settingsRuntime.get().settings;
       const checkpoint = activeCheckpoint(ctx);
@@ -565,6 +700,7 @@ export function createCodexCompactExtension(
       owner.controller.abort();
       owner.rejected = new RejectedRoutes();
       owner.operation = undefined;
+      owner.run = undefined;
       // Keep an aborted tombstone until session_start so queued old-context
       // events cannot recreate an active controller after shutdown.
       providerWarnings.clear();
