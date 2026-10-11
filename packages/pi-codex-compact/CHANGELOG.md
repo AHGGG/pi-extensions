@@ -1,5 +1,11 @@
 # @narumitw/pi-codex-compact
 
+## 0.56.0
+
+### Minor Changes
+
+- 3d3a328: Keep checkpoint-aware recovery first, then use Pi-native compaction if the recovery request fails, times out, or returns invalid output. Native fallback may lose older context stored only in the opaque checkpoint and can consume additional quota. Explicit Cancel, cancellation, stale ownership, and checkpoint projection or backend integrity failures still preserve history by cancelling compaction.
+
 ## 0.55.2
 
 ### Patch Changes
