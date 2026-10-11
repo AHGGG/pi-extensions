@@ -1,5 +1,11 @@
 # @narumitw/pi-subagents
 
+## 3.2.0
+
+### Minor Changes
+
+- ca27497: Allow subagent jobs to select Pi's native codemode tool explicitly, with startup readiness verification and unchanged default tools.
+
 ## 3.1.1
 
 ### Patch Changes
