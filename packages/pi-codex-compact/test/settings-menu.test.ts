@@ -125,6 +125,10 @@ test("settings screen exposes bounded controls and invalid files remain repairab
     ],
   );
 
+  assert.match(
+    screen.items.find((item) => item.id === "checkpointRecovery")?.description ?? "",
+    /Pi native may lose older context.*Integrity failures cancel.*Cancel preserves history/,
+  );
   assert.ok(screen.items.find((item) => item.id === "protocol")?.values?.includes("Context Management (experimental)"));
   const serverState = {
     ...current.runtime.get(),
@@ -319,7 +323,10 @@ test("checkpoint recovery menu applies exact patches and paused status distingui
   assert.match(cancel.lines?.join("\n") ?? "", /cancel compaction; preserve checkpoint history/);
   await invoke("Summarize");
   const summarize = resolveMenuScreen(menu, "main", memory.runtime.get());
-  assert.match(summarize.lines?.join("\n") ?? "", /checkpoint-aware summary; cancel if unsafe/);
+  assert.match(
+    summarize.lines?.join("\n") ?? "",
+    /checkpoint-aware summary; on failure, Pi native may lose older context/,
+  );
   assert.match(summarize.lines?.join("\n") ?? "", /reload retries/);
   const native = resolveMenuScreen(
     createCodexCompactMenu(memory.runtime, { isPaused: () => true, hasCheckpoint: () => false }),

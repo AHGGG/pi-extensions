@@ -21,6 +21,14 @@ The persisted entry remains the summary identity source, so replay does not depe
 If persisted summary identity, fingerprints, model identity, payload shape, or marker count do not match exactly, the extension leaves Pi's visible fallback context unchanged instead of guessing.
 Older v1 and v2 checkpoints are normalized to the current checkpoint format when read; their built-in API label determines the profile. They still replay only when the current route authorizes that API/profile/model combination.
 
+## Recovery and native fallback
+
+Before the first checkpoint, remote failure leaves the `session_before_compact` result unset so Pi runs its default summary generator. With a valid compatible checkpoint and `checkpointRecovery: "summarize"`, recovery first validates the checkpoint projection and retained cut point, then makes ordinary inference with the checkpoint and tools disabled. Successful recovery publishes only validated plaintext output.
+
+After a recovery request/provider failure, timeout, or invalid/oversized output, the hook leaves its result unset only while session, branch, model, settings, and ownership remain current. Pi owns native summarization, publication, and failure handling for manual, threshold, and overflow compaction. Recovery releases its timer, abort listener, controller, and stream before handoff. A changed dispatched backend blocks fallback. Invalid/incompatible checkpoints and projection/cut-point failures also cancel; explicit Cancel and stale or aborted work never fall through.
+
+Native sees Pi's previous fallback summary marker and visible messages, not decrypted checkpoint history. Publication intentionally starts a new model-visible prefix epoch: the native summary supersedes the opaque checkpoint, and subsequent ordinary requests no longer expand it. The first post-publication request establishes the new baseline; later requests append normally. No new tools, system instructions, continuation, or protocol fallback are introduced. Notifications follow `notifyOnFallback` and UI availability and redact request secrets. See [Checkpoint recovery](../README.md#checkpoint-recovery) for context-loss, quota, and restoration risks.
+
 ## Context Management request and publication
 
 Pi still decides when to compact. Only the extension-owned compaction request adds `context_management: [{"type":"compaction","compact_threshold":1024}]`, forces streaming with `store: false`, requests `reasoning.encrypted_content` while preserving other `include` fields and the provider's thinking effort, and appends a deterministic maintenance-only user message. Original instructions, history, and tool schemas remain provider-owned; `tool_choice: "none"` prevents new tool work. The request uses no `compaction_trigger`, server-side response ID, alternate credentials, or endpoint rewrite.

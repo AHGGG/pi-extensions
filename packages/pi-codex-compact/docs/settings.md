@@ -23,7 +23,7 @@ An absent file uses defaults without creating a file. Save only the fields you n
 | `maxRetries` | `2` | Integer from 0 to 2 | Retry transient provider transport failures before Pi fallback. | Keep two; use zero when diagnosing the first failure. |
 | `replacementTokenBudget` | `64000` | Integer from 8,000 to 128,000 tokens | Bound approximate retained user-message text; for Context Management, bound serialized post-checkpoint output instead. | Keep 64K. Context Management fails closed rather than truncating an oversized suffix. |
 | `notifyOnFallback` | `true` | Boolean | Warn on remote failure and unsuccessful checkpoint recovery. | Keep enabled so silent fallback does not hide protocol or entitlement problems. |
-| `checkpointRecovery` | `"summarize"` | `"summarize"` or `"cancel"` | After remote failure with an active checkpoint, try a normal inference summary or cancel without an extra request. Summary failure always cancels. | Use `summarize` for recovery; use `cancel` to avoid summary quota and preserve the checkpoint. |
+| `checkpointRecovery` | `"summarize"` | `"summarize"` or `"cancel"` | After remote failure with a valid compatible checkpoint, try a normal inference summary; request failure falls back to Pi native and may lose opaque-only older context. Cancel avoids recovery and native fallback. Integrity failures and cancellation still cancel. | Use `summarize` to prioritize progress, accepting possible context loss and quota for recovery plus native summarization; use `cancel` to preserve the checkpoint without summary quota. |
 
 Missing fields use defaults.
 Settings reload on every `session_start`, including `/reload`, resume, and fork.

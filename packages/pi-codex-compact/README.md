@@ -11,7 +11,7 @@ The extension replays that checkpoint in later compatible requests. Pi still con
 - Offers Remote Compaction V2, unary `responses/compact`, and experimental streaming Context Management.
 - Handles manual, threshold, and overflow compaction through Pi's normal lifecycle.
 - Preserves compatible checkpoints across repeated compaction, protocol changes, reloads, resumes, and forks.
-- Uses Pi-native fallback before the first checkpoint; afterward, attempts checkpoint-aware recovery or safely cancels.
+- Uses Pi-native fallback before the first checkpoint; afterward, tries checkpoint-aware recovery with lossy native fallback on recovery failure.
 - Pauses an operation rejected by OAuth without disabling compatible checkpoint replay.
 
 **Context Management is experimental and requires explicit opt-in.** It consumes the active route's quota or API usage; support depends on the backend, model, and account. Default routing is unchanged.
@@ -140,7 +140,9 @@ Pi's native summary generator cannot read encrypted checkpoint history. Direct n
 
 After remote failure with a checkpoint, **Checkpoint recovery → Summarize** (the default) makes a normal inference request through the same compatible provider/model and Pi-managed credentials. It replays the checkpoint, disables tools, and replaces it with a bounded plaintext summary while retaining the recent tail and file metadata. This consumes quota and is lossy; successful validation cannot prove that every fact was preserved. Ordinary work requests do not receive recovery instructions.
 
-**Checkpoint recovery → Cancel** avoids that extra request and preserves history. Failed, unsupported, malformed, oversized, or stale recovery also cancels without publishing a replacement. Cancellation, session changes, shutdown, model selection, and completed tree navigation stop owned compaction work. Neither recovery mode changes fallback before the first checkpoint. A context-limit turn can remain blocked until compaction succeeds.
+If the recovery request fails, times out, or returns invalid or oversized output, **Summarize falls back to Pi-native compaction**. Native compaction can summarize only the fallback marker and visible history; **older context stored only in the opaque checkpoint may be lost**. With `notifyOnFallback` enabled, the extension warns before handing control back to Pi. Recovery and native summarization can each consume quota; native failure follows Pi's normal failure handling.
+
+**Checkpoint recovery → Cancel** avoids the recovery request and native fallback and preserves history. Invalid or incompatible checkpoints, unverifiable projection, or a changed recovery backend still cancel. Cancellation, session changes, shutdown, model selection, and completed tree navigation stop owned compaction work rather than triggering fallback. Neither recovery mode changes fallback before the first checkpoint. A context-limit turn can remain blocked until compaction succeeds.
 
 If checkpoint projection cannot be verified, another recovery attempt cannot repair it. Keep a backup, use `/tree` to branch before the opaque checkpoint, decline optional branch summarization, and compact the saved transcript on that branch. For nested checkpoints, branch before the earliest required one or restore the original transcript from backup. The abandoned branch is unchanged; missing opaque-only history cannot be decoded locally.
 
@@ -157,7 +159,7 @@ flowchart LR
     C --> D[Replay on compatible work requests]
 ```
 
-If a request fails, the extension uses native fallback before the first checkpoint or checkpoint-aware recovery afterward. See the [implementation reference](./docs/implementation.md) for protocol fields, checkpoint validation, continuation, and legacy format handling.
+If a request fails, the extension uses native fallback before the first checkpoint or checkpoint-aware recovery afterward, with lossy native fallback if the recovery request fails. See the [implementation reference](./docs/implementation.md) for protocol fields, checkpoint validation, continuation, and legacy format handling.
 
 ## 🔒 Security and privacy
 
@@ -183,7 +185,7 @@ Context Management does not retain the original plaintext alongside its checkpoi
 - Older history requires this extension, a matching API/profile/model, and a backend that accepts the checkpoint. Removing the extension exposes only the fallback marker and recent messages.
 - The package does not reproduce Codex core's context-window lineage, previous-model fallback, exact pre-turn ordering, or exact mid-turn model-session ownership.
 - Pi's public tool metadata omits `constrainedSampling`; Remote V2 preserves active tool order, names, descriptions, and schemas but cannot reproduce that optional field.
-- Successful recovery replaces active opaque history with a lossy summary. Raw session history can contain both opaque and plaintext entries.
+- Successful recovery replaces active opaque history with a lossy summary; native fallback after recovery failure cannot read opaque-only history. Raw session entries remain available, but rolling back the extension does not restore the active context. Use `/tree` before the required checkpoint or restore a transcript backup.
 - Settings saves are ordered within one Pi process, not locked across processes; a detected concurrent edit is rejected.
 
 ## 📊 Benchmark
