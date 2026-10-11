@@ -2,23 +2,19 @@
 
 [![npm](https://img.shields.io/npm/v/@narumitw/pi-codex-compact)](https://www.npmjs.com/package/@narumitw/pi-codex-compact) [![Pi extension](https://img.shields.io/badge/Pi-extension-blue)](https://pi.dev) [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](./LICENSE)
 
-Use Responses compaction in Pi through Remote Compaction V2, unary `responses/compact`, or opt-in streaming `context_management`.
-The extension stores an opaque server-generated checkpoint and replays it in later compatible requests instead of generating a local plaintext summary.
-Pi still decides when compaction runs and keeps its normal `/compact`, threshold, overflow, and session-publication behavior.
+Use Responses compaction in Pi to replace older conversation context with an opaque server-generated checkpoint.
+The extension replays that checkpoint in later compatible requests. Pi still controls when compaction runs.
 
 ## ✨ Features
 
-- Supports `openai-codex-responses`, `openai-responses`, and `azure-openai-responses`, plus explicitly profiled custom APIs.
-- Uses Remote V2, same-origin unary `responses/compact`, or experimental Context Management through the active provider and credentials.
-- Handles manual, threshold, and overflow compaction through Pi's existing lifecycle.
-- Validates and persists one bounded opaque checkpoint that survives compatible reloads, resumes, and forks.
-- Replays the latest checkpoint while preserving newer conversation and extension context.
-- Supports repeated and cross-protocol compaction by carrying the previous checkpoint forward.
-- Falls back to Pi-native compaction without a checkpoint; with a checkpoint, tries a checkpoint-aware plaintext summary or safely cancels.
-- Pauses repeated attempts on a session route after an exact OAuth operation rejection, without disabling compatible replay.
-- Provides `/codex-compact` for effective-route status, settings, and manual compaction.
+- Supports built-in Codex, OpenAI, and Azure OpenAI Responses APIs, plus explicitly configured custom APIs.
+- Offers Remote Compaction V2, unary `responses/compact`, and experimental streaming Context Management.
+- Handles manual, threshold, and overflow compaction through Pi's normal lifecycle.
+- Preserves compatible checkpoints across repeated compaction, protocol changes, reloads, resumes, and forks.
+- Uses Pi-native fallback before the first checkpoint; afterward, attempts checkpoint-aware recovery or safely cancels.
+- Pauses an operation rejected by OAuth without disabling compatible checkpoint replay.
 
-**Context Management is experimental and requires explicit opt-in.** It makes a normal inference request and consumes the active route's quota or API usage; support depends on the backend, model, and account. Default routing is unchanged.
+**Context Management is experimental and requires explicit opt-in.** It consumes the active route's quota or API usage; support depends on the backend, model, and account. Default routing is unchanged.
 
 ## 📦 Install
 
@@ -42,101 +38,50 @@ pi -e ./packages/pi-codex-compact
 ```
 
 The package declares `dist/index.ts`, so build a local checkout before loading its package directory.
-Loading the package enables automatic Responses compaction routing with the documented defaults.
+Loading it enables automatic Responses compaction routing with the defaults below.
 Do not load a global npm installation and the local workspace at the same time.
 
-Pi extensions run with your user permissions.
-Review third-party extension source before installing it.
+Pi extensions run with your user permissions. Review third-party extension source before installing it.
 
 ## 🚀 Quick start
 
-1. Sign in through Pi's built-in OpenAI, OpenAI Codex, or Azure OpenAI provider, or configure a compatible custom provider.
+1. Sign in through Pi's built-in OpenAI, OpenAI Codex, or Azure OpenAI provider.
 2. Select a model using `openai-codex-responses`, `openai-responses`, or `azure-openai-responses`.
-3. Work normally; Pi's automatic compaction and built-in `/compact` continue to operate.
+3. Work normally. Pi's automatic compaction and built-in `/compact` remain available.
 
-Run `/codex-compact` when you want to inspect the effective route or choose **Compact now**.
-After successful remote compaction, compatible requests replay the opaque checkpoint automatically.
+After successful remote compaction, compatible requests replay the checkpoint automatically.
 Signing in does not guarantee compaction permission; see [ChatGPT OAuth rejection](#chatgpt-oauth-rejection) if the backend refuses the operation.
-
-With the default `auto` protocol, Codex Responses uses Remote V2 while OpenAI and Azure OpenAI Responses use unary `responses/compact`.
-When the active model uses another API, compaction remains Pi-native unless an active opaque checkpoint requires safe cancellation.
-To opt in a compatible custom API, add it to `apiProfiles` as described below.
 
 ## 💬 Commands
 
-Run `/codex-compact` to inspect the effective compaction path, change settings, or request manual compaction in TUI mode.
-It accepts no arguments.
-RPC reports the manual settings path without compacting; print and JSON modes reject the command.
-Closing the menu with Escape or Ctrl+C does not compact the session. Menu rendering inherits Kit's minimum one-cell width; synthetic zero-column renders are clamped to one cell.
-
-Manual compaction uses **Responses Remote V2**, **Responses Compact API**, opt-in **Responses Context Management**, or **Pi native**, as described in [Settings](#-settings).
-Pi's built-in `/compact` remains available and follows the same extension hook.
+Run `/codex-compact` without arguments to inspect the effective route, change settings, or select **Compact now** in TUI mode.
+Closing the menu with Escape or Ctrl+C does not compact the session; settings changes already saved remain applied.
+RPC reports the manual settings path without compacting. Print and JSON modes reject the command.
+Pi's built-in `/compact` uses the same compaction routing.
 
 ## ⚙️ Settings
 
-The extension has one optional, global-only JSON settings file:
+Use `/codex-compact` → **Settings**, or edit the global JSON file at `<getAgentDir()>/pi-codex-compact.json` (normally `~/.pi/agent/pi-codex-compact.json`).
+There are no project or extension-specific environment-variable overrides. Missing fields use defaults.
 
-```text
-<getAgentDir()>/pi-codex-compact.json
-```
-
-The normal path is `~/.pi/agent/pi-codex-compact.json`.
-There is no environment-variable or project-level override.
+For example, select Remote V2 explicitly on a compatible backend:
 
 ```json
 {
-  "enabled": true,
-  "protocol": "auto",
-  "apiProfiles": {
-    "custom-responses": "codex-responses-v1"
-  },
-  "requestTimeoutMs": 300000,
-  "maxRetries": 2,
-  "replacementTokenBudget": 64000,
-  "notifyOnFallback": true,
-  "checkpointRecovery": "summarize"
+  "protocol": "remote-v2"
 }
 ```
 
-| Setting | Default | Accepted values | Behavior | Recommendation |
-| --- | ---: | --- | --- | --- |
-| `enabled` | `true` | Boolean | Attempt a supported remote compaction route. | Keep enabled unless diagnosing provider behavior. |
-| `protocol` | `"auto"` | `"auto"`, `"remote-v2"`, `"responses-compact"`, or `"context-management"` | Select by API or force one remote protocol. | Keep `auto` for existing routing; explicitly select experimental Context Management only on a compatible backend. |
-| `apiProfiles` | `{}` | Object mapping a custom API id to `"codex-responses-v1"` | Explicitly opts a non-built-in API into Codex-compatible request fields and replay. | Leave empty unless the provider documents Codex Responses compatibility. |
-| `requestTimeoutMs` | `300000` | Integer from 30,000 to 600,000 ms | Bound one extension-owned remote request. | Keep five minutes; increase only for a consistently slow connection. |
-| `maxRetries` | `2` | Integer from 0 to 2 | Retry transient provider transport failures before Pi fallback. | Keep two; use zero when diagnosing the first failure. |
-| `replacementTokenBudget` | `64000` | Integer from 8,000 to 128,000 tokens | Bound approximate retained user-message text; for Context Management, bound serialized post-checkpoint output instead. | Keep 64K. Context Management fails closed rather than truncating an oversized suffix. |
-| `notifyOnFallback` | `true` | Boolean | Warn on remote failure and unsuccessful checkpoint recovery. | Keep enabled so silent fallback does not hide protocol or entitlement problems. |
-| `checkpointRecovery` | `"summarize"` | `"summarize"` or `"cancel"` | After remote failure with an active checkpoint, try a normal inference summary or cancel without an extra request. Summary failure always cancels. | Use `summarize` for recovery; use `cancel` to avoid summary quota and preserve the checkpoint. |
+The default `auto` protocol uses Remote V2 for Codex Responses and unary `responses/compact` for OpenAI and Azure OpenAI Responses. Other APIs remain Pi-native unless explicitly configured.
+Menu changes apply immediately. Manual file edits take effect on `/reload` or the next session start. Invalid settings files remain unchanged and make the menu read-only until repaired and reloaded.
 
-Missing fields use defaults.
-Settings reload on every `session_start`, including `/reload`, resume, and fork.
-Menu writes apply immediately, preserve unknown JSON fields, serialize within the current Pi process, and use a final conflict check plus same-directory atomic rename.
-On Unix, temporary files use mode `0600`.
-
-Malformed, invalid, oversized, or symlinked settings files remain unchanged.
-Defaults stay active, and the menu remains read-only until the file is fixed and Pi is reloaded.
-Separate Pi processes do not share a mutation lock; a detected concurrent edit is rejected so the user can reopen Settings and retry.
-
-### Relationship to Codex configuration
-
-This extension does **not** read `~/.codex/config.toml`.
-
-| Codex setting | Extension behavior |
-| --- | --- |
-| `features.remote_compaction_v2` | Conceptually corresponds to `protocol: "remote-v2"`; it is not imported. |
-| `model_auto_compact_token_limit` | Not duplicated. Pi's own compaction threshold remains authoritative. |
-| `model_auto_compact_token_limit_scope` | Not supported; Pi extensions do not own Codex's compact-window lineage. |
-| `compact_prompt` / `experimental_compact_prompt_file` | Not imported; opaque checkpoints are generated by the server. |
-| `features.token_budget` | Not supported; token-budget context reset is a different experimental strategy. |
+See the [settings reference](./docs/settings.md) for all fields, defaults, accepted values, custom API configuration, and save/reload behavior. This extension does not read `~/.codex/config.toml`.
 
 ## ✅ Requirements and compatibility
 
-- Pi APIs compatible with the package's declared peer dependencies.
-- One of `openai-codex-responses`, `openai-responses`, or `azure-openai-responses` on the active model, or an explicit `apiProfiles` entry for a custom Codex-compatible API.
-- A provider whose HTTP Responses adapter honors Pi's public `onPayload` and injected `fetch` options; Context Management also requires ordered `onProviderStreamEvent` observations.
-- A backend supporting the selected protocol and opaque `compaction` replay.
-- Working credentials and any required compaction entitlement.
+You need compatible Pi peer APIs, working provider credentials, and a backend that supports both the selected compaction protocol and opaque checkpoint replay.
+The model must use a built-in Responses API or a custom API explicitly mapped through `apiProfiles`.
+The provider adapter must honor Pi's public `onPayload` and injected `fetch` options; Context Management and summary recovery also need ordered `onProviderStreamEvent` callbacks.
 
 | Model API | `auto` route | Other selectable route |
 | --- | --- | --- |
@@ -144,18 +89,16 @@ This extension does **not** read `~/.codex/config.toml`.
 | `openai-responses` | Responses Compact API | Responses Remote V2, experimental Context Management |
 | `azure-openai-responses` | Responses Compact API | Responses Remote V2, experimental Context Management |
 
-The installed built-in adapters are covered by deterministic transport tests.
-A custom provider or proxy is eligible when its model explicitly uses one of these APIs, but its backend still owns compatible routing, authentication, request transforms, and opaque replay.
-For a custom API label, eligibility is opt-in: `apiProfiles` must map that exact non-built-in label to `"codex-responses-v1"`. The default is empty, and an unconfigured custom API remains Pi-native.
-`codex-responses-v1` uses Remote V2 in `auto` mode. With `responses-compact` explicitly selected, it retains the Codex Compact request fields, including tools and reasoning. The provider must honor Pi's public `transport: "sse"`, `onPayload`, and injected `fetch` options, and its backend must support the selected compaction protocol and opaque item replay. The profile declares compatibility; it does not probe the backend.
-The extension does not send a separate capability probe or automatically retry a failed billable request through the other protocol.
-A failed remote attempt uses native fallback without a checkpoint and [checkpoint recovery](#checkpoint-recovery) otherwise. An ordinary request cannot transparently recover after an incompatible provider has already received an existing opaque checkpoint.
-Provider provenance is stored for diagnosis but is not a replay gate.
-Switching providers can replay a checkpoint only when the API label, compatibility profile, and exact model ID still match. Custom API checkpoints also require a current matching `apiProfiles` entry; removing or changing it leaves Pi's visible fallback marker plus retained recent messages in context.
+For a custom API, map its exact non-built-in label to `"codex-responses-v1"` in `apiProfiles`. This profile uses Remote V2 in `auto` mode and requires Codex-compatible request fields and replay; it declares compatibility rather than probing the backend. With unary compaction selected, it retains Codex-supported tools and reasoning.
+Built-in adapter tests cover request plumbing, not backend support or hosted entitlement. A custom provider or proxy remains responsible for its routing, authentication, and payload transforms. See the [implementation reference](./docs/implementation.md#protocol-and-replay) for the protocol contract.
+
+Changing providers can replay a checkpoint only when its API label, compatibility profile, and exact model ID still match. Custom checkpoints also require the matching `apiProfiles` entry.
+An incompatible route exposes the fallback marker and recent messages, not the checkpoint's older history. An ordinary request cannot transparently recover after an incompatible backend has already received the checkpoint.
+The extension does not make capability probes or automatically retry a failed billable request through another protocol.
 
 ### Experimental Context Management
 
-For a backend supporting [server-side compaction](https://developers.openai.com/api/docs/guides/compaction), select **Context Management (experimental)** in `/codex-compact` → **Settings** → **Protocol**, or save this global setting and reload Pi:
+For a backend supporting [server-side compaction](https://developers.openai.com/api/docs/guides/compaction), select **Context Management (experimental)** in `/codex-compact` → **Settings** → **Protocol**, or save this setting and reload Pi:
 
 ```json
 {
@@ -163,28 +106,21 @@ For a backend supporting [server-side compaction](https://developers.openai.com/
 }
 ```
 
-This route was verified with Pi's official **OpenAI → Sign in with ChatGPT**, `gpt-5.5`, and streaming `api.openai.com/v1/responses`: it produced a checkpoint and recovered an assistant-only synthetic fact when replaying without the original plaintext. This is not a guarantee for other accounts, models, Azure, Codex, or proxies. Built-in adapter tests verify request/event plumbing, not hosted entitlement.
+This route was verified with Pi's **OpenAI → Sign in with ChatGPT**, `gpt-5.5`, and streaming `api.openai.com/v1/responses`: a checkpoint recovered an assistant-only synthetic fact without the original plaintext. This does not establish support for other accounts, models, Azure, Codex, or proxies.
 
-Pi still decides when to compact. Only the extension-owned compaction request adds `context_management: [{"type":"compaction","compact_threshold":1024}]`, forces streaming with `store: false`, requests `reasoning.encrypted_content` while preserving other `include` fields and the provider's thinking effort, and appends a deterministic maintenance-only user message. Original instructions, history, and tool schemas remain provider-owned; `tool_choice: "none"` prevents new tool work. The request uses no `compaction_trigger`, server-side response ID, alternate credentials, or endpoint rewrite.
+Compaction makes a separate inference request that asks for a concise work handoff, not a fixed `OK` reply. Tools are disabled only for that maintenance request. Safe generated output is saved with the checkpoint, not displayed as new assistant work. Missing or unsafe output follows the fallback/recovery policy; very short history may not meet the server's 1,024-token threshold. Both maintenance and recovery can consume quota.
 
-Successful completed-item events are authoritative: a stream can emit several checkpoints while omitting them from terminal response output. The extension persists the latest checkpoint and its exact completed assistant/reasoning suffix only after successful completion (`response.completed` or Codex's `response.done`). Post-checkpoint reasoning must have non-empty encrypted content for stateless replay; terminal output can supply missing encryption before publication, otherwise the request follows the documented fallback/recovery policy. It never executes generated tools or silently truncates that suffix. Missing checkpoints, malformed/unsafe output, exceeded bounds, permission errors, and unsupported capabilities follow the same fallback/recovery policy; very short history may not cross the 1,024-token server threshold. The normal inference can consume quota even if no checkpoint is returned, and fallback/recovery can make an additional summarization request. Safe generated output is retained as provider context, not displayed as new assistant work.
+After successful automatic compaction during a user run, work continues without another user message. Existing Pi retries and queued work are reused; otherwise, the extension can start one extra work request per user run, even if that request compacts again. Normal tools remain available, so the extra request can consume quota and execute actions. It asks the model not to repeat completed work, but cannot guarantee model compliance or task completion.
 
-The maintenance message requests a concise work handoff covering the goal, completed work, pending work, next action, and blockers; it does not require a fixed `OK` reply. Its no-work/no-tool limit applies only to that maintenance request and expires when the response completes. The subsequent normal work request retains the original tool access. Existing opaque checkpoints are not rewritten and can still contain earlier maintenance instructions or `OK` output.
+Manual compaction, native fallback, plaintext recovery, other protocols, and restored checkpoints do not start this extra request. Failure, cancellation, terminal errors, session changes, or incompatible model/settings suppress pending continuation. Other extensions using Pi's continuation API can override it.
 
-Successful automatic Context Management compaction during a user run ensures a subsequent normal work request without another user message. Pi's existing retries, queued input, and requests following mid-turn or pre-prompt compaction are reused. If no request follows a post-run compaction, the extension appends one persisted, hidden continuation message at the conversation tail and requests one more turn through Pi's settlement boundary. This intentionally adds one work request after a normal stop when automatic compaction succeeds; it can consume inference quota and execute tools. The message asks the model to continue unfinished work or provide the final result without repeating completed actions, but cannot prove task completion or guarantee model compliance.
-
-At most one extension-forced continuation is permitted per user run, even if that continuation compacts again. Manual compaction, native fallback, plaintext checkpoint recovery, other protocols, and restored checkpoints do not trigger this policy. Failed compaction, cancellation, terminal errors, session replacement, navigation, or model/settings incompatibility suppress pending continuation. Earlier boundary handlers and user queues remain authoritative; later boundary handlers can override continuation through Pi's public API. Ordinary requests preserve their prefix after each compaction and append the continuation message once, without rewriting prior messages or the system prompt.
-
-Ordinary requests do not enable server compaction or add maintenance instructions. To stop new Context Management attempts, select `auto` or another protocol while leaving the extension enabled for compatible replay. Older package versions do not understand this protocol's checkpoints; retain a version supporting Context Management for sessions containing them.
+To stop new Context Management attempts, select `auto` or another protocol while leaving the extension enabled for replay. Existing checkpoints are not rewritten and can contain older maintenance instructions or `OK` output. Older package versions do not understand Context Management checkpoints; retain a supporting version for these sessions.
 
 ### ChatGPT OAuth rejection
 
-Pi's **OpenAI → Sign in with ChatGPT** uses official OAuth with `openai-responses` at `api.openai.com`.
-This is distinct from the legacy **OpenAI Codex** provider using `openai-codex-responses` at `chatgpt.com/backend-api/codex`; permission on one route does not establish permission on the other.
-API-key, Azure, and custom-provider routes retain their existing behavior and backend-specific requirements.
+Pi's **OpenAI → Sign in with ChatGPT** route at `api.openai.com` is distinct from the legacy **OpenAI Codex** route at `chatgpt.com/backend-api/codex`. Permission on one does not establish permission on the other. General compaction API documentation also does not establish OAuth permission.
 
-OpenAI documents [streaming Responses inference](https://developers.openai.com/siwc/token-sharing-open-source/models-and-inference) for ChatGPT plan usage. General API documentation for compaction controls does not establish OAuth authorization for unary `responses/compact` or Remote V2's final `compaction_trigger`.
-The backend can reject a compaction operation with:
+A backend can reject an operation with:
 
 ```text
 code=hardened_oauth_rule_missing
@@ -192,98 +128,75 @@ type=rejected_by_hardened_oauth_boundary
 message=This ChatPass credential is not authorized for the requested operation.
 ```
 
-The extension reports this operation-specific rejection and pauses that remote operation for the current session route. Without an active checkpoint, it returns control to Pi-native compaction. With a checkpoint, it applies [checkpoint recovery](#checkpoint-recovery). It does not automatically switch credentials, providers, or remote compaction protocols.
-This does not prove the account is broken or ordinary chat is unavailable, and upgrading Pi alone is not a guaranteed fix.
-See OpenAI's [errors and recovery](https://developers.openai.com/siwc/token-sharing-open-source/errors-and-recovery) for route and grant checks; re-login is not a guaranteed remedy for an endpoint permission rejection.
+The extension reports the rejection and pauses that operation for the session route. Without a checkpoint, it falls back to Pi-native compaction; with one, it uses [checkpoint recovery](#checkpoint-recovery). It does not switch credentials, providers, or protocols automatically. The menu's selected route is not an entitlement check, and forcing Remote V2 is not a verified workaround.
 
-Later compactions skip the rejected operation while compatible checkpoint replay remains enabled, even with fallback notifications off. Rejections are isolated by session manager and provider/model/API/profile/protocol plus the configured and dispatched endpoint origin/path (and Azure's `api-version`). Pi/provider authentication and request preparation still run to resolve the effective backend; rejected dispatches stop before network work. Changing the resolved compaction protocol (including selecting Context Management) or the backend permits a new attempt. Switching back remains paused.
+Changing the protocol or backend can permit a new attempt; switching back to the rejected route remains paused. `/reload` or a new session clears the pause. Re-login or upgrading Pi is not a guaranteed remedy. See OpenAI's [inference](https://developers.openai.com/siwc/token-sharing-open-source/models-and-inference) and [errors and recovery](https://developers.openai.com/siwc/token-sharing-open-source/errors-and-recovery) guidance, plus the [route-pause details](./docs/implementation.md#oauth-rejection-state).
 
-Session start, `/reload`, resume, fork, replacement, and shutdown clear rejection state. The first 128 rejected identities are retained until reset; further identities follow ordinary failure handling without evicting earlier ones. The menu reports the last observed dispatch identity, which is rechecked at the next compaction. URL credentials and query secrets are excluded; non-Azure query routing changes, header-/body-only backend changes, and credentials on an otherwise unchanged route require `/reload` to retry. State is temporary, not a settings write or an entitlement cache.
-
-For sessions without an existing opaque checkpoint, you may also turn **Remote compaction** off in `/codex-compact` → **Settings**, or set `"enabled": false` in the documented global settings file and reload Pi, to use native compaction directly.
-**Disabling remote compaction also disables opaque checkpoint replay.** If a session already contains a checkpoint, leave the extension enabled to preserve compatible replay and allow checkpoint recovery on rejected attempts; disabling it exposes only the fallback marker and retained recent messages.
-The selected route shown in the menu is not an entitlement check, and forcing Remote V2 is not a verified workaround for this rejection.
+**Turning Remote compaction off also disables opaque checkpoint replay.** Do this only for sessions that do not need an existing checkpoint. Otherwise, leave the extension enabled and use recovery; disabling it exposes only the fallback marker and recent messages.
 
 ### Checkpoint recovery
 
-Pi's native summary generator reads the checkpoint's plaintext placeholder, not its encrypted history. Handing a checkpoint-bearing session directly to that generator can lose older context when the new native summary replaces it.
+Pi's native summary generator cannot read encrypted checkpoint history. Direct native fallback after a checkpoint can therefore lose older context.
 
-On remote failure, **Checkpoint recovery → Summarize** (the default) makes a normal streaming inference request through the same compatible provider/model and Pi-managed authentication. It replays the encrypted checkpoint as real Responses input items, summarizes the projected history before Pi's retained cut point, and disables tool work. A completed, bounded plaintext summary replaces the opaque checkpoint in the active context; Pi retains the recent tail and file-operation metadata. Ordinary requests do not receive these summary instructions. Summaries are lossy: completion and transport validation cannot prove every prior fact was preserved.
+After remote failure with a checkpoint, **Checkpoint recovery → Summarize** (the default) makes a normal inference request through the same compatible provider/model and Pi-managed credentials. It replays the checkpoint, disables tools, and replaces it with a bounded plaintext summary while retaining the recent tail and file metadata. This consumes quota and is lossy; successful validation cannot prove that every fact was preserved. Ordinary work requests do not receive recovery instructions.
 
-This request consumes inference quota/API usage and can fail if inference, checkpoint replay, or the projected cut point is unsupported. Summary recovery also requires the provider's public `onProviderStreamEvent` callbacks for completion validation; adapters that omit them cancel safely. Malformed or unsupported metadata bearing this extension's checkpoint kind cancels before any remote or summary request instead of being mistaken for plaintext history. Missing, partial, unsafe, inconsistent, oversized, or stale results cancel compaction without publishing a replacement. Cancellation, session changes, and shutdown abort owned work. Model selection and completed tree navigation cancel in-flight compaction without clearing route pauses. **Checkpoint recovery → Cancel** skips the summary request entirely and preserves the existing history. Neither choice changes fallback without a checkpoint, and failure never falls through to text-only native summarization when an active checkpoint is present. If compaction is cancelled, switch to a supported protocol/model or reload after resolving authorization; a context-limit turn may remain blocked until compaction succeeds.
+**Checkpoint recovery → Cancel** avoids that extra request and preserves history. Failed, unsupported, malformed, oversized, or stale recovery also cancels without publishing a replacement. Cancellation, session changes, shutdown, model selection, and completed tree navigation stop owned compaction work. Neither recovery mode changes fallback before the first checkpoint. A context-limit turn can remain blocked until compaction succeeds.
 
-If checkpoint projection cannot be verified from the saved transcript, retrying summary recovery cannot repair it: both requests require the same safe projection. Preserve a backup and use `/tree` to branch before the opaque checkpoint, decline optional branch summarization, then compact the saved transcript on that branch. For nested opaque checkpoints, branch before the earliest required opaque checkpoint or restore the original transcript from a backup. This starts a new prefix epoch; it does not delete checkpoints or alter the abandoned branch. Missing opaque-only history cannot be decoded locally, and a fallback marker is not a usable summary of that history.
+If checkpoint projection cannot be verified, another recovery attempt cannot repair it. Keep a backup, use `/tree` to branch before the opaque checkpoint, decline optional branch summarization, and compact the saved transcript on that branch. For nested checkpoints, branch before the earliest required one or restore the original transcript from backup. The abandoned branch is unchanged; missing opaque-only history cannot be decoded locally.
 
-Disabling remote compaction still disables replay; the recovery setting does not override `enabled: false`. Keep the extension enabled when the active session needs its checkpoint. Hosted checkpoint-to-text recovery remains unverified; deterministic adapter tests establish request plumbing and safe publication, not hosted recall.
-
-### Codex CLI routing comparison
-
-The examined Codex CLI source uses Remote V2 on its resolved Responses route: ChatGPT/Codex OAuth defaults to the Codex backend, while API keys default to the OpenAI API. This extension already uses V2 for Codex-profile `auto` routes; OpenAI/Azure `auto` remains unary Compact API. Select Remote V2 explicitly to use that request form on a compatible API-key backend. Pi's newer OpenAI ChatGPT token-sharing OAuth is a different grant: neither an API label nor Codex CLI source establishes its compaction permission. No authentication-dependent automatic routing is added.
+Keep the extension enabled while the active session needs its checkpoint; recovery does not override `enabled: false`. Hosted checkpoint-to-text recovery remains unverified. Adapter tests establish safe request/publication behavior, not hosted recall.
 
 ## 🧭 How it works
 
-1. Pi prepares compaction and selects the recent message suffix it will retain.
-2. If an earlier compatible checkpoint is present, the extension identifies its boundary from the summary persisted on the active `CompactionEntry` and validates the retained suffix fingerprints.
-3. Remote V2 projects that checkpoint into a normal Responses SSE request and appends exactly one final `compaction_trigger`.
-4. Unary compact captures the provider-built payload and authentication, rewrites only the same-origin `/responses` path to `/responses/compact`, and requests JSON without making a normal inference call.
-5. Context Management makes a streaming inference request, selecting the latest completed checkpoint and all safe completed output after it in event order.
-6. Remote V2 and unary compact require one bounded non-empty opaque `compaction` item; unary output may precede it only with user-role retained messages.
-7. It stores bounded replacement history with Pi suffix fingerprints, the real API label, and the resolved compatibility profile in versioned `CompactionEntry.details`. Context Management stores checkpoint-first history with an exact output suffix; the other protocols keep bounded user history with the checkpoint last.
-8. On later compatible requests, it replaces an exactly validated marker with the persisted replacement history immediately before provider dispatch.
+Pi chooses when to compact and which recent messages to keep. The extension requests a checkpoint for older context, saves it in the session, and replays it alongside the retained messages on compatible requests.
 
-Retained fingerprints follow Pi's finalized context projection, including pre-checkpoint omissions and replacements and suppression of nested older compaction summaries. For older checkpoints that fingerprinted raw entries, replay first verifies the complete saved raw snapshot, then derives its finalized retained suffix without changing session entries. Edits made after the checkpoint that change this covered suffix still fail validation rather than being silently absorbed. When an upgrade repairs a previously failed projection, the first correctly replayed request establishes a new prefix baseline; subsequent ordinary turns append to it.
+```mermaid
+flowchart LR
+    A[Pi starts compaction] --> B[Backend produces checkpoint]
+    B --> C[Save checkpoint and retain recent messages]
+    C --> D[Replay on compatible work requests]
+```
 
-The persisted entry remains the summary identity source, so replay does not depend on the wording generated by the currently installed extension version.
-If persisted summary identity, fingerprints, model identity, payload shape, or marker count do not match exactly, the extension leaves Pi's visible fallback context unchanged instead of guessing.
-Older v1 and v2 checkpoints are normalized to the current checkpoint format when read; their built-in API label determines the profile. They still replay only when the current route authorizes that API/profile/model combination.
+If a request fails, the extension uses native fallback before the first checkpoint or checkpoint-aware recovery afterward. See the [implementation reference](./docs/implementation.md) for protocol fields, checkpoint validation, continuation, and legacy format handling.
 
 ## 🔒 Security and privacy
 
-Remote compaction sends the active conversation context and system prompt to the configured Responses backend. Remote V2 and Context Management also send active tool schemas; Codex-profile unary requests retain provider-supported tools.
-The Pi session stores the producing provider ID, encrypted compaction item, and bounded recent user-role Responses items, or Context Management's completed post-checkpoint reasoning/assistant output.
-It does not store credentials, authorization headers, or request headers in checkpoint details.
+Remote compaction sends conversation context and the system prompt to the configured Responses backend. Remote V2 and Context Management also send active tool schemas; Codex-profile unary requests retain provider-supported tools.
+The session stores the provider ID, encrypted checkpoint, and bounded retained user items or Context Management output. It does not store credentials or authorization/request headers in checkpoint details.
 
 | Boundary | Limit |
 | --- | ---: |
 | Observed SSE stream or unary JSON response | 8 MiB |
-| Serialized opaque compaction item or retained output item | 2 MiB |
+| Serialized checkpoint or retained output item | 2 MiB |
 | Persisted replacement history | 8 MiB |
-| Retained user text or serialized Context Management output suffix | 64K approximate tokens by default; configurable from 8K to 128K |
+| Retained user text or Context Management output suffix | 64K approximate tokens by default; configurable from 8K to 128K |
 | Settings file | 64 KiB |
 | Transport retries | At most 2 |
 | Request timeout | At most 10 minutes |
 
-An individually oversized media item is dropped rather than making the session entry unbounded.
-The oldest fitting text item may be partially truncated to preserve newer context.
-Context Management does not retain the original plaintext alongside its checkpoint and fails rather than truncating oversized post-checkpoint output.
-These hard byte ceilings are intentionally not configurable.
+An individually oversized media item is dropped. The oldest fitting retained text item may be partially truncated to preserve newer context.
+Context Management does not retain the original plaintext alongside its checkpoint and fails rather than truncating oversized post-checkpoint output. Hard byte ceilings are not configurable.
 
 ## 🚧 Limitations
 
-- Hosted compaction contracts and OAuth capability restrictions can change independently of Pi or this package; keep backups of important sessions.
-- Full older history depends on this extension, the checkpoint API label and compatibility profile, the exact checkpoint model ID, and a provider route whose backend accepts the opaque item.
-  Removing the extension exposes only the portability fallback marker and Pi-retained recent messages.
-- The package does not reproduce Codex core's context-window UUID/number lineage, previous-model compatibility fallback, exact pre-turn ordering, or exact mid-turn model-session ownership.
-- Pi's public `getAllTools()` metadata does not expose `constrainedSampling`; Remote V2 preserves active tool order, names, descriptions, and parameter schemas but cannot reproduce that optional field.
-- Successful checkpoint recovery intentionally replaces active opaque history with a lossy plaintext summary; failed recovery preserves the checkpoint and cancels compaction. Raw session history can contain both opaque and plaintext compaction entries.
-- Settings concurrency is coordinated only within one Pi process; separate processes rely on the final conflict check.
+- Backend compaction contracts and OAuth restrictions can change independently; keep backups of important sessions.
+- Older history requires this extension, a matching API/profile/model, and a backend that accepts the checkpoint. Removing the extension exposes only the fallback marker and recent messages.
+- The package does not reproduce Codex core's context-window lineage, previous-model fallback, exact pre-turn ordering, or exact mid-turn model-session ownership.
+- Pi's public tool metadata omits `constrainedSampling`; Remote V2 preserves active tool order, names, descriptions, and schemas but cannot reproduce that optional field.
+- Successful recovery replaces active opaque history with a lossy summary. Raw session history can contain both opaque and plaintext entries.
+- Settings saves are ordered within one Pi process, not locked across processes; a detected concurrent edit is rejected.
 
 ## 📊 Benchmark
 
-The repository includes a seeded benchmark that compares uncompressed full context, Pi-native plaintext compaction, and this extension's Remote V2 path.
-It keeps history length nearly fixed while varying information density across five state categories and ten history epochs.
-Benchmark v3 uses repeated artifacts, isolated evaluator probes, seed-level paired statistics, one Pi SDK estimator for dry and live fixtures, and committed protocol manifests for confirmatory candidates.
-It never treats nominal Pi 20K and Codex 20K settings as equal information capacity or automatically claims that protocol-conformant evidence was genuinely held out.
+The repository benchmark compares full context, Pi-native summaries, and Remote V2 using seeded histories. Its v3 protocol uses repeated artifacts, isolated probes, paired seed statistics, and committed manifests. It does not treat equal nominal token settings as equal information capacity or claim that exploratory evidence is held out.
 
-Preview its exploratory diagnostic without making a provider request:
+Preview the exploratory diagnostic without a provider request:
 
 ```bash
 npm run benchmark:codex-compact
 ```
 
-A live run requires `--live`, review of the request and cost exposure, OpenAI Codex OAuth, and Remote V2 entitlement.
-The repository preserves the explicitly labeled v2 matched-tail diagnostic and the v3 calibration evidence, while seeds 301–304 remain consumed and unavailable for future confirmatory protocols.
-See the [benchmark guide](https://github.com/narumiruna/pi-extensions/tree/main/packages/pi-codex-compact/benchmark) for manifests, repetitions, commands, privacy, cost semantics, and interpretation limits.
+Live runs require `--live`, cost/privacy review, OpenAI Codex OAuth, and Remote V2 entitlement. See the [benchmark guide](https://github.com/narumiruna/pi-extensions/tree/main/packages/pi-codex-compact/benchmark) for methodology, archived v2/v3 evidence, and consumed seeds that cannot be reused for confirmation.
 
 ## 🧪 Development
 
@@ -295,26 +208,25 @@ npm test
 npm run package:pack -- codex-compact
 ```
 
-See the [Codex compaction mechanism notes](https://github.com/narumiruna/pi-extensions/blob/main/docs/implementation-notes/codex-compaction-mechanism.md) for the underlying Codex mechanism research and the extension boundary.
+See the bundled [implementation reference](./docs/implementation.md) and repository [Codex mechanism notes](https://github.com/narumiruna/pi-extensions/blob/main/docs/implementation-notes/codex-compaction-mechanism.md).
 
 ## 🗂️ Package layout
 
 ```text
 packages/pi-codex-compact/
-├── src/                               # Authoritative implementation and helpers
-│   ├── index.ts                       # Thin Pi entrypoint
-│   └── codex-compact.ts               # Compaction routing, replay, and fallback
-├── dist/                              # Generated Jiti runtime
-├── scripts/build-runtime.mjs          # Runtime builder
-├── benchmark/                         # Repository-only benchmark and methodology
-└── test/                              # Behavior and lifecycle coverage
+├── src/                       # Implementation; index.ts is the thin source entrypoint
+├── dist/                      # Generated Jiti runtime, built from src/index.ts
+├── docs/                      # Published settings and implementation references
+├── scripts/build-runtime.mjs  # Runtime builder
+├── benchmark/                 # Repository-only benchmark and methodology
+└── test/                      # Behavior and lifecycle coverage
 ```
 
-The generated runtime is built from `src/index.ts` and does not import back into `src`.
+The generated runtime does not import back into `src`.
 
 ## 🔎 Keywords
 
-Pi extension, Pi coding agent, OpenAI Codex, ChatGPT OAuth, Azure OpenAI, custom provider, proxy, Remote Compaction V2, Responses Compact API, context management, opaque checkpoint, Responses API, context compaction.
+Pi extension, OpenAI Codex, ChatGPT OAuth, Azure OpenAI, Responses API, remote compaction, context management, opaque checkpoint.
 
 ## 📄 License
 
