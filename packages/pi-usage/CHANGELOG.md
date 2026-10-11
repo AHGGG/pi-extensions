@@ -1,5 +1,11 @@
 # @narumitw/pi-usage
 
+## 0.65.0
+
+### Minor Changes
+
+- 13277d6: Discover Codex Fast eligibility from the active account's model directory instead of a model-name allowlist, with account-isolated caching and explicit unknown capability handling. Keep `/usage` discovery cancellable and reject unsupported modes before authentication or network I/O.
+
 ## 0.64.3
 
 ### Patch Changes
