@@ -766,14 +766,27 @@ export default function usageExtension(pi: ExtensionAPI, dependencies: UsageExte
 
   const showMenu = async (ctx: ExtensionCommandContext): Promise<void> => {
     if (!ctx.hasUI) throw new Error("/usage requires TUI or RPC mode.");
-    statusGeneration += 1;
-    const menuGeneration = statusGeneration;
-    statusController?.abort();
-    statusController = undefined;
-    clearStatusTimers();
     const controller = new AbortController();
     activeControllers.add(controller);
     try {
+      if (isOfficialCodexModel(ctx.model)) {
+        const refreshed = await runMenuOperation(
+          ctx,
+          "Checking Codex Fast capability…",
+          controller.signal,
+          async (signal) => {
+            await fastRuntime.refreshCapabilities(ctx, signal);
+            return true;
+          },
+        );
+        if (!refreshed || controller.signal.aborted) return;
+      }
+      // Capability updates can refresh status; take menu ownership after discovery.
+      statusGeneration += 1;
+      const menuGeneration = statusGeneration;
+      statusController?.abort();
+      statusController = undefined;
+      clearStatusTimers();
       let stableCurrent = await queryStableCurrent(ctx, false, controller, "Checking current usage…");
       if (!stableCurrent) return;
       publishStableCurrent(ctx, stableCurrent);
@@ -1403,7 +1416,6 @@ export default function usageExtension(pi: ExtensionAPI, dependencies: UsageExte
         return;
       }
       try {
-        await fastRuntime.refreshCapabilities(ctx);
         await showMenu(ctx);
       } catch (error) {
         if (isStaleExtensionContextError(error) || isAbortError(error)) return;
