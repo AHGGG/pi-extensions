@@ -209,7 +209,7 @@ export function registerSubagentTools(
       if (ctx.cwd !== cwd || ctx.isProjectTrusted() !== projectTrusted) {
         throw new Error("Subagent spawn context changed during attachment validation; retry the request.");
       }
-      if (attachments.extensions.length > 0) {
+      if (tools.includes("codemode") || attachments.extensions.length > 0) {
         assertChildBootstrapCapacity([...new Set([...attachments.effectiveTools, ...CHILD_COMMUNICATION_TOOL_NAMES])]);
       }
       const model = resolveChildModel(ctx, attachments.extensions.length > 0);

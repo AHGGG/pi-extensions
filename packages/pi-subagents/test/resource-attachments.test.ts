@@ -1149,6 +1149,7 @@ test("rejects remote, missing, invalid, and oversized attachment inputs", async 
     { value: { extensions: [{ path: regularFile, tools: ["bad\u001bname"] }] }, error: /tool name/i },
     { value: { extensions: [{ path: regularFile, tools: ["x".repeat(129)] }] }, error: /128 characters/i },
     { value: { extensions: [{ path: regularFile, tools: ["read"] }] }, error: /conflicts.*built-in read/i },
+    { value: { extensions: [{ path: regularFile, tools: ["codemode"] }] }, error: /conflicts.*built-in codemode/i },
     {
       value: { extensions: [{ path: regularFile, tools: ["subagent_send"] }] },
       error: /conflicts.*built-in subagent_send/i,

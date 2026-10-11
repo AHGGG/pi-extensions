@@ -28,13 +28,19 @@ The task defines the child's specialization, objective, constraints, and expecte
 
 The selected tools define what the child can do.
 
-Select only from `read`, `bash`, `powershell`, `edit`, `write`, `grep`, `find`, and `ls`.
+Select only from `read`, `bash`, `powershell`, `edit`, `write`, `grep`, `find`, `ls`, and `codemode`.
 
 Omit `tools` for the read-only default of `read`, `grep`, `find`, and `ls`.
 
 Pass an explicit empty list when the child needs no work tools.
 
 Add only the smallest sufficient tool set for the task.
+
+Select `codemode` explicitly when the child needs scripted tool calls, parallel calls, or output filtering.
+
+Select the tools that scripts need separately; codemode does not enable automatic extension or MCP discovery.
+
+Treat codemode classifier and image model calls as provider requests that can disclose data and incur costs.
 
 Treat `bash` and `powershell` as unrestricted command execution that can also modify the workspace.
 

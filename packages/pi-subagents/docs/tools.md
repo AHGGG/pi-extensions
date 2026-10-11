@@ -5,13 +5,18 @@
 | Parameter | Type | Required | Constraint / default |
 | --- | --- | --- | --- |
 | `task` | `string` | Yes | Self-contained task, up to 50 KiB of UTF-8 text. |
-| `tools` | `string[]` | No | Pi core tools: `read`, `bash`, `powershell`, `edit`, `write`, `grep`, `find`, `ls`; defaults to `read`, `grep`, `find`, `ls`. |
+| `tools` | `string[]` | No | Pi tools: `read`, `bash`, `powershell`, `edit`, `write`, `grep`, `find`, `ls`, `codemode`; defaults to `read`, `grep`, `find`, `ls`. |
 | `skills` | `string[]` | No | Up to 16 local skill files or directories; Pi uses progressive disclosure. |
 | `extensions` | `{ path: string; tools: string[] }[]` | No | Up to 16 trusted local extensions and their initially selected tools. |
 | `thinkingLevel` | `string` | No | `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, or `max`; defaults to the main agent's level. |
 | `timeout` | `number` | No | Seconds; `> 0` through `2,147,483.647`; no default. |
 
 Starts one job and returns its `jobId` immediately. The child inherits the main agent's effective model and always receives `subagent_send` and `subagent_wait`.
+
+Select `codemode` explicitly with the other required tools, for example `tools: ["read", "grep", "codemode"]`.
+Pi's built-in codemode extension runs scripts against the child's callable tools, including `subagent_send` and `subagent_wait`; automatic resource discovery stays disabled.
+Codemode also exposes Pi's classifier and image model API using child-visible credentials; these calls can send data to providers and incur costs.
+The default tools do not include codemode.
 
 Skills do not add tools or inject their entire bodies. An extension's `tools` list selects its initial tools; use an empty list for provider or lifecycle behavior only. An attached extension runs trusted code with full child-process permissions, not in a sandbox.
 

@@ -125,7 +125,7 @@ The package intentionally registers and publishes no skill; the repository-only 
 ```ts
 {
   task: string;
-  tools?: Array<"read" | "bash" | "powershell" | "edit" | "write" | "grep" | "find" | "ls">;
+  tools?: Array<"read" | "bash" | "powershell" | "edit" | "write" | "grep" | "find" | "ls" | "codemode">;
   skills?: string[];
   extensions?: Array<{ path: string; tools: string[] }>;
   thinkingLevel?: "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
@@ -133,10 +133,16 @@ The package intentionally registers and publishes no skill; the repository-only 
 }
 ```
 
-The optional `tools` list selects Pi core work tools.
+The optional `tools` list selects Pi core work tools and the built-in `codemode` tool.
 Omitting it selects `read`, `grep`, `find`, and `ls`, while an empty list gives the child no core work tools.
 The runtime always adds `subagent_send` and child `subagent_wait` and removes duplicate names.
 Adding `edit` or `write` lets the child modify files, while `bash` or `powershell` grants unrestricted command execution.
+
+Add `"codemode"` explicitly to let the child run JavaScript that calls its selected tools and communication tools, including parallel calls and output filtering.
+For example, `tools: ["read", "grep", "codemode"]` enables scripted read and search operations without shell or file-mutation tools.
+The runtime loads Pi's built-in codemode extension and verifies tool readiness before sending the task; it does not enable automatic extension or MCP discovery.
+Codemode follows Pi's effective `codemode` settings and also provides Pi's `models` API for classifier and image calls using child-visible credentials.
+Those model calls can send data to providers and incur costs.
 
 The optional `skills` list attaches local Pi skills through progressive disclosure without injecting their full bodies or adding tools.
 Every attached skill path must contain at least one loadable skill, every non-ignored declared skill must load successfully, and skill names must be unique across attachments.
