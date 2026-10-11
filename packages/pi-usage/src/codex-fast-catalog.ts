@@ -192,7 +192,13 @@ export function createCodexFastCatalog(options: CatalogOptions = {}) {
       })();
       requests.set(auth.fingerprint, { controller, promise });
     }
-    await promise;
+    // A cancelled menu must stop waiting without aborting a session-owned shared request.
+    try {
+      await awaitWithDeadline(promise, signal, timeoutMs, "fetching the Codex model directory");
+    } catch (error) {
+      if (signal.aborted) return;
+      throw error;
+    }
     const after = capability(ctx.model, scope.key);
     if (current(scope, ctx, signal) && JSON.stringify(before) !== JSON.stringify(after)) options.onChanged?.(ctx);
   };
