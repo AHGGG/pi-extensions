@@ -7,9 +7,15 @@ import {
 } from "./protocol.js";
 
 export const CONTEXT_MANAGEMENT_THRESHOLD = 1024;
+// The checkpoint can retain this message. Maintenance limits are request-local;
+// the handoff prepares later work rather than asking for a fixed acknowledgment.
 export const COMPACTION_MAINTENANCE_MESSAGE =
   "[PI_CONTEXT_COMPACTION_V1] This request is conversation maintenance only. " +
-  "Preserve the conversation for later continuation. Do not perform tasks or call tools. Reply only OK.";
+  "Preserve the original conversation goals, instructions, progress, and unfinished work for later continuation. " +
+  "Return a concise continuation handoff with the goal, completed work, pending work, next action, and blockers. " +
+  "For this request only, do not perform tasks or call tools. " +
+  "This maintenance instruction expires when this response completes. " +
+  "On later requests, follow the original conversation instructions and continue any unfinished task, including tool use when needed.";
 
 function isObject(value: unknown): value is JsonObject {
   return typeof value === "object" && value !== null && !Array.isArray(value);
