@@ -7,9 +7,14 @@ import {
 } from "./protocol.js";
 
 export const CONTEXT_MANAGEMENT_THRESHOLD = 1024;
+// The server checkpoint can retain this message. Scope the tool and reply limits
+// to this response so replay does not make them instructions for the next turn.
 export const COMPACTION_MAINTENANCE_MESSAGE =
   "[PI_CONTEXT_COMPACTION_V1] This request is conversation maintenance only. " +
-  "Preserve the conversation for later continuation. Do not perform tasks or call tools. Reply only OK.";
+  "Preserve the original conversation goals, instructions, progress, and unfinished work for later continuation. " +
+  "For this request only, do not perform tasks or call tools, and reply only OK. " +
+  "This maintenance instruction expires when this response completes. " +
+  "On later requests, follow the original conversation instructions and continue any unfinished task, including tool use when needed.";
 
 function isObject(value: unknown): value is JsonObject {
   return typeof value === "object" && value !== null && !Array.isArray(value);
