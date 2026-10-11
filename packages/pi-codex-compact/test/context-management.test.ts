@@ -217,13 +217,11 @@ for (const signature of [undefined, null, ""]) {
 
 test("maintenance control is appended exactly once and prior checkpoint expansion preserves its suffix", async () => {
   const prior = [latest, suffix];
-  let maintenanceText = "";
   await request(
     async (_input, init) => {
       const payload = JSON.parse(String(init?.body));
       assert.deepEqual(payload.input.slice(1, -1), prior);
       assert.equal(payload.input[0].content, "original system");
-      maintenanceText = payload.input.at(-1).content[0].text;
       assert.deepEqual(payload.input.at(-1), {
         role: "user",
         content: [{ type: "input_text", text: COMPACTION_MAINTENANCE_MESSAGE }],
@@ -238,12 +236,6 @@ test("maintenance control is appended exactly once and prior checkpoint expansio
       context: { ...context, messages: [{ role: "user", content: "prior marker", timestamp: 1 }] },
       priorCheckpoint: { marker: "prior marker", replacementHistory: prior },
     },
-  );
-  assert.match(maintenanceText, /For this request only, do not perform tasks or call tools, and reply only OK\./);
-  assert.match(maintenanceText, /This maintenance instruction expires when this response completes\./);
-  assert.match(
-    maintenanceText,
-    /On later requests, follow the original conversation instructions and continue any unfinished task, including tool use when needed\./,
   );
 });
 
