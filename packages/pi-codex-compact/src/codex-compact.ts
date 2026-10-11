@@ -616,7 +616,9 @@ export function createCodexCompactExtension(
         checkpoint.details.checkpointId !== pending.checkpointId ||
         !isCheckpointCompatible(checkpoint.details, ctx.model, settings) ||
         (event.continue && event.context.canContinue) ||
-        (event.context.pendingMessages.length > 0 && event.context.canContinue) ||
+        // Boundary pendingMessages also includes context-only custom messages.
+        // They can make canContinue true without scheduling any provider request.
+        (ctx.hasPendingMessages() && event.context.canContinue) ||
         !projectSessionCheckpointContext(event.context.contextMessages, ctx.sessionManager.getBranch(), checkpoint)
       ) {
         return;

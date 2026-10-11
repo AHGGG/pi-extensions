@@ -115,6 +115,10 @@ for (const trigger of [
   "mid-turn",
   "manual",
   "cancel",
+  "context-agent-end",
+  "context-compact",
+  "queued-custom",
+  "context-and-queued",
 ] as const) {
   test(`real Pi ${trigger} compaction scopes maintenance and preserves ordinary replay`, async () => {
     const directory = await mkdtemp(join(tmpdir(), "pi-context-management-runtime-"));
@@ -130,7 +134,17 @@ for (const trigger of [
       const native = openaiProvider();
       const requests: JsonObject[] = [];
       let ordinaryRequests = 0;
-      const postRunThreshold = ["threshold", "queued", "boundary", "repeat", "cancel"].includes(trigger);
+      const postRunThreshold = [
+        "threshold",
+        "queued",
+        "boundary",
+        "repeat",
+        "cancel",
+        "context-agent-end",
+        "context-compact",
+        "queued-custom",
+        "context-and-queued",
+      ].includes(trigger);
       const fixtureFetch: typeof fetch = async (_input, init) => {
         const payload: JsonObject = JSON.parse(String(init?.body));
         requests.push(payload);
@@ -175,11 +189,31 @@ for (const trigger of [
         retry: { enabled: false },
       });
       let companionContinued = false;
+      let contextSent = false;
       let cancellation: Promise<void> | undefined;
       const companion = (pi: ExtensionAPI) => {
+        const sendContext = () => {
+          if (contextSent) return;
+          contextSent = true;
+          pi.sendMessage(
+            { customType: "neutral-runtime-context", content: "Keep this task context.", display: false },
+            { triggerTurn: false },
+          );
+        };
+        pi.on("agent_end", () => {
+          if (trigger === "context-agent-end") sendContext();
+        });
         pi.on("session_compact", async (event) => {
           if (event.reason === "manual") return;
-          if (trigger === "queued" && !companionContinued) {
+          if (trigger === "context-compact" || trigger === "context-and-queued") sendContext();
+          if (trigger === "queued-custom" && !companionContinued) {
+            companionContinued = true;
+            pi.sendMessage(
+              { customType: "neutral-runtime-queued", content: "Continue the pending task.", display: false },
+              { deliverAs: "followUp" },
+            );
+          }
+          if ((trigger === "queued" || trigger === "context-and-queued") && !companionContinued) {
             companionContinued = true;
             assert.ok(session);
             await session.followUp("Queued next step");
@@ -288,7 +322,15 @@ for (const trigger of [
         trigger === "repeat" ? 4 : ["pre-prompt", "manual", "cancel"].includes(trigger) ? 2 : 3,
       );
       assert.equal(session.isIdle, true);
-      assert.match(JSON.stringify(session.messages.at(-1)), /task response/);
+      assert.match(
+        JSON.stringify(
+          session.messages
+            .slice()
+            .reverse()
+            .find((message) => message.role === "assistant"),
+        ),
+        /task response/,
+      );
       assert.doesNotMatch(JSON.stringify(session.messages), /msg_maintenance|PI_CONTEXT_COMPACTION_V1/);
       const compactions = sessionManager.getBranch().filter((entry) => entry.type === "compaction");
       assert.equal(compactions.length, trigger === "repeat" ? 2 : 1);
@@ -310,7 +352,22 @@ for (const trigger of [
       const continuationEntries = sessionManager
         .getBranch()
         .filter((entry) => entry.type === "custom_message" && entry.customType === "codex-compact:continue-v1");
-      assert.equal(continuationEntries.length, trigger === "threshold" || trigger === "repeat" ? 1 : 0);
+      assert.equal(
+        continuationEntries.length,
+        ["threshold", "repeat", "context-agent-end", "context-compact"].includes(trigger) ? 1 : 0,
+      );
+      if (contextSent) {
+        const contextEntries = sessionManager
+          .getBranch()
+          .filter((entry) => entry.type === "custom_message" && entry.customType === "neutral-runtime-context");
+        assert.equal(contextEntries.length, 1);
+        assert.ok(contextEntries[0].type === "custom_message");
+        assert.equal(contextEntries[0].content, "Keep this task context.");
+        if (trigger !== "context-and-queued") {
+          const workAfterCompaction = requests.slice(requests.indexOf(maintenanceRequests[0]) + 1);
+          assert.match(JSON.stringify(workAfterCompaction[0].input), /Keep this task context\./);
+        }
+      }
       const lastUser = sessionManager
         .getBranch()
         .slice()
@@ -318,7 +375,13 @@ for (const trigger of [
         .find((entry) => entry.type === "message" && entry.message.role === "user");
       assert.ok(lastUser?.type === "message" && lastUser.message.role === "user");
       assert.deepEqual(lastUser.message.content, [
-        { type: "text", text: trigger === "queued" ? "Queued next step" : "Complete the pending task." },
+        {
+          type: "text",
+          text:
+            trigger === "queued" || trigger === "context-and-queued"
+              ? "Queued next step"
+              : "Complete the pending task.",
+        },
       ]);
       if (trigger === "mid-turn")
         assert.ok(session.messages.some((message) => message.role === "toolResult" && !message.isError));

@@ -44,6 +44,7 @@ async function fixture() {
     settings: { ...DEFAULT_CODEX_COMPACT_SETTINGS, protocol: "context-management" as const } as CodexCompactSettings,
   };
   let fail = false;
+  let queued = false;
   let release: (() => void) | undefined;
   let ready: (() => void) | undefined;
   const settingsRuntime = {
@@ -110,6 +111,7 @@ async function fixture() {
   const { ctx } = createMockContext({
     model,
     getSystemPrompt: () => "Stable system instructions",
+    hasPendingMessages: () => queued,
     sessionManager: manager,
     modelRegistry: {
       getApiKeyAndHeaders: async () => ({ ok: true, apiKey: "fixture" }),
@@ -180,6 +182,9 @@ async function fixture() {
     rejectRequests: () => {
       fail = true;
     },
+    queueWork: () => {
+      queued = true;
+    },
     delayNextRequest: () =>
       new Promise<void>((resolve) => {
         ready = resolve;
@@ -249,6 +254,7 @@ for (const mode of [
         publish: mode !== "unpublished",
       });
       if (mode === "request already sent") await f.emit("before_provider_request", { payload: {} });
+      if (mode === "queued input") f.queueWork();
       const override =
         mode === "existing boundary continuation"
           ? { continue: true, context: { canContinue: true } }
@@ -376,6 +382,24 @@ test("an incoming continuation flag without runnable context is completed by a b
     assert.equal(result.entries.length, 1);
   });
 });
+
+for (const canContinue of [false, true]) {
+  test(`context-only pending messages do not imply queued work (canContinue=${canContinue})`, async () => {
+    await withFixture(async (f) => {
+      await f.start();
+      await f.compact();
+      const result = (await f.boundary({
+        context: {
+          pendingMessages: [{ role: "custom", customType: "neutral-context", content: "Task context", display: false }],
+          canContinue,
+        },
+      })) as { continue: boolean; entries: unknown[] };
+      assert.equal(result.continue, true);
+      assert.equal(result.entries.length, 1);
+      assert.equal(await f.boundary(), undefined);
+    });
+  });
+}
 
 test("an aborted operation signal prevents continuation even before settlement reports cancellation", async () => {
   await withFixture(async (f) => {
