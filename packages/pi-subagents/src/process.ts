@@ -100,6 +100,7 @@ export function buildPiArgs(request: ChildCommandRequest): string[] {
     "-e",
     childCommunicationBridgePath(),
   ];
+  if (request.tools.includes("codemode")) args.push("-e", "builtin:codemode");
   for (const extension of request.extensions) args.push("-e", extension.path);
   if (requiresReadinessAttestation(request)) args.push("-e", childReadinessProbePath());
   for (const skill of request.skills) args.push("--skill", skill);
@@ -153,8 +154,8 @@ export function childReadinessProbePath(): string {
   return fileURLToPath(new URL("./child-readiness-probe.ts", import.meta.url));
 }
 
-function requiresReadinessAttestation(request: Pick<ChildRequest, "extensions">): boolean {
-  return request.extensions.length > 0;
+function requiresReadinessAttestation(request: Pick<ChildRequest, "tools" | "extensions">): boolean {
+  return request.tools.includes("codemode") || request.extensions.length > 0;
 }
 
 function selectedChildTools(request: Pick<ChildRequest, "tools" | "extensions">): string[] {

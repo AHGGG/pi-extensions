@@ -118,6 +118,27 @@ test("buildPiArgs isolates the RPC child and preserves selected communication to
   );
 });
 
+test("buildPiArgs loads native codemode only when selected and verifies readiness", () => {
+  for (const tools of [undefined, [], ["read"]]) {
+    const args = buildPiArgs(childRequest(tools === undefined ? {} : { tools }));
+    assert.equal(args.includes("builtin:codemode"), false);
+  }
+  for (const tools of [["codemode"], ["read", "codemode", "codemode"]]) {
+    const args = buildPiArgs(childRequest({ tools }));
+    assert.deepEqual(
+      args.filter((argument, index) => args[index - 1] === "-e"),
+      [childCommunicationBridgePath(), "builtin:codemode", childReadinessProbePath()],
+    );
+    assert.equal(
+      args[args.indexOf("--tools") + 1],
+      [...new Set([...tools, "subagent_send", "subagent_wait"])].join(","),
+    );
+    assert.ok(args.includes("--no-extensions"));
+    assert.equal(args.includes("builtin:mcp"), false);
+    assert.equal(args.includes("builtin:tool-search"), false);
+  }
+});
+
 test("bounds the combined Windows child command line", () => {
   assert.doesNotThrow(() => assertChildCommandCapacity(childRequest(), "win32"));
 
@@ -737,6 +758,23 @@ async function handle() {}
   assert.equal(result.state, "failed");
   assert.match(result.error ?? "", /missing tool/i);
   assert.equal((result.error ?? "").includes(String.fromCharCode(27)), false);
+});
+
+test("runChild rejects unavailable codemode without sending a task or requiring attachments", async () => {
+  const promptMarker = path.join(directory, "codemode-prompt");
+  installFakePi(
+    `
+signalReadiness(JSON.stringify({ ok: false, error: "Unavailable subagent tools: codemode." }) + "\\n");
+async function handle(command) {
+  if (command.type === "prompt") fs.writeFileSync(${JSON.stringify(promptMarker)}, "sent");
+}
+`,
+    { readiness: "manual" },
+  );
+  const result = await runChild(childRequest({ tools: ["read", "codemode"] }));
+  assert.equal(result.state, "failed");
+  assert.match(result.error ?? "", /unavailable subagent tools: codemode/i);
+  assert.equal(existsSync(promptMarker), false);
 });
 
 test("runChild cancels while waiting for attachment readiness", async () => {
