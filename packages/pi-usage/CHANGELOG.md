@@ -1,5 +1,12 @@
 # @narumitw/pi-usage
 
+## 0.65.1
+
+### Patch Changes
+
+- d5e3772: Add automatic reset countdowns for Kimi, MiniMax Token Plan Global/China, Z.AI Global/China, Command Code, OpenCode Go, and finite GitHub Copilot quotas. Preserve the existing window separators, countdown spacing, quota semantics, and counts. Repaint displayed eligible countdowns locally each minute without extra provider requests, and retain static fallback for missing, invalid, or expired resets. Codex settings and ChatGPT companion behavior are unchanged.
+- 506f8c0: Separate quota windows with ` · ` and show static window labels before their values in Codex, Command Code, Kimi, MiniMax Token Plan, Z.AI, and OpenCode Go statuslines. Preserve countdown spacing and values, with no separator for a single window. ChatGPT companion formatting is unchanged.
+
 ## 0.65.0
 
 ### Minor Changes
