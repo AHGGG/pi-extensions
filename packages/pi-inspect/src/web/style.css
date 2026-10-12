@@ -1,6 +1,7 @@
 @import "./components.css";
 @import "./panels.css";
 @import "./trace.css";
+@import "./tool-inspector.css";
 
 :root,
 .radix-themes {
