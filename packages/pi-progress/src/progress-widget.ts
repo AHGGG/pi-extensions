@@ -50,7 +50,7 @@ export default function progressWidgetExtension(pi: ExtensionAPI, dependencies: 
   let generation = 0;
   let completionTimer: ReturnType<typeof globalThis.setTimeout> | undefined;
   let completionToken = 0;
-  let completionSummaryHidden = false;
+  let widgetHidden = false;
 
   const ownsSession = (ctx: ExtensionContext): boolean => ctx.sessionManager === activeSession;
 
@@ -67,7 +67,7 @@ export default function progressWidgetExtension(pi: ExtensionAPI, dependencies: 
 
   const publish = (ctx: ExtensionContext): void => {
     if (!ownsSession(ctx) || !ctx.hasUI) return;
-    if (!settings.widget.enabled || steps.length === 0 || completionSummaryHidden) {
+    if (!settings.widget.enabled || steps.length === 0 || widgetHidden) {
       ctx.ui.setWidget(WIDGET_KEY, undefined);
       return;
     }
@@ -98,7 +98,7 @@ export default function progressWidgetExtension(pi: ExtensionAPI, dependencies: 
 
   const publishCompletionSummary = (ctx: ExtensionContext): void => {
     cancelCompletionSummary();
-    completionSummaryHidden = false;
+    widgetHidden = false;
     if (!ownsSession(ctx) || !ctx.hasUI || !settings.widget.enabled) {
       publish(ctx);
       return;
@@ -130,7 +130,7 @@ export default function progressWidgetExtension(pi: ExtensionAPI, dependencies: 
         return;
       }
       completionTimer = undefined;
-      completionSummaryHidden = true;
+      widgetHidden = true;
       ctx.ui.setWidget(WIDGET_KEY, undefined);
     }, COMPLETION_SUMMARY_MS);
   };
@@ -156,7 +156,7 @@ export default function progressWidgetExtension(pi: ExtensionAPI, dependencies: 
       const nextSteps = validateProgressArguments(params).steps;
       const wasComplete = allProgressCompleted(steps);
       cancelCompletionSummary();
-      completionSummaryHidden = false;
+      widgetHidden = false;
       steps = cloneProgressSteps(nextSteps);
       const becameComplete = steps.length > 0 && allProgressCompleted(steps) && !wasComplete;
       if (becameComplete) publishCompletionSummary(ctx);
@@ -189,6 +189,25 @@ export default function progressWidgetExtension(pi: ExtensionAPI, dependencies: 
     },
   });
 
+  pi.registerCommand("clear-progress-widget", {
+    description: "Hide the progress widget without changing saved progress",
+    handler: async (args, ctx) => {
+      if (!ctx.hasUI) throw new Error("/clear-progress-widget requires TUI or RPC mode.");
+      if (args.trim()) {
+        ctx.ui.notify("Usage: /clear-progress-widget (no arguments)", "warning");
+        return;
+      }
+      if (!ownsSession(ctx)) {
+        ctx.ui.notify("Cannot clear the progress widget because the session changed.", "warning");
+        return;
+      }
+      cancelCompletionSummary();
+      widgetHidden = true;
+      publish(ctx);
+      ctx.ui.notify("Progress widget cleared. Saved progress is unchanged.", "info");
+    },
+  });
+
   const restoreBranchState = (ctx: ExtensionContext): void => {
     const branch = ctx.sessionManager.getBranch();
     steps = reconstructProgress(branch);
@@ -213,7 +232,7 @@ export default function progressWidgetExtension(pi: ExtensionAPI, dependencies: 
       };
       ctx.ui.setWidget(WIDGET_KEY, undefined);
     }
-    completionSummaryHidden = false;
+    widgetHidden = false;
     settings = cloneDefaultSettings();
     restoreBranchState(ctx);
 
@@ -261,7 +280,7 @@ export default function progressWidgetExtension(pi: ExtensionAPI, dependencies: 
   pi.on("session_tree", (_event, ctx) => {
     if (!ownsSession(ctx)) return;
     cancelCompletionSummary();
-    completionSummaryHidden = false;
+    widgetHidden = false;
     restoreBranchState(ctx);
     publish(ctx);
   });
@@ -275,7 +294,7 @@ export default function progressWidgetExtension(pi: ExtensionAPI, dependencies: 
     steps = [];
     settings = cloneDefaultSettings();
     restoredBoundary = undefined;
-    completionSummaryHidden = false;
+    widgetHidden = false;
     activeSession = undefined;
   });
 }
