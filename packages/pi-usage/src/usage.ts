@@ -20,7 +20,7 @@ import {
   resolveCodexResetAuth,
 } from "./codex-resets.js";
 import { abortError, awaitWithDeadline, errorMessage, runWithConcurrency, UsageCache } from "./core.js";
-import { formatProviderStates, formatUsageStatusline } from "./format.js";
+import { formatProviderStates, formatUsageStatuslineWithCountdown } from "./format.js";
 import { createOAuthCredentialCandidateReader } from "./oauth-credential-source.js";
 import { UnsupportedOpenAIUsageAuthError } from "./providers/openai-chatgpt.js";
 import {
@@ -181,31 +181,33 @@ export default function usageExtension(pi: ExtensionAPI, dependencies: UsageExte
       outcome.state.report.providerId === "openai-codex" && settings.codexStatusResetCountdown;
     const isCompanionReport = outcome.state.report.source === "openai-chatgpt-companion";
     const now = Date.now();
-    const rawValue = formatUsageStatusline(
+    const status = formatUsageStatuslineWithCountdown(
       outcome.state.report,
       model,
       now,
       showCodexResetCountdown,
       settings.codexStatusPercentage,
     );
-    const value = rawValue ? fastRuntime.decorateStatus(model, rawValue) : undefined;
+    const value = status.value ? fastRuntime.decorateStatus(model, status.value) : undefined;
     if (!safeSetStatus(ctx, value)) return;
     if (shouldSchedule && sessionActive) scheduleStatusRefresh(ctx, model);
     if (
       sessionActive &&
-      (showCodexResetCountdown || isCompanionReport) &&
-      outcome.state.report.buckets.some(
-        (bucket) =>
-          (!isCompanionReport || bucket.groupId === "chatgpt-plan") &&
-          bucket.resetsAt !== undefined &&
-          Number.isFinite(bucket.resetsAt) &&
-          bucket.resetsAt * 1_000 > now,
-      )
+      (status.hasCountdown ||
+        ((showCodexResetCountdown || isCompanionReport) &&
+          outcome.state.report.buckets.some(
+            (bucket) =>
+              (!isCompanionReport || bucket.groupId === "chatgpt-plan") &&
+              bucket.resetsAt !== undefined &&
+              Number.isFinite(bucket.resetsAt) &&
+              bucket.resetsAt * 1_000 > now,
+          )))
     ) {
       const generation = statusGeneration;
       statusCountdownTimer = setTimeout(() => {
-        statusCountdownTimer = undefined;
+        // A queued obsolete callback must not detach its successor's owned timer.
         if (!sessionActive || generation !== statusGeneration) return;
+        statusCountdownTimer = undefined;
         publishStatus(ctx, outcome, model, false);
       }, STATUS_COUNTDOWN_REFRESH_MS);
       statusCountdownTimer.unref?.();

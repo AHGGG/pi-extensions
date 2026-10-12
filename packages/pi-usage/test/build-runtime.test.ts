@@ -125,6 +125,7 @@ test("generated runtime is loadable by Pi's Jiti resource loader", async () => {
         getProviderAuth: async () => ({ source: "ApiKey", auth: { apiKey: "synthetic-command-key" } }),
         getApiKeyAndHeaders: async () => ({ ok: true, apiKey: "synthetic-command-key" }),
       });
+      const commandReset = Date.now() + 150_000;
       vi.stubGlobal("fetch", async (url: string, init: RequestInit) => {
         assert.equal((init.headers as Record<string, string>).Authorization, "Bearer synthetic-command-key");
         assert.equal(new URL(url).origin, "https://api.commandcode.ai");
@@ -133,7 +134,7 @@ test("generated runtime is loadable by Pi's Jiti resource loader", async () => {
           : url.includes("/credits")
             ? {
                 windowLimits: {
-                  fiveHour: { used: 11, cap: 100 },
+                  fiveHour: { used: 11, cap: 100, resetAt: commandReset },
                   weekly: { used: 3, cap: 100 },
                 },
               }
@@ -141,7 +142,7 @@ test("generated runtime is loadable by Pi's Jiti resource loader", async () => {
         return new Response(JSON.stringify(payload));
       });
       await command.handler("", context.ctx);
-      assert.equal(context.statuses.get("usage"), "cmd 5h:89% · wk:97%");
+      assert.equal(context.statuses.get("usage"), "cmd 89% ↻ 3m · wk:97%");
     } finally {
       for (const handler of extension.handlers.get("session_shutdown") ?? []) await handler({}, context.ctx);
     }
