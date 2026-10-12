@@ -44,7 +44,15 @@ function SchemaRows({ node, depth = 0 }: { node: SchemaNode; depth?: number }) {
         <td>
           <code className="schema-type">{node.type}</code>
         </td>
-        <td>{node.required === undefined ? "—" : node.required ? "Yes" : "No"}</td>
+        <td
+          title={
+            node.required === "unknown"
+              ? "Other schema constraints or documentation limits may require this field; inspect the schema branches or Raw JSON."
+              : undefined
+          }
+        >
+          {node.required === undefined ? "—" : node.required === "unknown" ? "Unknown" : node.required ? "Yes" : "No"}
+        </td>
         <td>
           {node.description && <div className="tool-prose">{node.description}</div>}
           {node.annotations.map(([key, value]) => (

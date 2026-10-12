@@ -1,9 +1,12 @@
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
+import { Value } from "typebox/value";
 import { describe, expect, it } from "vitest";
 import type { Json } from "../src/model.js";
+import { capture } from "../src/privacy.js";
 import { ParameterSchema } from "../src/web/tool-inspector.js";
 import { parseSchema, toolDocuments } from "../src/web/tool-schema.js";
+import { runtimeToolDeclarations } from "./fixtures.js";
 
 describe("tool schema documentation", () => {
   it("preserves requiredness, nullable types, array items, enums, and constraints", () => {
@@ -36,6 +39,95 @@ describe("tool schema documentation", () => {
       "enum",
       ["pending", "in_progress", "completed", "blocked"],
     ]);
+  });
+  it("resolves nested allOf requirements across same-instance branches without leaking into child objects", () => {
+    const schema: Record<string, Json> = {
+      type: "object",
+      required: ["sibling"],
+      properties: {
+        path: { type: "string" },
+        optional: { type: "string" },
+        nested: { type: "object", properties: { path: { type: "string" } } },
+      },
+      allOf: [{ allOf: [{ required: ["path"] }] }, { properties: { sibling: { type: "string" } } }],
+    };
+    const root = parseSchema(schema);
+    expect(root.children.find((node) => node.name === "path")?.required).toBe(true);
+    expect(root.children.find((node) => node.name === "optional")?.required).toBe(false);
+    expect(root.children.find((node) => node.name === "nested")?.children[0]?.required).toBe(false);
+    expect(root.children.find((node) => node.name === "allOf [2]")?.children[0]?.required).toBe(true);
+    expect(Value.Check(schema, { sibling: "value" })).toBe(false);
+    expect(Value.Check(schema, { sibling: "value", path: "file.txt" })).toBe(true);
+  });
+  it("inherits surrounding requiredness into positive conditional branches", () => {
+    const root = parseSchema({
+      required: ["path"],
+      if: { properties: { path: { type: "string" } } },
+      // biome-ignore lint/suspicious/noThenProperty: JSON Schema conditional keyword, not a thenable.
+      then: { properties: { path: { type: "string" } } },
+      else: { properties: { path: { type: "number" } } },
+    });
+    for (const branch of root.children) expect(branch.children[0]?.required).toBe(true);
+  });
+  it.each<Record<string, Json>>([
+    { $ref: "#/$defs/required" },
+    { $dynamicRef: "#required" },
+    { $recursiveRef: "#" },
+    { anyOf: [{ required: ["maybe"] }, {}] },
+    { oneOf: [{ required: ["maybe"] }, {}] },
+    { not: { not: { required: ["maybe"] } } },
+    { dependentRequired: { known: ["maybe"] } },
+    { dependentSchemas: { known: { required: ["maybe"] } } },
+    { dependencies: { known: ["maybe"] } },
+    {
+      if: { required: ["known"] },
+      // biome-ignore lint/suspicious/noThenProperty: JSON Schema conditional keyword, not a thenable.
+      then: { required: ["maybe"] },
+    },
+    { minProperties: 2 },
+    { const: { known: "value", maybe: "value" } },
+    { enum: [{ known: "value", maybe: "value" }] },
+    { allOf: [{ $ref: "#/$defs/required" }] },
+  ])("does not assert optionality for unresolved same-object constraints: %j", (constraint) => {
+    const root = parseSchema({
+      type: "object",
+      required: ["known"],
+      properties: { known: { type: "string" }, maybe: { type: "string" } },
+      ...constraint,
+    });
+    expect(root.children.find((node) => node.name === "known")?.required).toBe(true);
+    expect(root.children.find((node) => node.name === "maybe")?.required).toBe("unknown");
+    const html = renderToStaticMarkup(
+      createElement(ParameterSchema, {
+        value: {
+          type: "object",
+          properties: { maybe: { type: "string" } },
+          ...constraint,
+        },
+      }),
+    );
+    expect(html).toContain(">Unknown<");
+  });
+  it("keeps requiredness unresolved when allOf traversal reaches a documentation limit", () => {
+    let clause: Json = { required: ["path"] };
+    for (let i = 0; i < 40; i++) clause = { allOf: [clause] };
+    const root = parseSchema({ properties: { path: { type: "string" } }, allOf: [clause] });
+    expect(root.children[0]?.required).toBe("unknown");
+    const clauses: Json[] = Array.from({ length: 2500 }, () => true);
+    clauses.push({ required: ["path"] });
+    const wide = parseSchema({ properties: { path: { type: "string" } }, allOf: clauses });
+    expect(wide.children[0]?.required).toBe("unknown");
+    expect(wide.limited).toBe(true);
+  });
+  it.each<Record<string, Json>>([
+    { properties: { path: { type: "string" } } },
+    { items: { type: "string" } },
+    { prefixItems: [{ type: "string" }] },
+  ])("does not infer exclusive types from structural constraints: %j", (schema) => {
+    expect(parseSchema(schema).type).toBe("unspecified");
+    expect(Value.Check(schema, 42)).toBe(true);
+    expect(Value.Check(schema, "text")).toBe(true);
+    expect(parseSchema({ ...schema, type: ["object", "null"] }).type).toBe("object | null");
   });
   it("keeps composition branches, tuples, references, maps and boolean schemas separate", () => {
     const root = parseSchema({
@@ -132,6 +224,30 @@ describe("declaration documentation", () => {
     expect(doc?.codemode).toContain("tools.read(args)");
     expect(doc?.returns).toBe('string | { type: "image" }');
     expect(doc?.raw).toBe(raw);
+  });
+  it("extracts string, object, and union return information from Pi-generated descriptions", () => {
+    const docs = toolDocuments(capture(runtimeToolDeclarations()).value);
+    expect(docs.find((tool) => tool.name === "read")?.returns).toContain("string | {");
+    expect(docs.find((tool) => tool.name === "bash")?.returns).toContain("exit_code");
+    expect(docs.find((tool) => tool.name === "edit")?.returns).toBe("a string");
+    expect(docs.find((tool) => tool.name === "$custom-tool")?.returns).toBe("Array<string>");
+    for (const tool of docs) {
+      expect(tool.codemode).toMatch(/\btools\.[\w$]+\(args\)`/);
+      expect(tool.returns).not.toMatch(/`/);
+    }
+  });
+  it.each([
+    ["tools.custom(args) resolves to string.", "string"],
+    ["`tools.custom(args)` resolves to `string`.", "string"],
+    ["`tools.custom(args)` resolves to a string.", "a string"],
+    ["`tools.$custom_tool(args)` resolves to `string[]`.", "string[]"],
+    ["`tools.custom(args) resolves to string`.", "string"],
+    ["`tools.custom(args)` resolves to `{ value: string; }`.", "{ value: string; }"],
+    ["`tools.custom(args)` resolves to `string", undefined],
+    ["`tools.custom(args)` resolves to `string | {`.", undefined],
+    ["`tools.custom(args)` resolves to `string |`.", undefined],
+  ])("normalizes documented return delimiters without accepting incomplete types: %s", (source, expected) => {
+    expect(toolDocuments([{ name: "custom", description: `Codemode: ${source}` }])[0]?.returns).toBe(expected);
   });
   it("does not promote an incomplete multiline return type to a return declaration", () => {
     const [doc] = toolDocuments([

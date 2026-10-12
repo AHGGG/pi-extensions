@@ -3,7 +3,7 @@ import { Collector } from "../src/collector.js";
 import type { Json } from "../src/model.js";
 import { branch, detail, snapshot } from "../src/projection.js";
 import { startServer, type ViewerServer } from "../src/server.js";
-import { fixture, skills, tools } from "./fixtures.js";
+import { fixture, runtimeToolDeclarations, skills, tools } from "./fixtures.js";
 
 const declarations: Json[] = [
   {
@@ -96,7 +96,7 @@ const declarations: Json[] = [
 ];
 let server: ViewerServer;
 let f: ReturnType<typeof fixture>;
-let current = declarations;
+let current: Json[] | undefined = declarations;
 test.beforeEach(async () => {
   f = fixture();
   current = declarations;
@@ -105,18 +105,23 @@ test.beforeEach(async () => {
     generation: "tool-inspector",
     signal: new AbortController().signal,
     snapshot: () => snapshot(f.manager, collector, "tool-inspector", 0, "Prompt", tools, ["read"], skills),
-    branch: (leaf, offset) => ({
-      ...branch(f.manager, leaf, offset, skills),
-      declaredTools: { value: leaf === f.user ? [] : current, truncated: false },
-    }),
+    branch: (leaf, offset) => {
+      const historical = branch(f.manager, leaf, offset, skills);
+      return current === undefined
+        ? historical
+        : {
+            ...historical,
+            declaredTools: { value: leaf === f.user ? [] : current, truncated: false },
+          };
+    },
     detail: (id, leaf) => detail(f.manager, id, leaf, collector),
   });
 });
 test.afterEach(async () => server.close());
-async function open(page: import("@playwright/test").Page) {
+async function open(page: import("@playwright/test").Page, selected = f.assistant) {
   await page.goto(server.url);
   await page.getByRole("button", { name: "Session", exact: true }).click();
-  await page.locator(`.session-primary:not([hidden]) [data-trace-id="${f.assistant}"]`).click();
+  await page.locator(`.session-primary:not([hidden]) [data-trace-id="${selected}"]`).click();
   await page.getByRole("tab", { name: "tools", exact: true }).click();
   await expect(page.getByRole("navigation", { name: "Declared tools" })).toBeVisible();
 }
@@ -190,6 +195,61 @@ test("declarations update and branch replacement clears stale search and selecti
   await page.locator(`.session-primary:not([hidden]) [data-trace-id="${f.assistant}"]`).click();
   await page.getByRole("tab", { name: "tools", exact: true }).click();
   await expect(page.getByRole("region", { name: "Selected tool documentation" })).toContainText("Updated description");
+});
+
+test("historical replay documents Pi-generated returns and composed/typeless parameters accurately", async ({
+  page,
+}) => {
+  const id = f.manager.appendMessage({
+    role: "system",
+    content: "",
+    sections: {},
+    timestamp: 7,
+    toolsAdded: [
+      ...runtimeToolDeclarations(),
+      {
+        name: "schema_cases",
+        description: "Schema regression cases",
+        parameters: {
+          type: "object",
+          properties: {
+            path: { type: "string" },
+            typeless: { properties: { label: { type: "string" } } },
+            arrayShape: { items: { type: "string" } },
+            conditional: {
+              type: "object",
+              properties: { maybe: { type: "string" } },
+              anyOf: [{ required: ["maybe"] }, {}],
+            },
+          },
+          allOf: [{ allOf: [{ required: ["path"] }] }],
+        },
+      },
+    ],
+  });
+  current = undefined;
+  await open(page, id);
+  const nav = page.getByRole("navigation", { name: "Declared tools" });
+  const docs = page.getByRole("region", { name: "Selected tool documentation" });
+  for (const name of ["read", "bash", "edit"]) {
+    await nav.getByRole("button", { name: new RegExp(`^${name} `) }).click();
+    await expect(docs.getByRole("heading", { name: "Returns", exact: true })).toBeVisible();
+    await expect(docs).toContainText(`tools.${name}(args)\``);
+  }
+  await expect(
+    docs
+      .locator("section")
+      .filter({ has: page.getByRole("heading", { name: "Returns", exact: true }) })
+      .locator("pre"),
+  ).toHaveText("a string");
+  await nav.getByRole("button", { name: /^schema_cases / }).click();
+  await expect(docs.getByRole("row", { name: "path string Yes", exact: true })).toBeVisible();
+  await expect(docs.getByRole("row", { name: "typeless unspecified No", exact: true })).toBeVisible();
+  await expect(docs.getByRole("row", { name: "arrayShape unspecified No", exact: true })).toBeVisible();
+  await docs.getByRole("button", { name: "conditional", exact: true }).click();
+  await expect(docs.getByRole("row", { name: "maybe string Unknown", exact: true })).toBeVisible();
+  await docs.getByRole("button", { name: "Raw JSON", exact: true }).click();
+  await expect(docs.locator(".json-tree")).toContainText("Schema regression cases");
 });
 
 test("wide Details keeps tool navigation beside documentation in both appearances", async ({ page }) => {

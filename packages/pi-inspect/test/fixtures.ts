@@ -1,5 +1,14 @@
-import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
-import { SessionManager, type ToolInfo } from "@earendil-works/pi-coding-agent";
+import { fauxAssistantMessage, fauxToolCall, type Tool } from "@earendil-works/pi-ai";
+import {
+  createBashTool,
+  createCodemodeExtension,
+  createEditTool,
+  createReadTool,
+  type ExtensionAPI,
+  SessionManager,
+  type ToolDefinition,
+  type ToolInfo,
+} from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 export function fixture() {
   const manager = SessionManager.inMemory("/fixture");
@@ -55,6 +64,40 @@ export function fixture() {
   manager.appendCustomEntry("future-state", { unknown: true });
   return { manager, system, user, assistant, result, alternate, delta, compact, leaf };
 }
+// Exercise Pi's public factory and loadout hook instead of maintaining a copy of
+// its Codemode description formatter. No tool executor or session action is called.
+export function runtimeToolDeclarations(): Tool[] {
+  const registered: ToolDefinition[] = [];
+  const api = {
+    registerTool: (tool: ToolDefinition) => {
+      registered.push(tool);
+    },
+  } as ExtensionAPI;
+  createCodemodeExtension({ mode: "on", models: false, inlineBudget: 3000 })(api);
+  const codemode = registered.find((tool) => tool.name === "codemode");
+  const edit = createEditTool("/fixture");
+  const declared = [
+    createReadTool("/fixture"),
+    createBashTool("/fixture"),
+    edit,
+    { ...edit, name: "$custom-tool", outputSchema: Type.Array(Type.String()) },
+  ];
+  const changes = codemode?.prepareLoadout?.({
+    declared,
+    callable: declared,
+    registered: declared,
+    getExposure: () => "direct",
+    getNamespace: () => undefined,
+    getPromptGuidelines: () => [],
+  });
+  if (!changes?.descriptions) throw Error("Missing Pi Codemode descriptions");
+  return declared.map((tool) => ({
+    name: tool.name,
+    description: changes.descriptions?.[tool.name] ?? tool.description,
+    parameters: tool.parameters,
+  }));
+}
+
 export const skills = [{ name: "example", path: "/skills/example/SKILL.md", description: "Example skill" }];
 export const tools: ToolInfo[] = [
   {
