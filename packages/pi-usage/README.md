@@ -147,7 +147,7 @@ This preference changes only Codex statusline formatting, not provider data or t
 ### Codex statusline reset countdown
 
 The `codexStatusResetCountdown` preference defaults to `true`. It replaces the window labels with the time remaining until each returned limit resets.
-Turn **Codex reset countdown** Off in the TUI Settings screen, or set it to `false` in `pi-usage.json` and run `/reload`, to restore the legacy `5h` and `wk` labels:
+Turn **Codex reset countdown** Off in the TUI Settings screen, or set it to `false` in `pi-usage.json` and run `/reload`, to show static labels such as `codex 5h:59% · wk:61%`:
 
 ```json
 {
@@ -197,6 +197,9 @@ After the active runtime credential changes, the next command, turn, or schedule
 ## 📊 Statusline behavior
 
 The `usage` status item is active only for selected providers that publish statusline usage.
+Codex, Command Code, Kimi, MiniMax Token Plan, Z.AI, and OpenCode Go separate quota windows with ` · ` and place static labels before values, for example `cmd 5h:100% · wk:97% · mo:98%`.
+Codex countdown segments retain their spacing without window labels, for example `codex 89% ↻ 2h30m · 97% ↻ 5d17h`; a missing reset time falls back to a static label, such as `codex 89% ↻ 2h30m · wk:97%`.
+Single windows have no separator. These presentation changes do not alter the reported values; consumers parsing the old status text must adapt to the new format. ChatGPT companion formatting is unchanged.
 It refreshes every five minutes while the session remains on such a provider and is cleared when the model changes to an unsupported or menu-only provider.
 DeepSeek publishes each returned currency as a separate exact balance segment and reports when the API is unavailable.
 Fireworks publishes exact per-currency rated spend totals and reports when no rated usage exists.

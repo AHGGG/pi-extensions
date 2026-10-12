@@ -156,7 +156,7 @@ test("Z.AI adapter normalizes 5h, weekly, and MCP monthly windows", () => {
   assert.match(rendered, /5h window:\s+\[█{17}░{3}\] 87% left \(resets /);
   assert.match(rendered, /Weekly window:\s+120000 of 500000 used · 380000 left \(resets /);
   assert.match(rendered, /search-prime:\s+67/);
-  assert.equal(formatUsageStatusline(report), "zai 87% 5h 76% wk");
+  assert.equal(formatUsageStatusline(report), "zai 5h:87% · wk:76%");
 });
 
 test("Z.AI adapter keeps percentage-only 5h windows displayable without weekly data", () => {
@@ -190,7 +190,7 @@ test("Z.AI adapter keeps percentage-only 5h windows displayable without weekly d
   });
   assert.equal(report.notes, undefined);
   assert.equal(report.metrics.length, 0);
-  assert.equal(formatUsageStatusline(report), "zai 60% 5h");
+  assert.equal(formatUsageStatusline(report), "zai 5h:60%");
 });
 
 test("Z.AI adapter shows percentage-only weekly windows as percent buckets", () => {
@@ -682,7 +682,7 @@ test("malformed Z.AI quota responses keep the error chip and scheduled recovery"
     assert.equal(statuses.get("usage"), "usage err: Z.AI quota response data was not an object.");
     quotaPayload = ZAI_QUOTA_PAYLOAD;
     await vi.advanceTimersByTimeAsync(5 * 60 * 1000);
-    assert.equal(statuses.get("usage"), "zai 87% 5h 76% wk");
+    assert.equal(statuses.get("usage"), "zai 5h:87% · wk:76%");
   } finally {
     await mock.events.get("session_shutdown")?.[0]?.({}, ctx);
     vi.unstubAllGlobals();
@@ -743,7 +743,7 @@ test.each(
   try {
     await mock.events.get("session_start")?.[0]?.({}, ctx);
     await vi.advanceTimersByTimeAsync(0);
-    assert.equal(statuses.get("usage"), "zai 87% 5h 76% wk");
+    assert.equal(statuses.get("usage"), "zai 5h:87% · wk:76%");
     assert.equal(requests.length, 2);
     quotaPayload = failure;
     await mock.commands.get("usage")?.handler("", ctx);
@@ -762,7 +762,7 @@ test.each(
     assert.equal(requests.length, 4, "expired backoff retries instead of returning cached usage");
     quotaPayload = ZAI_QUOTA_PAYLOAD;
     await vi.advanceTimersByTimeAsync(5 * 60 * 1000);
-    assert.equal(statuses.get("usage"), "zai 87% 5h 76% wk");
+    assert.equal(statuses.get("usage"), "zai 5h:87% · wk:76%");
     assert.equal(requests.length, 6);
   } finally {
     await mock.events.get("session_shutdown")?.[0]?.({}, ctx);
@@ -823,7 +823,7 @@ test("a superseded Z.AI failure cannot evict a newer successful refresh", async 
     await older;
     await mock.events.get("turn_start")?.[0]?.({}, ctx);
     await vi.advanceTimersByTimeAsync(0);
-    assert.equal(statuses.get("usage"), "zai 87% 5h 76% wk");
+    assert.equal(statuses.get("usage"), "zai 5h:87% · wk:76%");
     assert.equal(fetches, 5, "the newer ready report remains cached");
   } finally {
     releaseOld(new Response("{}"));

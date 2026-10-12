@@ -419,7 +419,7 @@ test("current Codex usage can redeem a selected reset and refresh account state"
   });
   assert.equal(new Headers(consume.init?.headers).get("chatgpt-account-id"), "account-123");
   assert.ok(usageRequests >= 2);
-  assert.equal(statuses.get("usage"), "codex 100% 5h");
+  assert.equal(statuses.get("usage"), "codex 5h:100%");
   assert.match(titles.at(-1) ?? "", /Usage reset.*0 usage limit resets left/isu);
 });
 
@@ -1010,7 +1010,7 @@ test("current Kimi usage follows account changes and clears status on model repl
 
   await mock.events.get("session_start")?.[0]?.({}, ctx);
   await settle();
-  assert.equal(statuses.get("usage"), "kimi 99% 5h 96% wk");
+  assert.equal(statuses.get("usage"), "kimi 5h:99% · wk:96%");
   await command.handler("", ctx);
   assert.match(titles[0] ?? "", /Kimi For Coding Usage · Current/);
   assert.match(titles[0] ?? "", /1 of 100 used · 99% left/);
@@ -1018,7 +1018,7 @@ test("current Kimi usage follows account changes and clears status on model repl
   activeKey = "kimi-account-b";
   mock.events.get("turn_start")?.[0]?.({}, ctx);
   await settle();
-  assert.equal(statuses.get("usage"), "kimi 75% 5h 96% wk");
+  assert.equal(statuses.get("usage"), "kimi 5h:75% · wk:96%");
   assert.ok(fetchedKeys.includes("Bearer kimi-account-a"));
   assert.ok(fetchedKeys.includes("Bearer kimi-account-b"));
 
@@ -1602,7 +1602,7 @@ test("MiniMax account rotation at the request boundary retries without querying 
 
   assert.ok(authLookups >= 5);
   assert.deepEqual(fetchedKeys, ["Bearer minimax-account-b"]);
-  assert.equal(statuses.get("usage"), "minimax 15% 5h 80% wk");
+  assert.equal(statuses.get("usage"), "minimax 5h:15% · wk:80%");
   mock.events.get("session_shutdown")?.[0]?.({}, ctx);
   assert.equal(statuses.get("usage"), undefined);
 });
@@ -1745,17 +1745,17 @@ test("Z.AI providers publish statusline usage and refresh through /usage", async
   await mock.events.get("session_start")?.[0]?.({}, ctx);
   await settle();
   assert.equal(fetches, 2);
-  assert.equal(statuses.get("usage"), "zai 90% 5h 80% wk");
+  assert.equal(statuses.get("usage"), "zai 5h:90% · wk:80%");
 
   mock.events.get("turn_start")?.[0]?.({}, ctx);
   await settle();
   assert.equal(fetches, 2);
-  assert.equal(statuses.get("usage"), "zai 90% 5h 80% wk");
+  assert.equal(statuses.get("usage"), "zai 5h:90% · wk:80%");
 
   await command.handler("", ctx);
   assert.equal(fetches, 2);
   assert.match(titles[0] ?? "", /5h window:\s+\[█{18}░{2}\] 90% left/);
-  assert.equal(statuses.get("usage"), "zai 90% 5h 80% wk");
+  assert.equal(statuses.get("usage"), "zai 5h:90% · wk:80%");
 });
 
 test("Command Code publishes statusline usage from the alpha endpoints", async (t) => {
@@ -1814,7 +1814,7 @@ test("Command Code publishes statusline usage from the alpha endpoints", async (
     "https://api.commandcode.ai/alpha/billing/subscriptions",
     `https://api.commandcode.ai/alpha/usage/summary?since=${encodeURIComponent("2026-09-22T06:17:06.000Z")}`,
   ]);
-  assert.equal(statuses.get("usage"), "cmd 99% 5h 92% wk 96% mo");
+  assert.equal(statuses.get("usage"), "cmd 5h:99% · wk:92% · mo:96%");
 });
 
 test("automatic provider failures back off instead of retrying every turn", async (t) => {
@@ -2179,11 +2179,11 @@ test("a slow command cannot overwrite status after the selected model changes", 
   Object.assign(ctx, { model: codexModel });
   mock.events.get("model_select")?.[0]?.({ model: codexModel }, ctx);
   await settle();
-  assert.equal(statuses.get("usage"), "codex 80% 5h");
+  assert.equal(statuses.get("usage"), "codex 5h:80%");
 
   resolveSlowFetch(await usageFetch("https://openrouter.ai/api/v1/key"));
   await commandPromise;
-  assert.equal(statuses.get("usage"), "codex 80% 5h");
+  assert.equal(statuses.get("usage"), "codex 5h:80%");
 });
 
 test("statusline follows runtime auth changes and clears for unsupported selected providers", async (t) => {
