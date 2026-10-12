@@ -141,7 +141,7 @@ test("cost correction and labels stay scoped to effective Fast", () => {
     correctCodexFastMessageCost({ ...message, model: "other" }, model() as never, true, supported),
     undefined,
   );
-  assert.equal(codexFastStatusLabel("codex 80% 5h", true), "codex fast 80% 5h");
+  assert.equal(codexFastStatusLabel("codex 5h:80%", true), "codex fast 5h:80%");
   assert.equal(codexFastStatusLabel("codex credits available", false), "codex credits available");
   assert.equal(codexFastStatusLabel("openrouter $10 left", true), "openrouter $10 left");
   assert.equal(codexFastStatusLabel("codexical provider", true), "codexical provider");

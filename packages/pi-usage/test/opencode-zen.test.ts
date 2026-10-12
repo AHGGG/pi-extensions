@@ -31,7 +31,7 @@ test("OpenCode Zen adapter normalizes rolling, weekly, and monthly windows", () 
   assert.deepEqual(monthly?.used, 2);
   assert.deepEqual(monthly?.remaining, 98);
 
-  assert.equal(formatUsageStatusline(report), "zen 0% r 4% w 2% m");
+  assert.equal(formatUsageStatusline(report), "zen r:0% · w:4% · m:2%");
   assert.match(formatUsageReport(report, "current"), /OpenCode Go Usage · Current/);
   assert.match(formatUsageReport(report, "current"), /Rolling window:\s+\[█{20}\] 100% left \(resets /);
   assert.match(formatUsageReport(report, "current"), /Weekly window:\s+\[█{19}░\] 96% left/);
@@ -52,7 +52,7 @@ test("OpenCode Zen adapter reports unknown-status windows as unavailable notes",
   assert.equal(report.buckets.length, 1);
   assert.equal(report.buckets[0]?.id, "rolling");
   assert.match(report.notes?.join(" ") ?? "", /Weekly window unavailable/);
-  assert.equal(formatUsageStatusline(report), "zen 10% r");
+  assert.equal(formatUsageStatusline(report), "zen r:10%");
 });
 
 test("OpenCode Zen adapter displays rate-limited windows", () => {
@@ -75,7 +75,7 @@ test("OpenCode Zen adapter displays rate-limited windows", () => {
   assert.equal(report.buckets[0]?.used, 100);
   assert.equal(report.buckets[0]?.remaining, 0);
   assert.equal(report.notes, undefined);
-  assert.equal(formatUsageStatusline(report), "zen 100% r 4% w");
+  assert.equal(formatUsageStatusline(report), "zen r:100% · w:4%");
   assert.match(formatUsageReport(report, "current"), /Rolling window:\s+\[░{20}\] 0% left/);
 });
 
@@ -92,7 +92,7 @@ test("OpenCode Zen adapter keeps fully rate-limited responses displayable", () =
   );
 
   assert.equal(report.buckets.length, 3);
-  assert.equal(formatUsageStatusline(report), "zen 100% r 100% w 100% m");
+  assert.equal(formatUsageStatusline(report), "zen r:100% · w:100% · m:100%");
 });
 
 test("OpenCode Zen adapter rejects empty or fully unavailable responses", () => {

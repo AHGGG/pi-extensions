@@ -205,7 +205,7 @@ test("server-advertised future model enables Fast, status, and priority routing"
   assert.equal(JSON.parse(await readFile(f.path, "utf8")).codexFastMode, true);
   assert.match(f.current.notifications[0]?.message ?? "", /1\.5× faster.*uses more/);
   assert.deepEqual(f.fast.availability(future as never), { kind: "available", enabled: true });
-  assert.equal(f.fast.decorateStatus(future as never, "codex 80% 5h"), "codex fast 80% 5h");
+  assert.equal(f.fast.decorateStatus(future as never, "codex 5h:80%"), "codex fast 5h:80%");
   assert.deepEqual(await f.request({ payload: { model: future.id } }, f.current.ctx), {
     model: future.id,
     service_tier: "priority",
@@ -409,7 +409,7 @@ test("initial directory failure shows unknown, routes default, and still permits
   });
   await f.fast.refreshCapabilities(f.current.ctx);
   assert.equal(f.fast.availability(codexModel as never).kind, "unknown");
-  assert.match(f.fast.decorateStatus(codexModel as never, "codex 80% 5h"), /Fast unknown/);
+  assert.match(f.fast.decorateStatus(codexModel as never, "codex 5h:80%"), /Fast unknown/);
   assert.deepEqual(await f.request({ payload: { model: codexModel.id } }, f.current.ctx), {
     model: codexModel.id,
     service_tier: "default",

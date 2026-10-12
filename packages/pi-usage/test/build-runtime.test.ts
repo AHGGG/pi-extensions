@@ -117,6 +117,31 @@ test("generated runtime is loadable by Pi's Jiti resource loader", async () => {
       assert.doesNotMatch(title.split("App limits:")[1]?.split("App allowance:")[0] ?? "", /%|█|░/);
       assert.ok(requests.some((url) => url.endsWith("/apps")));
       assert.ok(requests.some((url) => url.endsWith("/wham/usage")));
+
+      // Exercise changed multi-window formatting through the generated command path.
+      Object.assign(model, { provider: "command-code", baseUrl: "https://api.commandcode.ai/provider" });
+      Object.assign(registry, {
+        getAll: () => [model],
+        getProviderAuth: async () => ({ source: "ApiKey", auth: { apiKey: "synthetic-command-key" } }),
+        getApiKeyAndHeaders: async () => ({ ok: true, apiKey: "synthetic-command-key" }),
+      });
+      vi.stubGlobal("fetch", async (url: string, init: RequestInit) => {
+        assert.equal((init.headers as Record<string, string>).Authorization, "Bearer synthetic-command-key");
+        assert.equal(new URL(url).origin, "https://api.commandcode.ai");
+        const payload = url.endsWith("/alpha/whoami")
+          ? { user: { userName: "synthetic-account" } }
+          : url.includes("/credits")
+            ? {
+                windowLimits: {
+                  fiveHour: { used: 11, cap: 100 },
+                  weekly: { used: 3, cap: 100 },
+                },
+              }
+            : {};
+        return new Response(JSON.stringify(payload));
+      });
+      await command.handler("", context.ctx);
+      assert.equal(context.statuses.get("usage"), "cmd 5h:89% · wk:97%");
     } finally {
       for (const handler of extension.handlers.get("session_shutdown") ?? []) await handler({}, context.ctx);
     }

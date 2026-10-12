@@ -127,7 +127,7 @@ test("Command Code adapter normalizes rolling USD windows, plan credits, and per
   );
   assert.equal(report.notes, undefined);
 
-  assert.equal(formatUsageStatusline(report), "cmd 99% 5h 92% wk 96% mo");
+  assert.equal(formatUsageStatusline(report), "cmd 5h:99% · wk:92% · mo:96%");
   const text = formatUsageReport(report, "current");
   assert.match(text, /Command Code Usage · Current/);
   assert.match(text, /Semantics: Command Code plan credits and rolling limits/);
@@ -152,7 +152,7 @@ test("Command Code adapter degrades to plan and rolling windows when period usag
   assert.deepEqual(metricIds, ["plan", "monthly-credits"]);
   assert.equal(report.metrics[1]?.value, CREDITS.credits.monthlyCredits);
   assert.match(report.notes?.join(" ") ?? "", /billing-period usage was unavailable/);
-  assert.equal(formatUsageStatusline(report), "cmd 99% 5h 92% wk");
+  assert.equal(formatUsageStatusline(report), "cmd 5h:99% · wk:92%");
 });
 
 test("Command Code adapter reports unavailable sections and disabled rolling limits", () => {
@@ -327,7 +327,7 @@ for (const endpoint of ["credits", "subscriptions", "summary"] as const) {
       assert.match(report.notes?.join(" ") ?? "", /credits were unavailable/);
     } else {
       assert.equal(report.buckets.find((bucket) => bucket.id === "five-hour")?.limit, 14);
-      assert.equal(formatUsageStatusline(report), "cmd 99% 5h 92% wk");
+      assert.equal(formatUsageStatusline(report), "cmd 5h:99% · wk:92%");
     }
     assert.match(report.notes?.join(" ") ?? "", /billing-period usage was unavailable/);
     assert.equal(
@@ -437,7 +437,7 @@ for (const [endpoint, guardState] of [
     assert.equal(timedOut, true);
     if (guardState === "stable") {
       assert.ok(postTimeoutAuthReads >= 2, "Adapter and publication guards must finish after the transport timeout");
-      assert.equal(statuses.get("usage"), endpoint === "credits" ? undefined : "cmd 99% 5h 92% wk");
+      assert.equal(statuses.get("usage"), endpoint === "credits" ? undefined : "cmd 5h:99% · wk:92%");
     } else if (guardState === "too-slow") {
       // The query guard has already timed out within 15 s. The status layer separately
       // checks auth before displaying even a failure, so allow that check to settle.

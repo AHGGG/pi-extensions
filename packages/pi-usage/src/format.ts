@@ -286,13 +286,13 @@ function formatOpenCodeZenReport(lines: string[], report: UsageReport): void {
 }
 
 function formatOpenCodeZenStatusline(report: UsageReport): string | undefined {
-  const parts = ["zen"];
+  const parts: string[] = [];
   for (const bucket of report.buckets) {
     if (bucket.used === undefined) continue;
     const compact = bucket.id === "rolling" ? "r" : bucket.id === "weekly" ? "w" : "m";
-    parts.push(`${clampPercent(bucket.used).toFixed(0)}% ${compact}`);
+    parts.push(`${compact}:${clampPercent(bucket.used).toFixed(0)}%`);
   }
-  return parts.length > 1 ? parts.join(" ") : undefined;
+  return parts.length > 0 ? `zen ${parts.join(" · ")}` : undefined;
 }
 
 function formatCommandCodeReport(lines: string[], report: UsageReport): void {
@@ -312,7 +312,7 @@ function formatCommandCodeReport(lines: string[], report: UsageReport): void {
 }
 
 function formatCommandCodeStatusline(report: UsageReport): string | undefined {
-  const parts = ["cmd"];
+  const parts: string[] = [];
   for (const [id, label] of [
     ["five-hour", "5h"],
     ["weekly", "wk"],
@@ -320,9 +320,9 @@ function formatCommandCodeStatusline(report: UsageReport): string | undefined {
   ] as const) {
     const bucket = report.buckets.find((candidate) => candidate.id === id);
     if (bucket?.unit !== "usd" || bucket.limit === undefined || bucket.remaining === undefined) continue;
-    parts.push(`${percentRemaining(bucket)}% ${label}`);
+    parts.push(`${label}:${percentRemaining(bucket)}%`);
   }
-  return parts.length > 1 ? parts.join(" ") : undefined;
+  return parts.length > 0 ? `cmd ${parts.join(" · ")}` : undefined;
 }
 
 function formatKimiCodingReport(lines: string[], report: UsageReport): void {
@@ -371,15 +371,15 @@ function formatKimiCodingStatusline(report: UsageReport): string | undefined {
   const selected = [subWindow, weekly, monthly].filter(
     (bucket, index, buckets): bucket is UsageBucket => bucket !== undefined && buckets.indexOf(bucket) === index,
   );
-  const parts = ["kimi"];
+  const parts: string[] = [];
   for (const bucket of selected) {
     if (bucket.remaining === undefined || (bucket.unit !== "percent" && !bucket.limit)) continue;
     const fallback = bucket.id === "weekly" ? "weekly" : "5h";
     const window = bucket.id === "monthly" ? "mo" : formatWindowLabel(bucket.windowMinutes, fallback, true);
     const remaining = bucket.unit === "percent" ? Math.round(clampPercent(bucket.remaining)) : percentRemaining(bucket);
-    parts.push(`${remaining}% ${window}`);
+    parts.push(`${window}:${remaining}%`);
   }
-  return parts.length > 1 ? parts.join(" ") : undefined;
+  return parts.length > 0 ? `kimi ${parts.join(" · ")}` : undefined;
 }
 
 function formatMoonshotReport(lines: string[], report: UsageReport): void {
@@ -427,22 +427,22 @@ function formatMiniMaxStatusline(report: UsageReport, model?: UsageModel): strin
   const selectedGroup = selectMiniMaxGroup(report, model);
   if (!selectedGroup) return undefined;
   const selected = report.buckets.filter((bucket) => bucket.groupId === selectedGroup);
-  const parts = [prefix];
+  const parts: string[] = [];
   for (const bucket of selected) {
     const fallback = bucket.id.endsWith(":weekly") ? "weekly" : "5h";
     const window = formatWindowLabel(bucket.windowMinutes, fallback, true);
     if (bucket.period === "unlimited") {
-      parts.push(`unlimited ${window}`);
+      parts.push(`${window}:unlimited`);
       continue;
     }
     if (bucket.unit === "percent" && bucket.remaining !== undefined) {
-      parts.push(`${bucket.remaining}% ${window}`);
+      parts.push(`${window}:${bucket.remaining}%`);
       continue;
     }
     if (bucket.limit === undefined || bucket.remaining === undefined) continue;
-    parts.push(`${percentRemaining(bucket)}% ${window}`);
+    parts.push(`${window}:${percentRemaining(bucket)}%`);
   }
-  return parts.length > 1 ? parts.join(" ") : undefined;
+  return parts.length > 0 ? `${prefix} ${parts.join(" · ")}` : undefined;
 }
 
 function selectMiniMaxGroup(report: UsageReport, model?: UsageModel): string | undefined {
@@ -498,13 +498,13 @@ function formatZaiStatusline(report: UsageReport): string | undefined {
     report.buckets.find((bucket) => bucket.id === "five-hour"),
     report.buckets.find((bucket) => bucket.id === "weekly"),
   ];
-  const parts = ["zai"];
+  const parts: string[] = [];
   for (const bucket of selected) {
     if (!bucket?.limit || bucket.remaining === undefined) continue;
     const fallback = bucket.id === "weekly" ? "weekly" : "5h";
-    parts.push(`${percentRemaining(bucket)}% ${formatWindowLabel(bucket.windowMinutes, fallback, true)}`);
+    parts.push(`${formatWindowLabel(bucket.windowMinutes, fallback, true)}:${percentRemaining(bucket)}%`);
   }
-  return parts.length > 1 ? parts.join(" ") : undefined;
+  return parts.length > 0 ? `zai ${parts.join(" · ")}` : undefined;
 }
 
 function formatCurrencyMetric(metric: UsageReport["metrics"][number]): string {
@@ -604,7 +604,8 @@ function formatCodexStatusline(
   if (!group) return formatCodexCreditsStatus(report);
   const buckets = report.buckets.filter((bucket) => (bucket.groupId ?? bucket.id) === group);
   const labelBucket = buckets[0];
-  const parts = [group === "codex" ? "codex" : `codex ${compactLimitLabel(labelBucket?.groupLabel ?? group)}`];
+  const prefix = group === "codex" ? "codex" : `codex ${compactLimitLabel(labelBucket?.groupLabel ?? group)}`;
+  const parts: string[] = [];
   for (const bucket of buckets) {
     if (bucket.remaining === undefined) continue;
     const displayedPercentage = percentage === "used" ? (bucket.used ?? 100 - bucket.remaining) : bucket.remaining;
@@ -612,13 +613,13 @@ function formatCodexStatusline(
     const fallback = bucket.id.endsWith(":secondary") ? "weekly" : "5h";
     const window = formatWindowLabel(bucket.windowMinutes, fallback, true);
     if (!showResetCountdown) {
-      parts.push(`${percent} ${window}`);
+      parts.push(`${window}:${percent}`);
       continue;
     }
     const reset = formatResetCountdown(bucket.resetsAt, now);
-    parts.push(`${percent} ${reset ? `↻ ${reset}` : window}`);
+    parts.push(reset ? `${percent} ↻ ${reset}` : `${window}:${percent}`);
   }
-  return parts.length > 1 ? parts.join(" ") : formatCodexCreditsStatus(report);
+  return parts.length > 0 ? `${prefix} ${parts.join(" · ")}` : formatCodexCreditsStatus(report);
 }
 
 function formatCodexCreditsStatus(report: UsageReport): string {
