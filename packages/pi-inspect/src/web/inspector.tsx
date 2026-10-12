@@ -7,6 +7,7 @@ import { Copy, Data, Metadata, Status } from "./components.js";
 import { entryCalls } from "./entry-calls.js";
 import { count, duration, eventName, output, promptDiff, record, scripts } from "./format.js";
 import { RecordedContent } from "./recorded-content.js";
+import { ToolInspector } from "./tool-inspector.js";
 
 export function Inspector({
   selected,
@@ -336,11 +337,7 @@ export function Inspector({
           <Data label="Prompt updates on branch" data={branch?.promptUpdates} scope={`${selected}-promptUpdates`} />
         </Tabs.Content>
         <Tabs.Content value="tools">
-          <Data
-            label="Historical declared tools · preview branch"
-            data={branch?.declaredTools}
-            scope={`${selected}-declaredTools`}
-          />
+          <ToolInspector key={selected} data={branch?.declaredTools} scope={`${selected}-declaredTools`} />
         </Tabs.Content>
         <Tabs.Content value="skills">
           <Text as="p" size="2" color="gray">
