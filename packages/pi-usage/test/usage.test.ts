@@ -1546,8 +1546,10 @@ test("DeepSeek account rotation at the request boundary retries without querying
 
 test("MiniMax account rotation at the request boundary retries without querying the stale key", async (t) => {
   const originalFetch = globalThis.fetch;
+  const clock = vi.spyOn(Date, "now").mockReturnValue(1_800_000_000_000);
   t.onTestFinished(() => {
     globalThis.fetch = originalFetch;
+    clock.mockRestore();
   });
   let authLookups = 0;
   const fetchedKeys: string[] = [];
@@ -1602,7 +1604,7 @@ test("MiniMax account rotation at the request boundary retries without querying 
 
   assert.ok(authLookups >= 5);
   assert.deepEqual(fetchedKeys, ["Bearer minimax-account-b"]);
-  assert.equal(statuses.get("usage"), "minimax 5h:15% · wk:80%");
+  assert.equal(statuses.get("usage"), "minimax 15% ↻ 5h · 80% ↻ 6d16h");
   mock.events.get("session_shutdown")?.[0]?.({}, ctx);
   assert.equal(statuses.get("usage"), undefined);
 });
@@ -1760,8 +1762,10 @@ test("Z.AI providers publish statusline usage and refresh through /usage", async
 
 test("Command Code publishes statusline usage from the alpha endpoints", async (t) => {
   const originalFetch = globalThis.fetch;
+  const clock = vi.spyOn(Date, "now").mockReturnValue(Date.parse("2026-10-12T00:00:00Z"));
   t.onTestFinished(() => {
     globalThis.fetch = originalFetch;
+    clock.mockRestore();
   });
   const seen: string[] = [];
   globalThis.fetch = async (input) => {
@@ -1814,7 +1818,8 @@ test("Command Code publishes statusline usage from the alpha endpoints", async (
     "https://api.commandcode.ai/alpha/billing/subscriptions",
     `https://api.commandcode.ai/alpha/usage/summary?since=${encodeURIComponent("2026-09-22T06:17:06.000Z")}`,
   ]);
-  assert.equal(statuses.get("usage"), "cmd 5h:99% · wk:92% · mo:96%");
+  assert.equal(statuses.get("usage"), "cmd 5h:99% · wk:92% · 96% ↻ 10d6h");
+  mock.events.get("session_shutdown")?.[0]?.({}, ctx);
 });
 
 test("automatic provider failures back off instead of retrying every turn", async (t) => {
