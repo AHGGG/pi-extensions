@@ -3,10 +3,10 @@ import { truncateToWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import { EditorStatusWidget } from "@narumitw/pi-tui-kit/editor-status-widget";
 import { sanitizeTerminalDocument } from "@narumitw/pi-tui-kit/terminal-document";
 import type { ProgressStep } from "./progress-state.js";
-import { DEFAULT_PROGRESS_SETTINGS, type ProgressWidgetSettings } from "./settings.js";
+import { DEFAULT_PROGRESS_SETTINGS, type ProgressSettings } from "./settings.js";
 
 export interface RenderProgressWidgetOptions {
-  settings?: Readonly<ProgressWidgetSettings>;
+  settings?: Readonly<ProgressSettings>;
   terminalRows?: number;
 }
 
@@ -22,7 +22,7 @@ export function renderProgressWidget(
   options: RenderProgressWidgetOptions = {},
 ): string[] {
   const renderWidth = Math.max(0, width);
-  const settings = options.settings ?? DEFAULT_PROGRESS_SETTINGS.widget;
+  const settings = options.settings ?? DEFAULT_PROGRESS_SETTINGS;
   const header = renderHeader(steps, theme, renderWidth, settings.showProgress);
   const rendered = steps.map((step) => ({ step, lines: renderStep(step, theme, renderWidth) }));
 
@@ -112,7 +112,7 @@ function renderStep(step: ProgressStep, theme: Theme, width: number): string[] {
 function renderExpanded(
   header: readonly string[],
   rendered: readonly RenderedProgressStep[],
-  settings: Readonly<ProgressWidgetSettings>,
+  settings: Readonly<ProgressSettings>,
   theme: Theme,
   width: number,
 ): string[] {
@@ -127,7 +127,7 @@ function renderExpanded(
 function renderCollapsed(
   header: readonly string[],
   rendered: readonly RenderedProgressStep[],
-  settings: Readonly<ProgressWidgetSettings>,
+  settings: Readonly<ProgressSettings>,
   theme: Theme,
   width: number,
   rowBudget: number,

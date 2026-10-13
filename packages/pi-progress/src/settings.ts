@@ -1,16 +1,15 @@
 import { constants } from "node:fs";
 import { type FileHandle, open } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 
 export const PROGRESS_SETTINGS_FILE = "pi-progress.json";
-export const LEGACY_TODO_SETTINGS_FILE = "pi-todo.json";
 export const MAX_PROGRESS_SETTINGS_BYTES = 64 * 1024;
 export const PROGRESS_DISPLAY_MODES = ["adaptive", "expanded", "collapsed"] as const;
 
 export type ProgressDisplayMode = (typeof PROGRESS_DISPLAY_MODES)[number];
 
-export interface ProgressWidgetSettings {
+export interface ProgressSettings {
   enabled: boolean;
   displayMode: ProgressDisplayMode;
   showCompleted: boolean;
@@ -18,18 +17,12 @@ export interface ProgressWidgetSettings {
   showProgress: boolean;
 }
 
-export interface ProgressSettings {
-  widget: ProgressWidgetSettings;
-}
-
 export const DEFAULT_PROGRESS_SETTINGS: Readonly<ProgressSettings> = Object.freeze({
-  widget: Object.freeze({
-    enabled: true,
-    displayMode: "adaptive",
-    showCompleted: true,
-    maxVisibleItems: null,
-    showProgress: true,
-  }),
+  enabled: true,
+  displayMode: "adaptive",
+  showCompleted: true,
+  maxVisibleItems: null,
+  showProgress: true,
 });
 
 export type ProgressSettingsLoadResult =
@@ -45,21 +38,22 @@ export function normalizeProgressSettings(value: unknown): ProgressSettings | un
   if (!isRecord(value)) return undefined;
   const widgetValue = Object.hasOwn(value, "widget") ? value.widget : undefined;
   if (widgetValue !== undefined && !isRecord(widgetValue)) return undefined;
-  const widget = widgetValue ?? {};
+  // Retain nested pi-progress.json settings; top-level fields take precedence.
+  const settings = { ...widgetValue, ...value };
 
-  const enabled = booleanSetting(widget, "enabled", DEFAULT_PROGRESS_SETTINGS.widget.enabled);
-  const showCompleted = booleanSetting(widget, "showCompleted", DEFAULT_PROGRESS_SETTINGS.widget.showCompleted);
-  const showProgress = booleanSetting(widget, "showProgress", DEFAULT_PROGRESS_SETTINGS.widget.showProgress);
+  const enabled = booleanSetting(settings, "enabled", DEFAULT_PROGRESS_SETTINGS.enabled);
+  const showCompleted = booleanSetting(settings, "showCompleted", DEFAULT_PROGRESS_SETTINGS.showCompleted);
+  const showProgress = booleanSetting(settings, "showProgress", DEFAULT_PROGRESS_SETTINGS.showProgress);
   if (enabled === undefined || showCompleted === undefined || showProgress === undefined) return undefined;
 
-  const displayMode = Object.hasOwn(widget, "displayMode")
-    ? widget.displayMode
-    : DEFAULT_PROGRESS_SETTINGS.widget.displayMode;
+  const displayMode = Object.hasOwn(settings, "displayMode")
+    ? settings.displayMode
+    : DEFAULT_PROGRESS_SETTINGS.displayMode;
   if (!PROGRESS_DISPLAY_MODES.includes(displayMode as ProgressDisplayMode)) return undefined;
 
-  const maxVisibleItems = Object.hasOwn(widget, "maxVisibleItems")
-    ? widget.maxVisibleItems
-    : DEFAULT_PROGRESS_SETTINGS.widget.maxVisibleItems;
+  const maxVisibleItems = Object.hasOwn(settings, "maxVisibleItems")
+    ? settings.maxVisibleItems
+    : DEFAULT_PROGRESS_SETTINGS.maxVisibleItems;
   if (
     maxVisibleItems !== null &&
     (typeof maxVisibleItems !== "number" ||
@@ -71,13 +65,11 @@ export function normalizeProgressSettings(value: unknown): ProgressSettings | un
   }
 
   return {
-    widget: {
-      enabled,
-      displayMode: displayMode as ProgressDisplayMode,
-      showCompleted,
-      maxVisibleItems,
-      showProgress,
-    },
+    enabled,
+    displayMode: displayMode as ProgressDisplayMode,
+    showCompleted,
+    maxVisibleItems,
+    showProgress,
   };
 }
 
@@ -85,14 +77,9 @@ export async function loadProgressSettings(
   canonicalPath = progressSettingsPath(),
   signal?: AbortSignal,
 ): Promise<ProgressSettingsLoadResult> {
-  const canonical = await loadSettingsFile(canonicalPath, signal);
+  const result = await loadSettingsFile(canonicalPath, signal);
   throwIfAborted(signal);
-  if (canonical.kind !== "missing") return canonical;
-
-  const legacyPath = join(dirname(canonicalPath), LEGACY_TODO_SETTINGS_FILE);
-  const legacy = await loadSettingsFile(legacyPath, signal);
-  throwIfAborted(signal);
-  return legacy.kind === "missing" ? canonical : legacy;
+  return result;
 }
 
 async function loadSettingsFile(path: string, signal?: AbortSignal): Promise<ProgressSettingsLoadResult> {
@@ -158,7 +145,7 @@ function booleanSetting(record: Record<string, unknown>, key: string, fallback: 
 }
 
 function cloneDefaultSettings(): ProgressSettings {
-  return { widget: { ...DEFAULT_PROGRESS_SETTINGS.widget } };
+  return { ...DEFAULT_PROGRESS_SETTINGS };
 }
 
 function invalidResult(path: string, issue: string): ProgressSettingsLoadResult {

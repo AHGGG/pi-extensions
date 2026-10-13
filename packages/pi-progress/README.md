@@ -174,13 +174,11 @@ Canonical user settings are read from `<Pi agent directory>/pi-progress.json`, n
 
 ```json
 {
-  "widget": {
-    "enabled": true,
-    "displayMode": "adaptive",
-    "showCompleted": true,
-    "maxVisibleItems": null,
-    "showProgress": true
-  }
+  "enabled": true,
+  "displayMode": "adaptive",
+  "showCompleted": true,
+  "maxVisibleItems": null,
+  "showProgress": true
 }
 ```
 
@@ -188,15 +186,14 @@ Canonical user settings are read from `<Pi agent directory>/pi-progress.json`, n
 `maxVisibleItems` accepts `null` or an integer from 1 through 50; the other fields are booleans with the defaults shown above.
 Settings reload at every session start, including `/reload`, and remain fixed during that session.
 
-When `pi-progress.json` is absent, the extension reads sibling `pi-todo.json` as a legacy fallback through the same bounded, no-symlink validator.
-When both exist, the canonical file wins.
-An invalid canonical file uses defaults and does not fall back, so its error remains visible in TUI and RPC modes.
-Missing, malformed, invalid, oversized, non-regular, symlinked, or non-UTF-8 files are never created, copied, rewritten, moved, or deleted.
-This read-only fallback intentionally differs from the repository's usual copy-and-remove filename migration because the predecessor promised zero settings writes.
+Existing `pi-progress.json` files with a nested `widget` object remain supported; top-level fields override matching nested fields.
+The extension no longer reads `pi-todo.json`. To retain those preferences, copy the five settings into `pi-progress.json` using the flat format above.
+A missing file uses defaults. An invalid file uses defaults and reports its error in TUI and RPC modes.
+Settings loading never creates, rewrites, moves, or deletes files, including the unused `pi-todo.json`.
 
 ## 🔒 Security and privacy
 
-The extension reads only the optional canonical or legacy user settings file and never writes either file.
+The extension reads only the optional `pi-progress.json` user settings file and never writes it.
 It does not start processes, access credentials, or make network requests.
 Pi stores progress text in normal session tool results, so they follow the user's session persistence choices.
 Terminal escape sequences, control characters, and bidirectional display controls are stripped only at the display boundary; stored tool payloads remain unchanged.

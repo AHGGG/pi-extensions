@@ -36,15 +36,15 @@ export function defaultSettingsResult(): ProgressSettingsLoadResult {
   return {
     kind: "missing",
     path: "/tmp/pi-progress.json",
-    settings: { widget: { ...DEFAULT_PROGRESS_SETTINGS.widget } },
+    settings: { ...DEFAULT_PROGRESS_SETTINGS },
   };
 }
 
-export function loadedSettings(widget: Partial<ProgressSettings["widget"]>): ProgressSettingsLoadResult {
+export function loadedSettings(settings: Partial<ProgressSettings>): ProgressSettingsLoadResult {
   return {
     kind: "loaded",
     path: "/tmp/pi-progress.json",
-    settings: { widget: { ...DEFAULT_PROGRESS_SETTINGS.widget, ...widget } },
+    settings: { ...DEFAULT_PROGRESS_SETTINGS, ...settings },
   };
 }
 
