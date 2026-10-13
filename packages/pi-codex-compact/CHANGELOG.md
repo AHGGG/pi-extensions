@@ -1,5 +1,11 @@
 # @narumitw/pi-codex-compact
 
+## 0.56.1
+
+### Patch Changes
+
+- 56174af: Allow bookkeeping entries appended during compaction without mistaking them for a changed conversation or branch, including active Goal usage snapshots. Preserve cancellation when context, ancestry, effective instructions, tools, or lifecycle ownership changes.
+
 ## 0.56.0
 
 ### Minor Changes
