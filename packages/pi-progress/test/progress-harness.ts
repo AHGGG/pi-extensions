@@ -9,7 +9,12 @@ import type {
   Theme,
 } from "@earendil-works/pi-coding-agent";
 import type { Component, TUI } from "@earendil-works/pi-tui";
-import progressWidgetExtension, { type ProgressDetails, type ProgressStep, TOOL_NAME } from "../src/progress-widget.js";
+import progressWidgetExtension, {
+  type ProgressDetails,
+  type ProgressStep,
+  type ProgressWidgetDependencies,
+  TOOL_NAME,
+} from "../src/progress-widget.js";
 import { DEFAULT_PROGRESS_SETTINGS, type ProgressSettings, type ProgressSettingsLoadResult } from "../src/settings.js";
 
 type Handler = (event: never, ctx: ExtensionContext) => unknown;
@@ -48,9 +53,7 @@ export function loadedSettings(settings: Partial<ProgressSettings>): ProgressSet
   };
 }
 
-export function createHarness(
-  options: { loadSettings?: (path?: string, signal?: AbortSignal) => Promise<ProgressSettingsLoadResult> } = {},
-) {
+export function createHarness(options: ProgressWidgetDependencies = {}) {
   const handlers = new Map<string, Handler[]>();
   const entries: Array<{ customType: string; data: unknown }> = [];
   const tools: RegisteredTool[] = [];
@@ -70,6 +73,7 @@ export function createHarness(
     },
   } as unknown as ExtensionAPI;
   progressWidgetExtension(pi, {
+    ...options,
     loadSettings: options.loadSettings ?? (async () => defaultSettingsResult()),
   });
 

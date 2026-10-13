@@ -1,7 +1,7 @@
 import { constants } from "node:fs";
-import { type FileHandle, open } from "node:fs/promises";
-import { join } from "node:path";
-import { getAgentDir } from "@earendil-works/pi-coding-agent";
+import { chmod, type FileHandle, mkdir, mkdtemp, open, rename, rm, writeFile } from "node:fs/promises";
+import { dirname, join } from "node:path";
+import { getAgentDir, withFileMutationQueue } from "@earendil-works/pi-coding-agent";
 
 export const PROGRESS_SETTINGS_FILE = "pi-progress.json";
 export const MAX_PROGRESS_SETTINGS_BYTES = 64 * 1024;
@@ -77,12 +77,59 @@ export async function loadProgressSettings(
   canonicalPath = progressSettingsPath(),
   signal?: AbortSignal,
 ): Promise<ProgressSettingsLoadResult> {
-  const result = await loadSettingsFile(canonicalPath, signal);
-  throwIfAborted(signal);
-  return result;
+  return withFileMutationQueue(canonicalPath, async () => {
+    const result = await loadSettingsFile(canonicalPath, signal);
+    throwIfAborted(signal);
+    return result;
+  });
 }
 
-async function loadSettingsFile(path: string, signal?: AbortSignal): Promise<ProgressSettingsLoadResult> {
+export async function saveProgressSettings(
+  patch: Partial<ProgressSettings>,
+  path = progressSettingsPath(),
+  signal?: AbortSignal,
+): Promise<ProgressSettings> {
+  return withFileMutationQueue(path, async () => {
+    let document: Record<string, unknown> = {};
+    let mode = 0o600;
+    const loaded = await loadSettingsFile(path, signal, (parsed, fileMode) => {
+      document = parsed;
+      mode = fileMode & 0o777;
+    });
+    throwIfAborted(signal);
+    if (loaded.kind === "invalid") throw new Error(`Cannot save invalid settings: ${loaded.issue}`);
+    const nextDocument = { ...document, ...patch };
+    const settings = normalizeProgressSettings(nextDocument);
+    if (!settings) throw new Error("Invalid settings update");
+    const text = `${JSON.stringify(nextDocument, null, 2)}\n`;
+    if (Buffer.byteLength(text) > MAX_PROGRESS_SETTINGS_BYTES) throw new Error("Settings update exceeds size limit");
+
+    const parent = dirname(path);
+    await mkdir(parent, { recursive: true });
+    throwIfAborted(signal);
+    const temporary = await mkdtemp(join(parent, ".pi-progress-"));
+    try {
+      throwIfAborted(signal);
+      const staged = join(temporary, "settings.json");
+      await writeFile(staged, text, { mode, signal });
+      // writeFile applies umask; restore the intended mode before atomic publication.
+      await chmod(staged, mode);
+      throwIfAborted(signal);
+      await rename(staged, path);
+      // A rename can complete while cancellation fires; the next queued read sees it.
+      return settings;
+    } finally {
+      // Cleanup failure must not report a successful publication as a failed save.
+      await rm(temporary, { recursive: true, force: true }).catch(() => {});
+    }
+  });
+}
+
+async function loadSettingsFile(
+  path: string,
+  signal?: AbortSignal,
+  onDocument?: (document: Record<string, unknown>, mode: number) => void,
+): Promise<ProgressSettingsLoadResult> {
   throwIfAborted(signal);
   let handle: FileHandle;
   try {
@@ -130,7 +177,9 @@ async function loadSettingsFile(path: string, signal?: AbortSignal): Promise<Pro
       return invalidResult(path, "invalid JSON");
     }
     const settings = normalizeProgressSettings(parsed);
-    return settings ? { kind: "loaded", path, settings } : invalidResult(path, "invalid settings shape or values");
+    if (!settings || !isRecord(parsed)) return invalidResult(path, "invalid settings shape or values");
+    onDocument?.(parsed, stats.mode);
+    return { kind: "loaded", path, settings };
   } catch (error) {
     throwIfAborted(signal);
     return invalidResult(path, safeReadIssue(error));

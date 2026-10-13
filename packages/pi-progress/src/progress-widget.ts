@@ -1,5 +1,11 @@
-import type { ContextEvent, ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type {
+  ContextEvent,
+  ExtensionAPI,
+  ExtensionCommandContext,
+  ExtensionContext,
+} from "@earendil-works/pi-coding-agent";
 import { renderCompletionSummary, renderProgressWidget, sanitizeProgressText } from "./progress-renderer.js";
+import { showProgressSettings } from "./progress-settings-ui.js";
 import {
   allProgressCompleted,
   cloneProgressSteps,
@@ -23,6 +29,8 @@ import {
   loadProgressSettings,
   type ProgressSettings,
   type ProgressSettingsLoadResult,
+  progressSettingsPath,
+  saveProgressSettings,
 } from "./settings.js";
 
 export const WIDGET_KEY = "progress";
@@ -33,12 +41,14 @@ const RPC_WIDGET_WIDTH = 80;
 
 export interface ProgressWidgetDependencies {
   loadSettings?: typeof loadProgressSettings;
+  saveSettings?: typeof saveProgressSettings;
   setTimeout?: typeof globalThis.setTimeout;
   clearTimeout?: typeof globalThis.clearTimeout;
 }
 
 export default function progressWidgetExtension(pi: ExtensionAPI, dependencies: ProgressWidgetDependencies = {}): void {
   const readSettings = dependencies.loadSettings ?? loadProgressSettings;
+  const writeSettings = dependencies.saveSettings ?? saveProgressSettings;
   const scheduleTimeout = dependencies.setTimeout ?? globalThis.setTimeout;
   const cancelTimeout = dependencies.clearTimeout ?? globalThis.clearTimeout;
   let activeSession: ExtensionContext["sessionManager"] | undefined;
@@ -47,6 +57,9 @@ export default function progressWidgetExtension(pi: ExtensionAPI, dependencies: 
   let settings = cloneDefaultSettings();
   let restoredBoundary: { summaryEpoch: string; content: string } | undefined;
   let settingsController = new AbortController();
+  let settingsReady = false;
+  let settingsScreenOpen = false;
+  const settingsTasks = new Set<Promise<void>>();
   let generation = 0;
   let completionTimer: ReturnType<typeof globalThis.setTimeout> | undefined;
   let completionToken = 0;
@@ -189,26 +202,103 @@ export default function progressWidgetExtension(pi: ExtensionAPI, dependencies: 
     },
   });
 
+  const openSettings = async (
+    ctx: ExtensionCommandContext,
+    signal: AbortSignal,
+    isCurrent: () => boolean,
+  ): Promise<"back" | "close" | "stale"> => {
+    if (signal.aborted || !isCurrent()) return "stale";
+    if (ctx.mode !== "tui") {
+      ctx.ui.notify(sanitizeProgressText(`Edit settings manually: ${progressSettingsPath()}; then /reload.`), "info");
+      return "back";
+    }
+    return showProgressSettings(ctx, {
+      signal,
+      isCurrent,
+      get: () => cloneSettings(settings),
+      save: (patch, ownedSignal) => writeSettings(patch, undefined, ownedSignal),
+      apply: (next) => {
+        // A committed save still applies after the interaction closes, not after owner replacement.
+        if (!isCurrent()) return;
+        settings = cloneSettings(next);
+        if (!settings.enabled) cancelCompletionSummary();
+        if (completionTimer === undefined) publish(ctx);
+      },
+    });
+  };
+
+  const hideWidget = (ctx: ExtensionContext): void => {
+    if (!ownsSession(ctx)) return;
+    cancelCompletionSummary();
+    widgetHidden = true;
+    publish(ctx);
+    ctx.ui.notify("Progress widget cleared. Saved progress is unchanged.", "info");
+  };
+
   pi.registerCommand("progress", {
     description: "Manage the progress widget",
-    getArgumentCompletions: (prefix) =>
-      "clear".startsWith(prefix)
-        ? [{ value: "clear", label: "clear", description: "Hide the widget without changing saved progress" }]
-        : null,
+    getArgumentCompletions: (prefix) => {
+      const matches = [
+        { value: "clear", label: "clear", description: "Hide the widget without changing saved progress" },
+        { value: "settings", label: "settings", description: "Configure progress display settings" },
+      ].filter((item) => item.value.startsWith(prefix));
+      return matches.length > 0 ? matches : null;
+    },
     handler: async (args, ctx) => {
       if (!ctx.hasUI) throw new Error("/progress requires TUI or RPC mode.");
-      if (args.trim() !== "clear") {
-        ctx.ui.notify("Usage: /progress clear", "warning");
+      const route = args.trim();
+      if (route !== "" && route !== "clear" && route !== "settings") {
+        ctx.ui.notify("Usage: /progress | /progress clear | /progress settings", "warning");
         return;
       }
       if (!ownsSession(ctx)) {
-        ctx.ui.notify("Cannot clear the progress widget because the session changed.", "warning");
+        ctx.ui.notify("Cannot manage progress because the session changed.", "warning");
         return;
       }
-      cancelCompletionSummary();
-      widgetHidden = true;
-      publish(ctx);
-      ctx.ui.notify("Progress widget cleared. Saved progress is unchanged.", "info");
+      if (route === "clear") {
+        hideWidget(ctx);
+        return;
+      }
+      if (!settingsReady || settingsScreenOpen) {
+        ctx.ui.notify("Progress controls are loading or already open.", "warning");
+        return;
+      }
+      settingsScreenOpen = true;
+      const ownerGeneration = generation;
+      const ownerSignal = settingsController.signal;
+      const isCurrent = () => ownsSession(ctx) && generation === ownerGeneration && !ownerSignal.aborted;
+      const task = (async () => {
+        if (route === "settings") {
+          await openSettings(ctx, ownerSignal, isCurrent);
+          return;
+        }
+        const { showProgressMenu } = await import("./progress-menu.js");
+        if (!isCurrent()) return;
+        await showProgressMenu(ctx, {
+          signal: ownerSignal,
+          isCurrent,
+          getState: () => ({
+            settings: cloneSettings(settings),
+            settingsPath: progressSettingsPath(),
+            widget: !settings.enabled ? "disabled" : widgetHidden ? "hidden" : steps.length === 0 ? "empty" : "visible",
+            total: steps.length,
+            completed: steps.filter((step) => step.status === "completed").length,
+            inProgress: steps.filter((step) => step.status === "in_progress").length,
+            blocked: steps.filter((step) => step.status === "blocked").length,
+          }),
+          hideWidget: () => {
+            if (isCurrent()) hideWidget(ctx);
+          },
+          showSettings: (signal) => openSettings(ctx, signal, isCurrent),
+        });
+      })();
+      settingsTasks.add(task);
+      try {
+        await task;
+      } finally {
+        settingsTasks.delete(task);
+        if (isCurrent()) settingsScreenOpen = false;
+      }
     },
   });
 
@@ -223,6 +313,8 @@ export default function progressWidgetExtension(pi: ExtensionAPI, dependencies: 
     cancelCompletionSummary();
     clearActiveWidget();
 
+    settingsReady = false;
+    settingsScreenOpen = false;
     settingsController = new AbortController();
     const ownerController = settingsController;
     generation += 1;
@@ -254,6 +346,7 @@ export default function progressWidgetExtension(pi: ExtensionAPI, dependencies: 
     }
     if (ownerController.signal.aborted || ownerGeneration !== generation || !ownsSession(ctx)) return;
     settings = cloneSettings(loaded.settings);
+    settingsReady = true;
     if (loaded.kind === "invalid" && ctx.hasUI) {
       ctx.ui.notify(
         sanitizeProgressText(`Invalid progress settings at ${loaded.path}; using defaults. ${loaded.issue}`),
@@ -289,9 +382,11 @@ export default function progressWidgetExtension(pi: ExtensionAPI, dependencies: 
     publish(ctx);
   });
 
-  pi.on("session_shutdown", (_event, ctx) => {
+  pi.on("session_shutdown", async (_event, ctx) => {
     if (!ownsSession(ctx)) return;
     settingsController.abort();
+    settingsReady = false;
+    settingsScreenOpen = false;
     generation += 1;
     cancelCompletionSummary();
     if (activeWidgetOwner?.sessionManager === ctx.sessionManager) clearActiveWidget();
@@ -300,6 +395,7 @@ export default function progressWidgetExtension(pi: ExtensionAPI, dependencies: 
     restoredBoundary = undefined;
     widgetHidden = false;
     activeSession = undefined;
+    await Promise.allSettled([...settingsTasks]);
   });
 }
 
