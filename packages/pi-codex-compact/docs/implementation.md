@@ -21,6 +21,12 @@ The persisted entry remains the summary identity source, so replay does not depe
 If persisted summary identity, fingerprints, model identity, payload shape, or marker count do not match exactly, the extension leaves Pi's visible fallback context unchanged instead of guessing.
 Older v1 and v2 checkpoints are normalized to the current checkpoint format when read; their built-in API label determines the profile. They still replay only when the current route authorizes that API/profile/model combination.
 
+## Compaction ownership
+
+Compaction captures immutable serialized branch values before awaiting authentication. The live branch must retain that exact prefix, and appended entries must form direct descendants. Bookkeeping entries (`custom`, `usage`, `label`, and `session_info`) can extend the branch without canceling work. A `context_edit` append is accepted only when Pi's finalized session context remains identical; replacement and omission edits that change the input cancel it. New conversation messages, even hidden custom messages or subsequently omitted turns, new summaries, model/thinking changes, and different ancestry are not bookkeeping.
+
+Ownership checks also require the effective system prompt and ordered active tool names, descriptions, and schemas to remain unchanged. State entries that indirectly change that request input cannot bypass cancellation. The same checks run after asynchronous authentication and provider work, before checkpoint publication, and before recovery or native fallback. Session replacement, reload, shutdown, explicit abort, model/settings changes, and completed tree navigation retain their existing invalidation paths. No extension-specific state identifier or cross-extension dependency is used.
+
 ## Recovery and native fallback
 
 Before the first checkpoint, remote failure leaves the `session_before_compact` result unset so Pi runs its default summary generator. With a valid compatible checkpoint and `checkpointRecovery: "summarize"`, recovery first validates the checkpoint projection and retained cut point, then makes ordinary inference with the checkpoint and tools disabled. Successful recovery publishes only validated plaintext output.

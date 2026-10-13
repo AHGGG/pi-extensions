@@ -29,6 +29,7 @@ import {
   observeSseRejections,
   streamOperationRejection,
 } from "./compaction-failure.js";
+import { captureCompactionBranch } from "./compaction-ownership.js";
 import { validateContextManagementHistory } from "./context-management.js";
 import { type CompactionRoute, resolveCompactionRoute } from "./model-api.js";
 import { hasCheckpointMarker, rewriteCheckpointMarker } from "./protocol.js";
@@ -169,9 +170,15 @@ async function compactRemotely(
   const sessionId = ctx.sessionManager.getSessionId();
   const checkpoint = latestCheckpoint(event.branchEntries);
   const checkpointPresent = hasActiveCheckpointClaim(event.branchEntries);
-  const leafId = event.branchEntries.at(-1)?.id;
+  const branchIsCurrent = captureCompactionBranch(event.branchEntries);
+  const systemPrompt = ctx.getSystemPrompt?.();
+  const tools = JSON.stringify([pi.getActiveTools(), activeTools(pi)]);
   const stillCurrent = () =>
-    sessionStillOwned(ctx, sessionId, signal) && isCurrent() && ctx.sessionManager.getBranch().at(-1)?.id === leafId;
+    sessionStillOwned(ctx, sessionId, signal) &&
+    isCurrent() &&
+    ctx.getSystemPrompt?.() === systemPrompt &&
+    JSON.stringify([pi.getActiveTools(), activeTools(pi)]) === tools &&
+    branchIsCurrent(ctx.sessionManager.getBranch());
   let requestValues: string[] = [];
   let remoteAttempted = false;
   let rejectionError: Error | undefined;
