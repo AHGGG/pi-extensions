@@ -20,7 +20,7 @@ It restores valid progress after reloads, branch navigation, and compaction with
 - Lets users dismiss the widget without changing saved progress.
 - Restores the latest valid state from current and historical session results on the active branch.
 - Preserves an established pre-migration compaction boundary until its summary epoch ends.
-- Reads optional display settings without writing or migrating settings files.
+- Provides one settings screen with saved display preferences and immediate widget updates.
 - Sanitizes terminal and bidirectional controls before rendering model-provided text.
 - Works without network access, subprocesses, credentials, or external services.
 
@@ -93,12 +93,13 @@ Its guidance recommends updates for meaningful progress changes, skips simple ta
 
 ## 💬 Commands
 
-`/progress clear` immediately hides the current progress widget and cancels any completion-summary timer.
-`/progress` is the extension's only slash command, with `clear` as its only subcommand and an autocomplete suggestion.
-No subcommand, unknown subcommands, and trailing arguments show usage without changing the widget.
-The command works in TUI and RPC modes; print and JSON modes reject it.
-Saved progress and conversation history remain unchanged.
-The widget can reappear after the next `update_progress` call, branch navigation, or session start (including `/reload`).
+`/progress` is the extension's only slash command, with autocomplete for both routes:
+
+- `/progress clear` hides the widget and cancels its completion-summary timer in TUI or RPC mode. Saved progress remains unchanged; the next update, branch navigation, or session start can show it again.
+- `/progress settings` opens the display settings screen in TUI mode. RPC mode reports the settings path for manual editing.
+
+No subcommand, unknown subcommands, and trailing arguments show usage without changing state.
+Print and JSON modes reject both routes. Neither route changes conversation history.
 
 ## 🛠️ Tools
 
@@ -184,7 +185,12 @@ Canonical user settings are read from `<Pi agent directory>/pi-progress.json`, n
 
 `displayMode` accepts `adaptive`, `expanded`, or `collapsed`.
 `maxVisibleItems` accepts `null` or an integer from 1 through 50; the other fields are booleans with the defaults shown above.
-Settings reload at every session start, including `/reload`, and remain fixed during that session.
+Use `/progress settings` in TUI mode to edit these user settings. Enter or Space changes a value; the item limit opens a value selector.
+Each successful save applies immediately. Closing the screen cancels pending work, but a save already publishing can still finish; completed saves are not undone. Ctrl+C always closes the screen.
+A failed save reports an error and restores the displayed value. Invalid existing files must be repaired before saving.
+
+Manual file changes take effect at the next session start, including `/reload`.
+Reads and saves are ordered within one Pi process. Each save reads the latest valid document, preserves unknown fields, and publishes through a temporary file and rename; separate Pi processes are not coordinated.
 
 Existing `pi-progress.json` files with a nested `widget` object remain supported; top-level fields override matching nested fields.
 The extension no longer reads `pi-todo.json`. To retain those preferences, copy the five settings into `pi-progress.json` using the flat format above.
@@ -193,7 +199,7 @@ Settings loading never creates, rewrites, moves, or deletes files, including the
 
 ## 🔒 Security and privacy
 
-The extension reads only the optional `pi-progress.json` user settings file and never writes it.
+The extension reads the optional `pi-progress.json` user settings file and writes it only after an explicit settings change.
 It does not start processes, access credentials, or make network requests.
 Pi stores progress text in normal session tool results, so they follow the user's session persistence choices.
 Terminal escape sequences, control characters, and bidirectional display controls are stripped only at the display boundary; stored tool payloads remain unchanged.
@@ -201,7 +207,7 @@ Terminal escape sequences, control characters, and bidirectional display control
 ## 🚧 Limitations
 
 - RPC widgets use fixed-size snapshots rather than adapting to the client viewport.
-- The extension has no SettingsList or manual progress editor.
+- The settings screen requires TUI mode; there is no manual progress editor.
 - It reminds the model to update progress but cannot infer completion or force a tool call.
 - Compatibility restores only the documented, valid historical result contracts from the active branch.
 - Adaptive sizing uses terminal height rather than the exact remaining editor viewport.
@@ -216,7 +222,8 @@ packages/pi-progress/
 │   ├── progress-widget.ts             # Tool/command registration and session/widget lifecycle
 │   ├── progress-state.ts              # Validation, history decoding, and context reconciliation
 │   ├── progress-renderer.ts           # Bounded sanitized widget rendering
-│   └── settings.ts                    # Read-only canonical and legacy settings loader
+│   ├── progress-settings-ui.ts        # Display settings screen and save lifecycle
+│   └── settings.ts                    # Validated settings reads and atomic queued saves
 ├── dist/                              # Generated Jiti runtime
 ├── scripts/build-runtime.mjs          # Deterministic runtime builder
 └── test/                              # Contract, lifecycle, renderer, settings, and loader coverage

@@ -18,12 +18,21 @@ async function clearWidget(harness: ReturnType<typeof createHarness>, ctx: Exten
   await command.handler(args, ctx as ExtensionCommandContext);
 }
 
-test("completes only the clear subcommand of the single progress command", async () => {
+test("completes clear and settings routes of the single progress command", async () => {
   const harness = createHarness();
   assert.deepEqual([...harness.commands.keys()], ["progress"]);
   const complete = harness.commands.get("progress")?.getArgumentCompletions;
   assert.ok(complete);
-  for (const prefix of ["", "c", "cl", "cle", "clea", "clear"]) {
+  assert.deepEqual(await complete(""), [
+    { value: "clear", label: "clear", description: "Hide the widget without changing saved progress" },
+    { value: "settings", label: "settings", description: "Configure progress display settings" },
+  ]);
+  for (const prefix of ["s", "set", "settings"]) {
+    assert.deepEqual(await complete(prefix), [
+      { value: "settings", label: "settings", description: "Configure progress display settings" },
+    ]);
+  }
+  for (const prefix of ["c", "cl", "cle", "clea", "clear"]) {
     assert.deepEqual(await complete(prefix), [
       { value: "clear", label: "clear", description: "Hide the widget without changing saved progress" },
     ]);
@@ -82,7 +91,7 @@ for (const mode of ["tui", "rpc"] as const) {
         assert.equal(current.widgets.length, widgetCount);
         assert.equal(vi.getTimerCount(), 1);
         assert.deepEqual(current.notifications.at(-1), {
-          message: "Usage: /progress clear",
+          message: "Usage: /progress clear | /progress settings",
           type: "warning",
         });
       }
@@ -109,7 +118,7 @@ for (const mode of ["print", "json"] as const) {
     const current = createContext({ mode });
     await harness.emit("session_start", current.ctx);
     await setProgress(harness, current.ctx, [{ text: "pending", status: "pending" }]);
-    for (const args of ["", "clear", "clear extra", "unknown"]) {
+    for (const args of ["", "clear", "settings", "settings extra", "clear extra", "unknown"]) {
       await assert.rejects(clearWidget(harness, current.ctx, args), /requires TUI or RPC mode/u);
     }
     assert.deepEqual(current.widgets, []);
