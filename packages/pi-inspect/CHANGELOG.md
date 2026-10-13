@@ -1,5 +1,11 @@
 # @narumitw/pi-inspect
 
+## 0.2.2
+
+### Patch Changes
+
+- c0d362f: Update the Radix collapsible runtime dependency to the latest patch release.
+
 ## 0.2.1
 
 ### Patch Changes
