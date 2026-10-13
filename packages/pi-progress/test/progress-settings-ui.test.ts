@@ -40,6 +40,7 @@ test("changes all five settings in one screen with bounded rendering", async () 
       settings = next;
     },
   });
+  await vi.waitFor(() => assert.ok(screen));
   const initial = screen.render().join("\n");
   for (const width of [0, 1, 20, 80]) {
     for (const line of screen.render(width)) assert.ok(visibleWidth(line) <= width);
@@ -97,6 +98,7 @@ test("save failure restores the value and later saves still work", async () => {
       settings = next;
     },
   });
+  await vi.waitFor(() => assert.ok(screen));
   screen.handleInput("\r");
   await vi.waitFor(() => assert.equal(current.notifications.length, 1));
   assert.equal(settings.enabled, true);
@@ -135,6 +137,7 @@ for (const cancellation of ["close", "dispose", "parent"] as const) {
       },
       apply,
     });
+    await vi.waitFor(() => assert.ok(screen));
     screen.handleInput("\r");
     await vi.waitFor(() => assert.ok(saveSignal));
     if (cancellation === "close") screen.handleInput("\u0003");
@@ -171,6 +174,7 @@ test("native non-default navigation and cancellation work; Ctrl+C remains a hard
         save: async () => ({ ...DEFAULT_PROGRESS_SETTINGS }),
         apply: () => {},
       });
+      await vi.waitFor(() => assert.ok(screen));
       screen.handleInput("\u000e");
       const lines = screen.render().join("\n");
       screen.handleInput(cancel);
@@ -204,6 +208,7 @@ test("command saves apply to the active widget without changing progress state",
   const progress = harness.commands.get("progress");
   assert.ok(progress);
   const command = progress.handler("settings", current.ctx as ExtensionCommandContext);
+  await vi.waitFor(() => assert.ok(screen));
   screen.handleInput("\r");
   await vi.waitFor(() => assert.equal(current.widgets.at(-1)?.content, undefined));
   screen.handleInput("\u0003");
@@ -251,6 +256,7 @@ test("session replacement closes the old screen and suppresses a late save", asy
   const progress = harness.commands.get("progress");
   assert.ok(progress);
   const command = progress.handler("settings", previous.ctx as ExtensionCommandContext);
+  await vi.waitFor(() => assert.ok(screen));
   screen.handleInput("\r");
   await vi.waitFor(() => assert.ok(signal));
   const current = createContext();
@@ -288,6 +294,7 @@ test("shutdown cancels settings work and waits for its durability boundary", asy
   const progress = harness.commands.get("progress");
   assert.ok(progress);
   const command = progress.handler("settings", current.ctx as ExtensionCommandContext);
+  await vi.waitFor(() => assert.ok(screen));
   screen.handleInput("\r");
   await vi.waitFor(() => assert.ok(signal));
   let settled = false;
@@ -331,6 +338,7 @@ test("rapid changes save in order without resetting a newer displayed choice", a
       settings = next;
     },
   });
+  await vi.waitFor(() => assert.ok(screen));
   screen.handleInput("\r");
   screen.handleInput("\r");
   screen.handleInput("\r");

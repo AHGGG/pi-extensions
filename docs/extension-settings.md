@@ -73,6 +73,7 @@ Extensions with multiple directly editable settings should provide a screen matc
 `/settings` interaction pattern. In TUI mode:
 
 - Open the Settings menu action with `ctx.ui.custom()`.
+- Follow the [custom-screen framing rules](extension-conventions.md#custom-screen-framing): use the shared top and bottom horizontal rules at normal heights, and retain the active setting or submenu choice at constrained heights.
 - Use `SettingsList` from `@earendil-works/pi-tui` with `getSettingsListTheme()` from
   `@earendil-works/pi-coding-agent`; do not rebuild an equivalent selector or reopen
   `ctx.ui.select()` after every toggle, because doing so resets the cursor.
@@ -97,11 +98,13 @@ same settings screen rather than a second implementation.
 Minimal structure:
 
 ```ts
+import { stripVTControlCharacters } from "node:util";
 import {
   type ExtensionCommandContext,
   getSettingsListTheme,
 } from "@earendil-works/pi-coding-agent";
-import { Container, type SettingItem, SettingsList, Text } from "@earendil-works/pi-tui";
+import { type SettingItem, SettingsList, Text } from "@earendil-works/pi-tui";
+import { HorizontalRule, renderBoundedFrame } from "@narumitw/pi-tui-kit";
 
 async function showSettings(ctx: ExtensionCommandContext) {
   if (ctx.mode !== "tui") {
@@ -120,8 +123,7 @@ async function showSettings(ctx: ExtensionCommandContext) {
   ];
 
   await ctx.ui.custom((tui, theme, _keybindings, done) => {
-    const container = new Container();
-    container.addChild(new Text(theme.fg("accent", theme.bold("Extension Settings")), 1, 1));
+    const rule = new HorizontalRule({ ruleStyle: (text) => theme.fg("border", text) });
 
     const list = new SettingsList(
       items,
@@ -131,11 +133,22 @@ async function showSettings(ctx: ExtensionCommandContext) {
       () => done(undefined),
       { enableSearch: true },
     );
-    container.addChild(list);
-
     return {
-      render: (width: number) => container.render(width),
-      invalidate: () => container.invalidate(),
+      render(width: number) {
+        const content = list.render(width);
+        const focusedRow = content.findIndex((line) => stripVTControlCharacters(line).startsWith("→"));
+        const terminalRows = Number.isFinite(tui.terminal.rows) ? Math.floor(tui.terminal.rows) : 24;
+        return renderBoundedFrame({
+          width,
+          maxRows: Math.max(1, terminalRows - 3),
+          rule: rule.render(width)[0] ?? "",
+          title: new Text(theme.fg("accent", theme.bold("Extension Settings")), 0, 0).render(width),
+          content,
+          priorityRows: focusedRow < 0 ? [] : [focusedRow],
+          focusedRow,
+        });
+      },
+      invalidate: () => list.invalidate(),
       handleInput(data: string) {
         list.handleInput?.(data);
         tui.requestRender();
@@ -241,4 +254,5 @@ Tests for a configurable extension should cover the behavior it implements, incl
 - unknown-field preservation and atomic-write failure;
 - secret redaction and private permissions when applicable;
 - UI save serialization, rollback after failure, and immediate runtime application;
+- top and bottom horizontal rules, callback theme roles, width and height bounds, active-row retention in the main list and value submenus, resize, and invalidation;
 - legacy migration and canonical-file precedence when applicable.

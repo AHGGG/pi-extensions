@@ -178,6 +178,16 @@ When specialized UI is necessary, prefer Pi's `SelectList`, `SettingsList`, and 
 over rebuilding equivalent controls. Escape should cancel or close transient UI, and long-running
 interactive work should expose cancellation.
 
+#### Custom-screen framing
+
+- **MUST:** Frame extension-owned menu, settings, and read-only detail screens in the editor area with full-width horizontal rules above and below the content, using the callback-provided `border` theme role when the screen row budget is at least five.
+  Below five rows, omit the rules rather than removing the focused interactive row or the only detail row; keep every line within the supplied width, including zero width.
+  **Verification:** `Test` rule placement, theme role, normal and constrained heights, zero and narrow widths, resize, invalidation, and focused-row retention.
+
+Standard Kit screens own this frame. For a custom wrapper around Pi components such as `SettingsList`, use Kit's `HorizontalRule` and `renderBoundedFrame()` instead of drawing or clipping the frame locally.
+The extension owns the terminal row reservation and supplies the focused row through `priorityRows` and `focusedRow`.
+Use the same frame for direct command routes and their main-menu actions.
+
 ## Monorepo conventions
 
 ### Package layout and boundaries

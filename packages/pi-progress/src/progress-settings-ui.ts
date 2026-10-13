@@ -1,17 +1,10 @@
+import { stripVTControlCharacters } from "node:util";
 import {
   type ExtensionCommandContext,
   getSelectListTheme,
   getSettingsListTheme,
 } from "@earendil-works/pi-coding-agent";
-import {
-  Key,
-  matchesKey,
-  SelectList,
-  type SettingItem,
-  SettingsList,
-  Text,
-  truncateToWidth,
-} from "@earendil-works/pi-tui";
+import { Key, matchesKey, SelectList, type SettingItem, SettingsList, Text } from "@earendil-works/pi-tui";
 import { sanitizeProgressText } from "./progress-renderer.js";
 import { PROGRESS_DISPLAY_MODES, type ProgressSettings } from "./settings.js";
 
@@ -27,10 +20,13 @@ export async function showProgressSettings(
   ctx: ExtensionCommandContext,
   options: ProgressSettingsUIOptions,
 ): Promise<"back" | "close" | "stale"> {
+  const { HorizontalRule, renderBoundedFrame } = await import("@narumitw/pi-tui-kit");
+  if (options.signal.aborted || !options.isCurrent()) return "stale";
   let queue = Promise.resolve();
   let reason: "back" | "close" | "stale" = "stale";
   try {
     await ctx.ui.custom<void>((tui, theme, _keybindings, done) => {
+      const rule = new HorizontalRule({ ruleStyle: (text) => theme.fg("border", text) });
       const controller = new AbortController();
       const signal = AbortSignal.any([options.signal, controller.signal]);
       let closing = false;
@@ -136,12 +132,20 @@ export async function showProgressSettings(
       if (!current()) cancelOwner();
       return {
         render(width: number) {
-          return [
-            ...new Text(theme.fg("accent", theme.bold("Progress Settings")), 0, 0).render(width),
-            theme.fg("muted", "Saved changes apply immediately."),
-            "",
-            ...list.render(width),
-          ].map((line) => truncateToWidth(line, Math.max(0, width), ""));
+          const content = list.render(width);
+          // Pi SettingsList and SelectList mark their active row with the native arrow.
+          const focusedRow = content.findIndex((line) => stripVTControlCharacters(line).startsWith("→"));
+          const terminalRows = Number.isFinite(tui.terminal.rows) ? Math.floor(tui.terminal.rows) : 24;
+          return renderBoundedFrame({
+            width,
+            maxRows: Math.max(1, terminalRows - 3),
+            rule: rule.render(width)[0] ?? "",
+            title: new Text(theme.fg("accent", theme.bold("Progress Settings")), 0, 0).render(width),
+            context: [theme.fg("muted", "Saved changes apply immediately.")],
+            content,
+            priorityRows: focusedRow < 0 ? [] : [focusedRow],
+            focusedRow,
+          });
         },
         invalidate: () => list.invalidate(),
         handleInput(data: string) {

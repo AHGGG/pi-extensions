@@ -93,7 +93,7 @@ Its guidance recommends updates for meaningful progress changes, skips simple ta
 
 ## 💬 Commands
 
-`/progress` opens the main menu in TUI or RPC mode. It shows current widget state and offers Settings, Status, Help, and Hide widget.
+`/progress` opens the main menu in TUI or RPC mode. It shows current widget state and offers Settings, Status, Help, and Clear widget.
 Settings opens the same TUI settings screen as the direct route; RPC reports the file path. Status and Help are read-only views.
 Back returns to the main menu; Ctrl+C closes the flow.
 
@@ -190,6 +190,7 @@ Canonical user settings are read from `<Pi agent directory>/pi-progress.json`, n
 `displayMode` accepts `adaptive`, `expanded`, or `collapsed`.
 `maxVisibleItems` accepts `null` or an integer from 1 through 50; the other fields are booleans with the defaults shown above.
 Use `/progress settings` in TUI mode to edit these user settings. Enter or Space changes a value; the item limit opens a value selector.
+The screen uses the shared Kit frame with full-width top and bottom rules. When fewer than five rows remain for the screen, it omits the rules to retain the active setting or value choice.
 Each successful save applies immediately. Closing the screen cancels pending work, but a save already publishing can still finish; completed saves are not undone. Ctrl+C always closes the screen.
 A failed save reports an error and restores the displayed value. Invalid existing files must be repaired before saving.
 

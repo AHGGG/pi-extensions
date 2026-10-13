@@ -33,7 +33,8 @@ test("TUI opens a Kit main menu and read-only Status and Help views", async () =
   const running = openMenu(harness, current.ctx, "  ");
   await tui.waitForOpen();
   const main = frame(tui);
-  for (const label of ["Settings", "Status", "Help", "Hide widget"]) assert.match(main, new RegExp(label, "u"));
+  for (const label of ["Settings", "Status", "Help", "Clear widget"]) assert.match(main, new RegExp(label, "u"));
+  assert.doesNotMatch(main, /Hide widget/u);
   assert.match(main, /Widget: visible · 1\/3 steps completed/u);
   for (const width of [1, 20, 80]) for (const line of tui.render(width)) assert.ok(visibleWidth(line) <= width);
   tui.press("tui.select.down");
@@ -104,7 +105,7 @@ test("Ctrl+C in Settings closes the entire flow without reopening the menu", asy
   await harness.emit("session_shutdown", current.ctx);
 });
 
-test("Hide widget uses the clear operation and refreshes menu state without changing progress", async () => {
+test("Clear widget uses the clear operation and refreshes menu state without changing progress", async () => {
   const harness = createHarness();
   const current = createContext();
   const tui = createTuiHarness();
@@ -126,7 +127,7 @@ test("Hide widget uses the clear operation and refreshes menu state without chan
   await harness.emit("session_shutdown", current.ctx);
 });
 
-test("RPC main menu adapts Settings, Status, Help, and Hide widget without custom UI", async () => {
+test("RPC main menu adapts Settings, Status, Help, and Clear widget without custom UI", async () => {
   const harness = createHarness();
   const current = createContext({ mode: "rpc" });
   const rpc = createRpcHarness([
@@ -135,7 +136,7 @@ test("RPC main menu adapts Settings, Status, Help, and Hide widget without custo
     { kind: "select", response: "Back" },
     { kind: "select", response: "Help" },
     { kind: "select", response: "Back" },
-    { kind: "select", response: "Hide widget" },
+    { kind: "select", response: "Clear widget" },
     { kind: "select", response: "Close" },
   ]);
   Object.assign(current.ctx.ui, rpc.ui);
@@ -143,7 +144,7 @@ test("RPC main menu adapts Settings, Status, Help, and Hide widget without custo
   await setProgress(harness, current.ctx, [{ text: "work", status: "pending" }]);
   await openMenu(harness, current.ctx);
   rpc.assertConsumed();
-  assert.deepEqual(rpc.dialogs[0]?.options, ["Settings", "Status", "Help", "Hide widget", "Close"]);
+  assert.deepEqual(rpc.dialogs[0]?.options, ["Settings", "Status", "Help", "Clear widget", "Close"]);
   assert.match(rpc.dialogs[2]?.title ?? "", /Progress Status/u);
   assert.match(rpc.dialogs[4]?.title ?? "", /Progress Help/u);
   assert.match(rpc.dialogs[6]?.title ?? "", /Widget: hidden/u);
