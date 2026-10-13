@@ -67,13 +67,13 @@ export default function progressWidgetExtension(pi: ExtensionAPI, dependencies: 
 
   const publish = (ctx: ExtensionContext): void => {
     if (!ownsSession(ctx) || !ctx.hasUI) return;
-    if (!settings.widget.enabled || steps.length === 0 || widgetHidden) {
+    if (!settings.enabled || steps.length === 0 || widgetHidden) {
       ctx.ui.setWidget(WIDGET_KEY, undefined);
       return;
     }
 
     const snapshot = cloneProgressSteps(steps);
-    const widgetSettings = { ...settings.widget };
+    const widgetSettings = { ...settings };
     if (ctx.mode === "rpc") {
       ctx.ui.setWidget(
         WIDGET_KEY,
@@ -99,7 +99,7 @@ export default function progressWidgetExtension(pi: ExtensionAPI, dependencies: 
   const publishCompletionSummary = (ctx: ExtensionContext): void => {
     cancelCompletionSummary();
     widgetHidden = false;
-    if (!ownsSession(ctx) || !ctx.hasUI || !settings.widget.enabled) {
+    if (!ownsSession(ctx) || !ctx.hasUI || !settings.enabled) {
       publish(ctx);
       return;
     }
@@ -124,7 +124,7 @@ export default function progressWidgetExtension(pi: ExtensionAPI, dependencies: 
         completionToken !== token ||
         activeSession !== ownerSession ||
         ctx.sessionManager !== ownerSession ||
-        !settings.widget.enabled ||
+        !settings.enabled ||
         !allProgressCompleted(steps)
       ) {
         return;
@@ -321,9 +321,9 @@ export {
 export { renderProgressWidget, sanitizeProgressText as sanitizeProgressStep };
 
 function cloneDefaultSettings(): ProgressSettings {
-  return { widget: { ...DEFAULT_PROGRESS_SETTINGS.widget } };
+  return { ...DEFAULT_PROGRESS_SETTINGS };
 }
 
 function cloneSettings(value: Readonly<ProgressSettings>): ProgressSettings {
-  return { widget: { ...value.widget } };
+  return { ...value };
 }

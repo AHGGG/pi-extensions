@@ -246,7 +246,7 @@ test("warns safely for invalid settings only in supported UI modes", async () =>
       loadSettings: async () => ({
         kind: "invalid",
         path: "/tmp/unsafe\u001b]8;;x\u0007.json",
-        settings: { widget: { ...DEFAULT_PROGRESS_SETTINGS.widget } },
+        settings: { ...DEFAULT_PROGRESS_SETTINGS },
         issue: "bad\u202evalue",
       }),
     });

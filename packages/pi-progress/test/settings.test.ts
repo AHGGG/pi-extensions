@@ -16,53 +16,63 @@ async function temporaryDirectory(t: { onTestFinished(callback: () => Promise<vo
   return directory;
 }
 
-test("normalizes partial Progress widget settings and rejects invalid values", () => {
+test("normalizes partial flat Progress settings and rejects invalid values", () => {
   assert.deepEqual(normalizeProgressSettings({}), DEFAULT_PROGRESS_SETTINGS);
-  assert.deepEqual(normalizeProgressSettings({ future: true, widget: { future: "kept" } }), {
-    widget: { ...DEFAULT_PROGRESS_SETTINGS.widget },
-  });
-  assert.deepEqual(
-    normalizeProgressSettings({
-      widget: {
-        enabled: false,
-        displayMode: "collapsed",
-        showCompleted: false,
-        maxVisibleItems: 7,
-        showProgress: false,
-      },
-    }),
-    {
-      widget: {
-        enabled: false,
-        displayMode: "collapsed",
-        showCompleted: false,
-        maxVisibleItems: 7,
-        showProgress: false,
-      },
-    },
-  );
+  assert.deepEqual(normalizeProgressSettings({ future: true }), DEFAULT_PROGRESS_SETTINGS);
+  const settings = {
+    enabled: false,
+    displayMode: "collapsed",
+    showCompleted: false,
+    maxVisibleItems: 7,
+    showProgress: false,
+  };
+  assert.deepEqual(normalizeProgressSettings(settings), settings);
+  for (const displayMode of ["adaptive", "expanded", "collapsed"]) {
+    assert.equal(normalizeProgressSettings({ displayMode })?.displayMode, displayMode);
+  }
+  for (const maxVisibleItems of [null, 1, 50]) {
+    assert.equal(normalizeProgressSettings({ maxVisibleItems })?.maxVisibleItems, maxVisibleItems);
+  }
 
   for (const value of [
     null,
     [],
-    { widget: true },
-    { widget: { enabled: "yes" } },
-    { widget: { displayMode: "compact" } },
-    { widget: { showCompleted: 1 } },
-    { widget: { showProgress: null } },
-    { widget: { maxVisibleItems: 0 } },
-    { widget: { maxVisibleItems: 51 } },
-    { widget: { maxVisibleItems: 1.5 } },
+    { enabled: "yes" },
+    { displayMode: "compact" },
+    { showCompleted: 1 },
+    { showProgress: null },
+    { maxVisibleItems: 0 },
+    { maxVisibleItems: 51 },
+    { maxVisibleItems: 1.5 },
   ]) {
     assert.equal(normalizeProgressSettings(value), undefined);
   }
 });
 
-test("canonical settings win when both canonical and legacy files exist", async (t) => {
+test("retains nested canonical settings with field-level top-level precedence", () => {
+  const nested = { enabled: false, displayMode: "expanded", maxVisibleItems: 7, future: true };
+  assert.deepEqual(normalizeProgressSettings({ widget: nested }), {
+    ...DEFAULT_PROGRESS_SETTINGS,
+    enabled: false,
+    displayMode: "expanded",
+    maxVisibleItems: 7,
+  });
+  assert.deepEqual(normalizeProgressSettings({ widget: nested, enabled: true, maxVisibleItems: null }), {
+    ...DEFAULT_PROGRESS_SETTINGS,
+    displayMode: "expanded",
+  });
+  assert.equal(normalizeProgressSettings({ widget: { enabled: "invalid" }, enabled: true })?.enabled, true);
+  for (const widget of [null, true, [], { enabled: "yes" }, { displayMode: "compact" }]) {
+    assert.equal(normalizeProgressSettings({ widget }), undefined);
+  }
+  assert.equal(normalizeProgressSettings({ widget: { enabled: false }, enabled: "invalid" }), undefined);
+});
+
+test("loads flat canonical settings without changing either settings file", async (t) => {
   const directory = await temporaryDirectory(t);
   const canonical = join(directory, "pi-progress.json");
   const legacy = join(directory, "pi-todo.json");
-  const canonicalSource = '{"widget":{"showProgress":false},"future":true}\n';
+  const canonicalSource = '{"showProgress":false,"future":true}\n';
   const legacySource = '{"widget":{"enabled":false}}\n';
   await writeFile(canonical, canonicalSource, "utf8");
   await writeFile(legacy, legacySource, "utf8");
@@ -70,30 +80,43 @@ test("canonical settings win when both canonical and legacy files exist", async 
   assert.deepEqual(await loadProgressSettings(canonical), {
     kind: "loaded",
     path: canonical,
-    settings: { widget: { ...DEFAULT_PROGRESS_SETTINGS.widget, showProgress: false } },
+    settings: { ...DEFAULT_PROGRESS_SETTINGS, showProgress: false },
   });
   assert.equal(await readFile(canonical, "utf8"), canonicalSource);
   assert.equal(await readFile(legacy, "utf8"), legacySource);
 });
 
-test("uses the legacy settings file read-only only when canonical settings are absent", async (t) => {
+test("loads nested canonical settings read-only", async (t) => {
+  const directory = await temporaryDirectory(t);
+  const canonical = join(directory, "pi-progress.json");
+  const source = '{"widget":{"displayMode":"expanded","maxVisibleItems":null},"future":true}\n';
+  await writeFile(canonical, source, "utf8");
+  assert.deepEqual(await loadProgressSettings(canonical), {
+    kind: "loaded",
+    path: canonical,
+    settings: { ...DEFAULT_PROGRESS_SETTINGS, displayMode: "expanded" },
+  });
+  assert.equal(await readFile(canonical, "utf8"), source);
+});
+
+test("ignores valid and invalid pi-todo.json files when canonical settings are absent", async (t) => {
   const directory = await temporaryDirectory(t);
   const canonical = join(directory, "pi-progress.json");
   const legacy = join(directory, "pi-todo.json");
-  const source = '{"widget":{"displayMode":"expanded","maxVisibleItems":null},"future":true}\n';
-  await writeFile(legacy, source, "utf8");
-
-  assert.deepEqual(await loadProgressSettings(canonical), {
-    kind: "loaded",
-    path: legacy,
-    settings: { widget: { ...DEFAULT_PROGRESS_SETTINGS.widget, displayMode: "expanded" } },
-  });
-  assert.equal(await readFile(legacy, "utf8"), source);
-  await assert.rejects(access(canonical));
-  assert.deepEqual(await readdir(directory), ["pi-todo.json"]);
+  for (const source of ['{"widget":{"enabled":false}}', "{invalid"]) {
+    await writeFile(legacy, source, "utf8");
+    assert.deepEqual(await loadProgressSettings(canonical), {
+      kind: "missing",
+      path: canonical,
+      settings: { ...DEFAULT_PROGRESS_SETTINGS },
+    });
+    assert.equal(await readFile(legacy, "utf8"), source);
+    await assert.rejects(access(canonical));
+    assert.deepEqual(await readdir(directory), ["pi-todo.json"]);
+  }
 });
 
-test("an invalid canonical file warns through its result and never falls back", async (t) => {
+test("an invalid canonical file reports its error without reading pi-todo.json", async (t) => {
   const directory = await temporaryDirectory(t);
   const canonical = join(directory, "pi-progress.json");
   const legacy = join(directory, "pi-todo.json");
@@ -103,19 +126,20 @@ test("an invalid canonical file warns through its result and never falls back", 
   const result = await loadProgressSettings(canonical);
   assert.equal(result.kind, "invalid");
   assert.equal(result.path, canonical);
+  assert.deepEqual(result.settings, DEFAULT_PROGRESS_SETTINGS);
   assert.match(result.kind === "invalid" ? result.issue : "", /invalid JSON/u);
   assert.equal(await readFile(canonical, "utf8"), "{invalid");
   assert.equal(await readFile(legacy, "utf8"), '{"widget":{"enabled":false}}');
 });
 
-test("missing canonical and legacy settings are side-effect free", async (t) => {
+test("missing settings are side-effect free", async (t) => {
   const directory = await temporaryDirectory(t);
   const parent = join(directory, "missing-parent");
   const canonical = join(parent, "pi-progress.json");
   assert.deepEqual(await loadProgressSettings(canonical), {
     kind: "missing",
     path: canonical,
-    settings: { widget: { ...DEFAULT_PROGRESS_SETTINGS.widget } },
+    settings: { ...DEFAULT_PROGRESS_SETTINGS },
   });
   await assert.rejects(access(parent));
   assert.deepEqual(await readdir(directory), []);
@@ -124,15 +148,12 @@ test("missing canonical and legacy settings are side-effect free", async (t) => 
 test("loads canonical UTF-8 BOM settings without rewriting bytes", async (t) => {
   const directory = await temporaryDirectory(t);
   const canonical = join(directory, "pi-progress.json");
-  const document = Buffer.concat([
-    Buffer.from([0xef, 0xbb, 0xbf]),
-    Buffer.from('{"widget":{"showProgress":false}}', "utf8"),
-  ]);
+  const document = Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), Buffer.from('{"showProgress":false}', "utf8")]);
   await writeFile(canonical, document);
   assert.deepEqual(await loadProgressSettings(canonical), {
     kind: "loaded",
     path: canonical,
-    settings: { widget: { ...DEFAULT_PROGRESS_SETTINGS.widget, showProgress: false } },
+    settings: { ...DEFAULT_PROGRESS_SETTINGS, showProgress: false },
   });
   assert.deepEqual(await readFile(canonical), document);
 });
@@ -143,7 +164,7 @@ test("rejects malformed, invalid, oversized, non-regular, symlink, and non-UTF-8
 
   const cases: Array<{ source: string | Buffer; pattern: RegExp }> = [
     { source: "{invalid", pattern: /invalid JSON/u },
-    { source: '{"widget":{"maxVisibleItems":0}}', pattern: /shape or values/u },
+    { source: '{"maxVisibleItems":0}', pattern: /shape or values/u },
     { source: "x".repeat(MAX_PROGRESS_SETTINGS_BYTES + 1), pattern: /exceeds/u },
     { source: Buffer.from([0xc3, 0x28]), pattern: /UTF-8/u },
   ];
@@ -171,7 +192,7 @@ test("rejects malformed, invalid, oversized, non-regular, symlink, and non-UTF-8
   assert.match(result.kind === "invalid" ? result.issue : "", /symbolic links/u);
 });
 
-test("applies the same safety validation to the legacy fallback", async (t) => {
+test("ignores symlinked pi-todo.json without creating canonical settings", async (t) => {
   const directory = await temporaryDirectory(t);
   const canonical = join(directory, "pi-progress.json");
   const target = join(directory, "target.json");
@@ -179,19 +200,19 @@ test("applies the same safety validation to the legacy fallback", async (t) => {
   await writeFile(target, '{"widget":{"enabled":false}}', "utf8");
   await symlink(target, legacy);
 
-  const result = await loadProgressSettings(canonical);
-  assert.equal(result.kind, "invalid");
-  assert.equal(result.path, legacy);
-  assert.match(result.kind === "invalid" ? result.issue : "", /symbolic links/u);
+  assert.deepEqual(await loadProgressSettings(canonical), {
+    kind: "missing",
+    path: canonical,
+    settings: { ...DEFAULT_PROGRESS_SETTINGS },
+  });
   await assert.rejects(access(canonical));
 });
 
-test("honors cancellation before canonical reads and before legacy fallback publication", async (t) => {
+test("honors cancellation before canonical reads", async (t) => {
   const directory = await temporaryDirectory(t);
   const canonical = join(directory, "pi-progress.json");
-  await writeFile(join(directory, "pi-todo.json"), "{}", "utf8");
   const controller = new AbortController();
   controller.abort();
   await assert.rejects(loadProgressSettings(canonical, controller.signal), /abort/iu);
-  assert.deepEqual(await readdir(directory), ["pi-todo.json"]);
+  assert.deepEqual(await readdir(directory), []);
 });
