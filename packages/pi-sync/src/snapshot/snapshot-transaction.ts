@@ -439,7 +439,8 @@ async function restoreTransaction(directory: string, journal: TransactionJournal
       try {
         await fs.mkdir(path.dirname(entry.target), { recursive: true });
         await fs.copyFile(path.join(directory, "before", entry.backupName), temporary);
-        const handle = await fs.open(temporary, "r");
+        // Windows requires write access to flush an existing regular file.
+        const handle = await fs.open(temporary, process.platform === "win32" ? "r+" : "r");
         try {
           await handle.sync();
         } finally {
@@ -690,7 +691,8 @@ async function image(target: string, durable = false): Promise<string> {
   if (stat.isFile()) {
     const content = await fs.readFile(target);
     if (durable) {
-      const handle = await fs.open(target, "r");
+      // Keep POSIX read-only backup permissions; Windows flushing requires write access.
+      const handle = await fs.open(target, process.platform === "win32" ? "r+" : "r");
       try {
         await handle.sync();
       } finally {
