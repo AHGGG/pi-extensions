@@ -97,7 +97,8 @@ test("invalid unmanaged field-policy save preserves settings and unknown fields"
     const { updateLocalConfig } = await import("../src/settings/settings-store.js");
     await assert.rejects(
       updateLocalConfig((current) => {
-        const setup = current.syncSetups.home!;
+        const setup = current.syncSetups.home;
+        assert.ok(setup);
         return {
           ...current,
           syncSetups: { ...current.syncSetups, home: { ...setup, sync: { ...setup.sync, include: [] } } },

@@ -43,16 +43,18 @@ for (const backend of [
   },
 ] satisfies ResolvedSyncBackend[]) {
   test(`${backend.type} transfer details redact raw and encoded connection credentials`, () => {
-    const secrets =
-      backend.type === "s3"
-        ? [backend.profile.accessKeyId, backend.profile.secretAccessKey, backend.profile.sessionToken!, "query-secret"]
-        : backend.type === "webdav"
-          ? [
-              backend.profile.username,
-              backend.profile.password,
-              Buffer.from(`${backend.profile.username}:${backend.profile.password}`).toString("base64"),
-            ]
-          : ["private-query"];
+    let secrets: string[];
+    if (backend.type === "s3") {
+      const sessionToken = backend.profile.sessionToken;
+      assert.ok(sessionToken);
+      secrets = [backend.profile.accessKeyId, backend.profile.secretAccessKey, sessionToken, "query-secret"];
+    } else if (backend.type === "webdav") {
+      secrets = [
+        backend.profile.username,
+        backend.profile.password,
+        Buffer.from(`${backend.profile.username}:${backend.profile.password}`).toString("base64"),
+      ];
+    } else secrets = ["private-query"];
     const payload = secrets.flatMap((secret) => [secret, encodeURIComponent(secret)]).join(" ");
     const cause = new Error(payload);
     const error = mergeTransferError(new Error(`S3 request failed: ${payload}`, { cause }), backend);

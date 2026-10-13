@@ -87,7 +87,11 @@ for (const decision of [
       else await operation;
       assert.equal(reviews.length, decision === "same-policy" ? 0 : 1);
       assert.doesNotMatch(reviews.join("\n"), /local-value/);
-      if (reviews.length) assert.match(reviews[0]!, /Migrate portable settings policy.*required even with --yes/s);
+      if (reviews.length) {
+        const review = reviews[0];
+        assert.ok(review);
+        assert.match(review, /Migrate portable settings policy.*required even with --yes/s);
+      }
       const applied = decision === "accept" || decision === "same-policy";
       assert.equal(publication.mock.calls.length, applied || decision === "head-edit" ? 1 : 0);
       if (applied) {

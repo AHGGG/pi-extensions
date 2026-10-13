@@ -103,9 +103,11 @@ for (const decision of ["accept", "decline", "abort", "local-edit", "settings-ed
       else assert.equal(await operation, "applied");
       assert.equal(reviews.length, decision === "same-policy" ? 0 : 1);
       if (reviews.length) {
-        assert.match(reviews[0]!, /Migrate portable settings policy\?/);
-        assert.match(reviews[0]!, /required even with --yes/);
-        assert.doesNotMatch(reviews[0]!, /local-value/);
+        const review = reviews[0];
+        assert.ok(review);
+        assert.match(review, /Migrate portable settings policy\?/);
+        assert.match(review, /required even with --yes/);
+        assert.doesNotMatch(review, /local-value/);
       }
       const published = decision === "accept" || decision === "same-policy";
       assert.equal(publication.mock.calls.length, published ? 2 : 1); // Concurrent client publication, then authorized push only.
@@ -114,7 +116,9 @@ for (const decision of ["accept", "decline", "abort", "local-edit", "settings-ed
         assert.ok(head);
         const snapshot = await f.backend.readSnapshot(head.snapshotRef);
         assert.deepEqual(snapshot.localFields, []);
-        assert.match(Buffer.from(snapshot.files[0]!.contentBase64, "base64").toString(), /local-value/);
+        const file = snapshot.files[0];
+        assert.ok(file);
+        assert.match(Buffer.from(file.contentBase64, "base64").toString(), /local-value/);
       } else {
         assert.deepEqual(await readHead(), changedHead);
         assert.deepEqual(await readStateForConfig(f.config), f.state);

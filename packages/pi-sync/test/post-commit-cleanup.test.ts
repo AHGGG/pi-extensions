@@ -66,7 +66,10 @@ for (const route of ["push", "pull", "rollback-local", "rollback-remote"] as con
           const command = { ...options, signal: controller.signal };
           if (route === "push") await push(ctx, command, undefined, () => backend);
           else if (route === "pull") await pull(ctx, command, () => backend);
-          else await rollback(ctx, { ...command, args: [target!] }, () => backend);
+          else {
+            assert.ok(target);
+            await rollback(ctx, { ...command, args: [target] }, () => backend);
+          }
         } finally {
           publicationSpy.mockRestore();
           retirementSpy.mockRestore();
