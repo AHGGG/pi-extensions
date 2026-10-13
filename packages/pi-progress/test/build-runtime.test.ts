@@ -3,6 +3,7 @@ import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { join } from "node:path";
 import {
   DefaultResourceLoader,
+  type ExtensionCommandContext,
   type ExtensionContext,
   ExtensionRunner,
   SettingsManager,
@@ -38,7 +39,7 @@ test("generated runtime is loadable by Pi's Jiti resource loader", async () => {
     assert.equal(loaded.extensions.length, 1);
     const extension = loaded.extensions[0];
     assert.deepEqual([...(extension?.tools.keys() ?? [])], ["update_progress"]);
-    assert.equal(extension?.commands.size, 0);
+    assert.deepEqual([...(extension?.commands.keys() ?? [])], ["progress"]);
     assert.ok(extension?.handlers.has("session_start"));
     assert.ok(extension?.handlers.has("context"));
     assert.ok(extension?.handlers.has("session_tree"));
@@ -90,6 +91,14 @@ test("generated runtime is loadable by Pi's Jiti resource loader", async () => {
       steps: [{ text: "Verify generated runtime — waiting for approval", status: "blocked" }],
     });
     assert.equal(typeof widgets.at(-1)?.content, "function");
+    const command = extension.commands.get("progress");
+    assert.ok(command);
+    await command.handler("clear", ctx as ExtensionCommandContext);
+    assert.deepEqual(widgets.at(-1), { key: "progress", content: undefined });
+    assert.deepEqual(notifications.at(-1), {
+      message: "Progress widget cleared. Saved progress is unchanged.",
+      type: "info",
+    });
     const cleared = await tool.definition.execute(
       "generated-progress-clear",
       { steps: [] },

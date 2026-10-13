@@ -17,6 +17,7 @@ It restores valid progress after reloads, branch navigation, and compaction with
 - Keeps at most one step in progress and distinguishes blocked work from completion.
 - Adapts the themed TUI widget to terminal height while prioritizing active and blocked steps.
 - Shows a transient completion summary when every tracked step becomes complete.
+- Lets users dismiss the widget without changing saved progress.
 - Restores the latest valid state from current and historical session results on the active branch.
 - Preserves an established pre-migration compaction boundary until its summary epoch ends.
 - Reads optional display settings without writing or migrating settings files.
@@ -89,6 +90,15 @@ Older packages cannot restore new version 5 results; after new updates, prefer a
 Ask Pi to perform work with multiple meaningful steps.
 The model uses `update_progress` to show what has been done, what is happening now, and what is planned next.
 Its guidance recommends updates for meaningful progress changes, skips simple tasks and redundant updates, and does not make tool calls prerequisites for work or replies.
+
+## 💬 Commands
+
+`/progress clear` immediately hides the current progress widget and cancels any completion-summary timer.
+`/progress` is the extension's only slash command, with `clear` as its only subcommand and an autocomplete suggestion.
+No subcommand, unknown subcommands, and trailing arguments show usage without changing the widget.
+The command works in TUI and RPC modes; print and JSON modes reject it.
+Saved progress and conversation history remain unchanged.
+The widget can reappear after the next `update_progress` call, branch navigation, or session start (including `/reload`).
 
 ## 🛠️ Tools
 
@@ -194,7 +204,7 @@ Terminal escape sequences, control characters, and bidirectional display control
 ## 🚧 Limitations
 
 - RPC widgets use fixed-size snapshots rather than adapting to the client viewport.
-- The extension provides a model tool rather than a slash command, SettingsList, or manual progress editor.
+- The extension has no SettingsList or manual progress editor.
 - It reminds the model to update progress but cannot infer completion or force a tool call.
 - Compatibility restores only the documented, valid historical result contracts from the active branch.
 - Adaptive sizing uses terminal height rather than the exact remaining editor viewport.
@@ -206,7 +216,7 @@ Terminal escape sequences, control characters, and bidirectional display control
 packages/pi-progress/
 ├── src/
 │   ├── index.ts                       # Thin Pi entrypoint
-│   ├── progress-widget.ts             # Tool registration and session/widget lifecycle
+│   ├── progress-widget.ts             # Tool/command registration and session/widget lifecycle
 │   ├── progress-state.ts              # Validation, history decoding, and context reconciliation
 │   ├── progress-renderer.ts           # Bounded sanitized widget rendering
 │   └── settings.ts                    # Read-only canonical and legacy settings loader

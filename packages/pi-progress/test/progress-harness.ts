@@ -4,6 +4,7 @@ import type {
   ContextEvent,
   ExtensionAPI,
   ExtensionContext,
+  RegisteredCommand,
   SessionEntry,
   Theme,
 } from "@earendil-works/pi-coding-agent";
@@ -53,12 +54,16 @@ export function createHarness(
   const handlers = new Map<string, Handler[]>();
   const entries: Array<{ customType: string; data: unknown }> = [];
   const tools: RegisteredTool[] = [];
+  const commands = new Map<string, Omit<RegisteredCommand, "name" | "sourceInfo">>();
   const pi = {
     on(event: string, handler: Handler) {
       handlers.set(event, [...(handlers.get(event) ?? []), handler]);
     },
     registerTool(definition: RegisteredTool) {
       tools.push(definition);
+    },
+    registerCommand(name: string, command: Omit<RegisteredCommand, "name" | "sourceInfo">) {
+      commands.set(name, command);
     },
     appendEntry(customType: string, data: unknown) {
       entries.push({ customType, data: structuredClone(data) });
@@ -71,6 +76,7 @@ export function createHarness(
   return {
     entries,
     tools,
+    commands,
     get tool(): RegisteredTool {
       assert.equal(tools.length, 1);
       const tool = tools[0];
