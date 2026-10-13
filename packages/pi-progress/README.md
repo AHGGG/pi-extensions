@@ -93,8 +93,10 @@ Its guidance recommends updates for meaningful progress changes, skips simple ta
 
 ## 💬 Commands
 
-`/clear-progress-widget` immediately hides the current progress widget and cancels any completion-summary timer.
-It takes no arguments and works in TUI and RPC modes; print and JSON modes reject it.
+`/progress clear` immediately hides the current progress widget and cancels any completion-summary timer.
+`/progress` is the extension's only slash command, with `clear` as its only subcommand and an autocomplete suggestion.
+No subcommand, unknown subcommands, and trailing arguments show usage without changing the widget.
+The command works in TUI and RPC modes; print and JSON modes reject it.
 Saved progress and conversation history remain unchanged.
 The widget can reappear after the next `update_progress` call, branch navigation, or session start (including `/reload`).
 

@@ -189,12 +189,16 @@ export default function progressWidgetExtension(pi: ExtensionAPI, dependencies: 
     },
   });
 
-  pi.registerCommand("clear-progress-widget", {
-    description: "Hide the progress widget without changing saved progress",
+  pi.registerCommand("progress", {
+    description: "Manage the progress widget",
+    getArgumentCompletions: (prefix) =>
+      "clear".startsWith(prefix)
+        ? [{ value: "clear", label: "clear", description: "Hide the widget without changing saved progress" }]
+        : null,
     handler: async (args, ctx) => {
-      if (!ctx.hasUI) throw new Error("/clear-progress-widget requires TUI or RPC mode.");
-      if (args.trim()) {
-        ctx.ui.notify("Usage: /clear-progress-widget (no arguments)", "warning");
+      if (!ctx.hasUI) throw new Error("/progress requires TUI or RPC mode.");
+      if (args.trim() !== "clear") {
+        ctx.ui.notify("Usage: /progress clear", "warning");
         return;
       }
       if (!ownsSession(ctx)) {

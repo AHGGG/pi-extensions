@@ -12,11 +12,26 @@ import {
   toolResultEntry,
 } from "./progress-harness.js";
 
-async function clearWidget(harness: ReturnType<typeof createHarness>, ctx: ExtensionContext, args = "") {
-  const command = harness.commands.get("clear-progress-widget");
+async function clearWidget(harness: ReturnType<typeof createHarness>, ctx: ExtensionContext, args = "clear") {
+  const command = harness.commands.get("progress");
   assert.ok(command);
   await command.handler(args, ctx as ExtensionCommandContext);
 }
+
+test("completes only the clear subcommand of the single progress command", async () => {
+  const harness = createHarness();
+  assert.deepEqual([...harness.commands.keys()], ["progress"]);
+  const complete = harness.commands.get("progress")?.getArgumentCompletions;
+  assert.ok(complete);
+  for (const prefix of ["", "c", "cl", "cle", "clea", "clear"]) {
+    assert.deepEqual(await complete(prefix), [
+      { value: "clear", label: "clear", description: "Hide the widget without changing saved progress" },
+    ]);
+  }
+  for (const prefix of ["unknown", "Clear", "clear ", "clear extra"]) {
+    assert.equal(await complete(prefix), null);
+  }
+});
 
 for (const mode of ["tui", "rpc"] as const) {
   test(`${mode}: dismisses only the widget, preserves state, and allows later updates/restoration`, async () => {
@@ -29,10 +44,10 @@ for (const mode of ["tui", "rpc"] as const) {
     const before = await harness.context(messages, current.ctx);
     const branchBefore = structuredClone(current.branch);
     const entriesBefore = structuredClone(harness.entries);
-    assert.deepEqual([...harness.commands.keys()], ["clear-progress-widget"]);
+    assert.deepEqual([...harness.commands.keys()], ["progress"]);
 
     await clearWidget(harness, current.ctx);
-    await clearWidget(harness, current.ctx, "  ");
+    await clearWidget(harness, current.ctx, "  clear  ");
     assert.deepEqual(current.widgets.at(-1), { key: WIDGET_KEY, content: undefined, options: undefined });
     assert.deepEqual(current.notifications.at(-1), {
       message: "Progress widget cleared. Saved progress is unchanged.",
@@ -62,13 +77,15 @@ for (const mode of ["tui", "rpc"] as const) {
       await setProgress(harness, current.ctx, [{ text: "done", status: "completed" }]);
       assert.equal(vi.getTimerCount(), 1);
       const widgetCount = current.widgets.length;
-      await clearWidget(harness, current.ctx, "extra input");
-      assert.equal(current.widgets.length, widgetCount);
-      assert.equal(vi.getTimerCount(), 1);
-      assert.deepEqual(current.notifications.at(-1), {
-        message: "Usage: /clear-progress-widget (no arguments)",
-        type: "warning",
-      });
+      for (const args of ["", "  ", "unknown", "Clear", "clear extra", "clear clear"]) {
+        await clearWidget(harness, current.ctx, args);
+        assert.equal(current.widgets.length, widgetCount);
+        assert.equal(vi.getTimerCount(), 1);
+        assert.deepEqual(current.notifications.at(-1), {
+          message: "Usage: /progress clear",
+          type: "warning",
+        });
+      }
 
       await clearWidget(harness, current.ctx);
       assert.equal(vi.getTimerCount(), 0);
@@ -92,7 +109,9 @@ for (const mode of ["print", "json"] as const) {
     const current = createContext({ mode });
     await harness.emit("session_start", current.ctx);
     await setProgress(harness, current.ctx, [{ text: "pending", status: "pending" }]);
-    await assert.rejects(clearWidget(harness, current.ctx), /requires TUI or RPC mode/u);
+    for (const args of ["", "clear", "clear extra", "unknown"]) {
+      await assert.rejects(clearWidget(harness, current.ctx, args), /requires TUI or RPC mode/u);
+    }
     assert.deepEqual(current.widgets, []);
     assert.deepEqual(current.notifications, []);
     assert.deepEqual(harness.entries, []);
