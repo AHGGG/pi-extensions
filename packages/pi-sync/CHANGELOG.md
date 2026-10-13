@@ -1,5 +1,11 @@
 # @narumitw/pi-sync
 
+## 0.54.2
+
+### Patch Changes
+
+- 491fc28: Fix Windows EPERM errors when syncing snapshot backups and staged recovery files by opening regular files with write access for flushing.
+
 ## 0.54.1
 
 ### Patch Changes

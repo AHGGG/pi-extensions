@@ -2,6 +2,16 @@
 
 This changelog retains the published `@narumitw/pi-todo` predecessor history below the first `pi-progress` release.
 
+## 0.6.0
+
+### Minor Changes
+
+- 70cfac5: Flatten the five display settings in `pi-progress.json`. Existing nested `widget` settings remain readable, with top-level fields taking precedence.
+  
+  Stop reading `pi-todo.json`. Users who rely on that file must copy their preferences into `pi-progress.json`; the extension leaves the old file unchanged.
+- f3cfb92: Add a menu-first `/progress` command with Settings, Status, Help, and Clear widget. Keep `/progress clear` and `/progress settings` as direct routes; the latter edits the five display preferences in the same TUI screen. Successful saves apply immediately, preserve unknown JSON fields, and use ordered atomic publication. Invalid files and failed saves leave the previous settings unchanged. RPC reports the settings file path for manual editing. Frame the settings screen with shared full-width horizontal rules and height-aware active-row retention. Place Clear widget first in the main menu. Support mouse input in the menu and Settings. Replace the long item-limit selector with a validated number input; a blank field removes the limit. Apply completed saves to the active session after screen closure and preserve existing POSIX permissions under a stricter umask.
+- 25955d7: Add `/progress clear` to dismiss the current widget without changing saved progress or conversation history.
+
 ## 0.5.1
 
 ### Patch Changes
