@@ -85,6 +85,26 @@ Target selections are stored only as IDs in the provider-neutral `selectedTarget
 The former `fireworksAccountId` field remains read-compatible: it supplies `selectedTargets.fireworks` in memory only when the generic value is absent.
 A successful explicit Fireworks account selection writes the generic field and removes the legacy field atomically; ordinary reads do not rewrite the file.
 
+### Quota statusline display
+
+Edit `statuslineDisplay` manually in the user settings file, then run `/reload`.
+It applies to Codex, Command Code, Kimi, MiniMax Token Plan Global/China, Z.AI Global/China, and OpenCode Go.
+For example, retain window labels alongside countdowns and change the separator:
+
+```json
+{
+  "statuslineDisplay": {
+    "countdown": "{window}:{value} ↻ {reset}",
+    "separator": " / "
+  }
+}
+```
+
+This produces output such as `codex 5h:89% ↻ 2h30m / wk:97%`.
+Missing fields keep the current defaults. Invalid templates produce a warning in TUI and RPC, use default settings, and block saves until the file is repaired; the file remains untouched.
+There is no interactive template editor.
+See the [display template reference](./docs/statusline-display.md) for defaults, placeholders, validation, and unchanged provider behavior.
+
 ### ChatGPT companion usage
 
 **Experimental source:** this read-only feature uses undocumented ChatGPT backend endpoints that may change without notice.
@@ -197,9 +217,9 @@ After the active runtime credential changes, the next command, turn, or schedule
 ## 📊 Statusline behavior
 
 The `usage` status item is active only for selected providers that publish statusline usage.
-Codex, Command Code, Kimi, MiniMax Token Plan, Z.AI, and OpenCode Go separate quota windows with ` · ` and place static labels before values, for example `cmd 5h:100% · wk:97% · mo:98%`.
+By default, Codex, Command Code, Kimi, MiniMax Token Plan, Z.AI, and OpenCode Go separate quota windows with ` · ` and place static labels before values, for example `cmd 5h:100% · wk:97% · mo:98%`.
 Countdown segments retain their spacing without window labels, for example `codex 89% ↻ 2h30m · 97% ↻ 5d17h`; a missing reset time falls back to a static label, such as `codex 89% ↻ 2h30m · wk:97%`.
-Single windows have no separator. These presentation changes do not alter the reported values; consumers parsing the old status text must adapt to the new format. ChatGPT companion formatting is unchanged.
+Single windows have no separator. [Display templates](./docs/statusline-display.md) can change this quota presentation. These presentation changes do not alter the reported values; consumers parsing the old status text must adapt to the new format. ChatGPT companion formatting is unchanged.
 
 Kimi, MiniMax Token Plan Global/China, Z.AI Global/China, Command Code, OpenCode Go, and finite GitHub Copilot quotas show countdowns automatically when a displayed quota has a valid future reset time.
 For example, `kimi 77% ↻ 2h52m · mo:87%` mixes a countdown with a static fallback; Copilot preserves its counts, percentage, and any overage, such as `copilot 245/300 82% ↻ 6d`.

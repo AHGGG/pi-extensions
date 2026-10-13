@@ -6,7 +6,9 @@ import { VERSION } from "@earendil-works/pi-coding-agent";
 import { type TestContext, test } from "vitest";
 import { createMockContext, createMockPi } from "../../../test/support.js";
 import { registerCodexFastMode } from "../src/codex-fast-runtime.js";
+import { formatUsageStatuslineWithCountdown } from "../src/format.js";
 import { createUsageSettingsRuntime } from "../src/settings.js";
+import type { UsageReport } from "../src/types.js";
 
 const codexModel = {
   id: "gpt-5.6-sol",
@@ -222,6 +224,45 @@ test("server-advertised future model enables Fast, status, and priority routing"
   });
   assert.equal(f.requests.length, 1);
   assert.equal(f.refreshes, 2);
+});
+
+test("custom templates preserve effective and unknown Fast labels in the provider placeholder", async (t) => {
+  const f = await fixture(t, { enabled: true });
+  const report: UsageReport = {
+    providerId: "openai-codex",
+    providerName: "Codex",
+    capturedAt: 0,
+    source: "synthetic",
+    semantics: { kind: "consumer-subscription", label: "Plan" },
+    metrics: [],
+    buckets: [{ id: "codex:primary", groupId: "codex", label: "5h", unit: "percent", remaining: 80 }],
+  };
+  const render = () =>
+    formatUsageStatuslineWithCountdown(
+      report,
+      codexModel,
+      0,
+      false,
+      "remaining",
+      { template: "[{windows}] {provider}" },
+      (prefix) => f.fast.decorateStatus(codexModel as never, prefix),
+    ).value;
+  assert.equal(render(), "[5h:80%] codex (Fast unknown)");
+  await f.fast.refreshCapabilities(f.current.ctx);
+  assert.equal(render(), "[5h:80%] codex fast");
+  report.buckets[0].groupId = "special";
+  report.buckets[0].groupLabel = "Codex Special";
+  assert.equal(render(), "[5h:80%] codex fast special");
+});
+
+test("invalid templates warn on session start without overwriting settings or starting Fast discovery", async (t) => {
+  const f = await fixture(t);
+  const text = JSON.stringify({ statuslineDisplay: { window: "{reset}" } });
+  await writeFile(f.path, text);
+  await f.mock.events.get("session_start")?.[0]?.({}, f.current.ctx);
+  assert.match(f.current.notifications[0]?.message ?? "", /Invalid pi-usage.json.*statuslineDisplay.window/);
+  assert.equal(await readFile(f.path, "utf8"), text);
+  assert.equal(f.requests.length, 0);
 });
 
 test("legacy fast advertisement remains compatible with priority routing", async (t) => {
