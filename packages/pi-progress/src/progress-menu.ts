@@ -30,10 +30,10 @@ export async function showProgressMenu(ctx: ExtensionCommandContext, options: Pr
         title: "Progress",
         lines: [`Widget: ${state.widget} · ${state.completed}/${state.total} steps completed`],
         items: [
+          { id: "hide", label: "Clear widget", description: "Keep saved progress unchanged", action: "hide" },
           { id: "settings", label: "Settings", action: "settings" },
           { id: "status", label: "Status", to: "status" },
           { id: "help", label: "Help", to: "help" },
-          { id: "hide", label: "Clear widget", description: "Keep saved progress unchanged", action: "hide" },
           { id: "close", label: "Close", close: true },
         ],
         hint: "close",
