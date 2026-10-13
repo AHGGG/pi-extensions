@@ -212,6 +212,42 @@ test("main menu uses injected non-default keys and preserves Ctrl+C hard cancell
   }
 });
 
+for (const action of ["Clear widget", "Settings", "Status", "Help", "Close"] as const) {
+  test(`mouse activates the ${action} main-menu action`, async () => {
+    const harness = createHarness();
+    const current = createContext();
+    const tui = createTuiHarness();
+    Object.assign(current.ctx.ui, { custom: tui.custom });
+    await harness.emit("session_start", current.ctx);
+    await setProgress(harness, current.ctx, [{ text: "work", status: "pending" }]);
+    const running = openMenu(harness, current.ctx);
+    try {
+      await tui.waitForOpen();
+      const y = tui
+        .render()
+        .map(stripVTControlCharacters)
+        .findIndex((line) => new RegExp(`^(?:→ |  )${action}(?:\\s|$)`, "u").test(line));
+      assert.ok(y >= 0);
+      tui.mouse({ type: "press", x: 1, y });
+      tui.mouse({ type: "click", x: 1, y });
+      if (action === "Close") {
+        await running;
+        assert.equal(tui.isOpen, false);
+      } else {
+        const expected = action === "Clear widget" ? /Widget: hidden/u : new RegExp(`Progress ${action}`, "u");
+        await vi.waitFor(() => assert.match(frame(tui), expected));
+        tui.press("ctrl+c");
+        await running;
+      }
+      assert.deepEqual(harness.entries, []);
+    } finally {
+      tui.dispose();
+      await running;
+      await harness.emit("session_shutdown", current.ctx);
+    }
+  });
+}
+
 test("external menu disposal does not invoke settings or hide the widget", async () => {
   const saveSettings = vi.fn(async () => ({ ...DEFAULT_PROGRESS_SETTINGS }));
   const harness = createHarness({ saveSettings });

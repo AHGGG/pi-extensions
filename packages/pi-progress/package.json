@@ -32,7 +32,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@narumitw/pi-tui-kit": "^0.61.0"
+    "@narumitw/pi-tui-kit": "^0.63.0"
   },
   "peerDependencies": {
     "@earendil-works/pi-ai": "*",

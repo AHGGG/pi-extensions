@@ -1,14 +1,24 @@
 import assert from "node:assert/strict";
+import { execFile } from "node:child_process";
 import { access, mkdtemp, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { promisify } from "node:util";
 import { afterEach, test, vi } from "vitest";
 
-const publication = vi.hoisted(() => ({ fail: false, beforeRename: undefined as (() => Promise<void>) | undefined }));
+const publication = vi.hoisted(() => ({
+  fail: false,
+  failChmod: false,
+  beforeRename: undefined as (() => Promise<void>) | undefined,
+}));
 vi.mock("node:fs/promises", async (importOriginal) => {
   const original = await importOriginal<typeof import("node:fs/promises")>();
   return {
     ...original,
+    chmod: async (...args: Parameters<typeof original.chmod>) => {
+      if (publication.failChmod) throw new Error("chmod failed");
+      return original.chmod(...args);
+    },
     rename: async (...args: Parameters<typeof original.rename>) => {
       await publication.beforeRename?.();
       if (publication.fail) throw new Error("rename failed");
@@ -21,6 +31,7 @@ import { DEFAULT_PROGRESS_SETTINGS, loadProgressSettings, saveProgressSettings }
 
 afterEach(() => {
   publication.fail = false;
+  publication.failChmod = false;
   publication.beforeRename = undefined;
 });
 
@@ -125,4 +136,45 @@ test("preserves existing POSIX file permissions", async (t) => {
   assert.equal((await stat(path)).mode & 0o777, 0o600);
   await saveProgressSettings({ enabled: true }, path);
   assert.equal((await stat(path)).mode & 0o777, 0o600);
+});
+
+test("preserves shared POSIX modes under a stricter process umask", async (t) => {
+  if (process.platform === "win32") return;
+  const path = await settingsPath(t);
+  await saveProgressSettings({}, path);
+  const { stdout } = await promisify(execFile)(process.execPath, [
+    "--input-type=module",
+    "-e",
+    `import { chmod, stat } from "node:fs/promises";
+     const { saveProgressSettings } = await import(process.argv[1]);
+     const path = process.argv[2];
+     process.umask(0o077);
+     const modes = [];
+     for (const mode of [0o664, 0o640, 0o600]) {
+       await chmod(path, mode);
+       await saveProgressSettings({ enabled: false }, path);
+       modes.push((await stat(path)).mode & 0o777);
+     }
+     await saveProgressSettings({}, path + ".new");
+     modes.push((await stat(path + ".new")).mode & 0o777);
+     console.log(JSON.stringify(modes));`,
+    new URL("../src/settings.ts", import.meta.url).href,
+    path,
+  ]);
+  assert.deepEqual(JSON.parse(stdout), [0o664, 0o640, 0o600, 0o600]);
+});
+
+test("chmod failure preserves the previous document and leaves the queue usable", async (t) => {
+  const path = await settingsPath(t);
+  await saveProgressSettings({ enabled: true }, path);
+  const before = await readFile(path);
+  const mode = (await stat(path)).mode & 0o777;
+  publication.failChmod = true;
+  await assert.rejects(saveProgressSettings({ enabled: false }, path), /chmod failed/u);
+  assert.deepEqual(await readFile(path), before);
+  assert.equal((await stat(path)).mode & 0o777, mode);
+  assert.deepEqual(await readdir(join(path, "..")), ["pi-progress.json"]);
+  publication.failChmod = false;
+  await saveProgressSettings({ enabled: false }, path);
+  assert.equal((await loadProgressSettings(path)).settings.enabled, false);
 });

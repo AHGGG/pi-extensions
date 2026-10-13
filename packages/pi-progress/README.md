@@ -191,7 +191,7 @@ Canonical user settings are read from `<Pi agent directory>/pi-progress.json`, n
 `maxVisibleItems` accepts `null` or an integer from 1 through 50; the other fields are booleans with the defaults shown above.
 Use `/progress settings` in TUI mode to edit these user settings. Enter or Space changes a value; the item limit opens a value selector.
 The screen uses the shared Kit frame with full-width top and bottom rules. When fewer than five rows remain for the screen, it omits the rules to retain the active setting or value choice.
-Each successful save applies immediately. Closing the screen cancels pending work, but a save already publishing can still finish; completed saves are not undone. Ctrl+C always closes the screen.
+Each successful save applies immediately. Closing the screen cancels pending work, but a save already publishing can still finish and apply to the current session; completed saves are not undone. Ctrl+C always closes the screen.
 A failed save reports an error and restores the displayed value. Invalid existing files must be repaired before saving.
 
 Manual file changes take effect at the next session start, including `/reload`.

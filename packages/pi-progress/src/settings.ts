@@ -1,5 +1,5 @@
 import { constants } from "node:fs";
-import { type FileHandle, mkdir, mkdtemp, open, rename, rm, writeFile } from "node:fs/promises";
+import { chmod, type FileHandle, mkdir, mkdtemp, open, rename, rm, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { getAgentDir, withFileMutationQueue } from "@earendil-works/pi-coding-agent";
 
@@ -112,6 +112,8 @@ export async function saveProgressSettings(
       throwIfAborted(signal);
       const staged = join(temporary, "settings.json");
       await writeFile(staged, text, { mode, signal });
+      // writeFile applies umask; restore the intended mode before atomic publication.
+      await chmod(staged, mode);
       throwIfAborted(signal);
       await rename(staged, path);
       // A rename can complete while cancellation fires; the next queued read sees it.

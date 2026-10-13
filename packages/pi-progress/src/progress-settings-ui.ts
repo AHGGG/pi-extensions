@@ -4,7 +4,16 @@ import {
   getSelectListTheme,
   getSettingsListTheme,
 } from "@earendil-works/pi-coding-agent";
-import { Key, matchesKey, SelectList, type SettingItem, SettingsList, Text } from "@earendil-works/pi-tui";
+import {
+  Key,
+  matchesKey,
+  SelectList,
+  type SettingItem,
+  SettingsList,
+  Text,
+  type TuiMouseEvent,
+  truncateToWidth,
+} from "@earendil-works/pi-tui";
 import { sanitizeProgressText } from "./progress-renderer.js";
 import { PROGRESS_DISPLAY_MODES, type ProgressSettings } from "./settings.js";
 
@@ -31,6 +40,10 @@ export async function showProgressSettings(
       const signal = AbortSignal.any([options.signal, controller.signal]);
       let closing = false;
       const revisions = new Map<string, number>();
+      const mouseRows = new Map<number, number>();
+      let renderedWidth = 0;
+      let contentHeight = 0;
+      let mousePressed = false;
       const current = () => !signal.aborted && options.isCurrent();
       const close = (nextReason: "back" | "close" | "stale") => {
         if (closing) return;
@@ -110,7 +123,8 @@ export async function showProgressSettings(
             if (!current()) return;
             try {
               const settings = await options.save({ [key]: requested }, signal);
-              if (!current()) return;
+              // Successful return means publication completed, even if the screen closed during rename.
+              if (!options.isCurrent()) return;
               options.apply(settings);
             } catch (error) {
               if (!current()) return;
@@ -132,29 +146,74 @@ export async function showProgressSettings(
       if (!current()) cancelOwner();
       return {
         render(width: number) {
-          const content = list.render(width);
-          // Pi SettingsList and SelectList mark their active row with the native arrow.
-          const focusedRow = content.findIndex((line) => stripVTControlCharacters(line).startsWith("→"));
+          renderedWidth = Number.isFinite(width) ? Math.max(0, Math.floor(width)) : 0;
+          const content = list.render(renderedWidth);
+          contentHeight = content.length;
+          mouseRows.clear();
+          // Layout stable row tokens, then restore text and native coordinates after clipping.
+          // Blank rows stay blank so compact retention matches the original content.
+          const tokens = new Map<string, number>();
+          const layoutContent = content.map((line, index) => {
+            if (!stripVTControlCharacters(line).trim()) return line;
+            const token = `content:${index}`;
+            tokens.set(token, index);
+            return token;
+          });
+          // SettingsList reserves three cells for ellipsis, hiding its arrow below four cells.
+          // Item row positions do not depend on width, so use a wider render only to locate focus.
+          const focusContent = renderedWidth < 4 ? list.render(4) : content;
+          const focusedRow = focusContent.findIndex((line) => stripVTControlCharacters(line).startsWith("→"));
           const terminalRows = Number.isFinite(tui.terminal.rows) ? Math.floor(tui.terminal.rows) : 24;
-          return renderBoundedFrame({
-            width,
+          const frame = renderBoundedFrame({
+            width: Math.max(renderedWidth, `content:${content.length}`.length),
             maxRows: Math.max(1, terminalRows - 3),
-            rule: rule.render(width)[0] ?? "",
-            title: new Text(theme.fg("accent", theme.bold("Progress Settings")), 0, 0).render(width),
+            rule: rule.render(renderedWidth)[0] ?? "",
+            title: new Text(theme.fg("accent", theme.bold("Progress Settings")), 0, 0).render(renderedWidth),
             context: [theme.fg("muted", "Saved changes apply immediately.")],
-            content,
+            content: layoutContent,
             priorityRows: focusedRow < 0 ? [] : [focusedRow],
             focusedRow,
           });
+          return frame.map((line, row) => {
+            const nativeRow = tokens.get(line);
+            if (nativeRow !== undefined) mouseRows.set(row, nativeRow);
+            return truncateToWidth(nativeRow === undefined ? line : (content[nativeRow] ?? ""), renderedWidth, "");
+          });
         },
-        invalidate: () => list.invalidate(),
+        invalidate() {
+          mouseRows.clear();
+          mousePressed = false;
+          list.invalidate();
+        },
+        handleMouse(event: TuiMouseEvent) {
+          if (closing || !current()) return;
+          const nativeRow = mouseRows.get(event.y);
+          if (nativeRow === undefined || event.x < 0 || event.x >= renderedWidth) {
+            if (event.button === "left" && (event.type === "press" || event.type === "click")) mousePressed = false;
+            return;
+          }
+          const nativeEvent = { ...event, y: nativeRow, width: renderedWidth, height: contentHeight };
+          // Replace a stale native press before a new click without a matching owned press.
+          if (event.type === "click" && event.button === "left" && !mousePressed) {
+            list.handleMouse({ ...nativeEvent, type: "press" });
+          }
+          const result = list.handleMouse(nativeEvent);
+          if (event.type === "press" && event.button === "left") mousePressed = result?.handled === true;
+          if (event.type === "click" || event.type === "wheel") mousePressed = false;
+          if (result?.handled && result.render !== false) tui.requestRender();
+          return result;
+        },
         handleInput(data: string) {
           if (closing || !current()) return;
+          mousePressed = false;
+          mouseRows.clear();
           if (matchesKey(data, Key.ctrl("c"))) close("close");
           else list.handleInput(data);
           tui.requestRender();
         },
         dispose() {
+          mouseRows.clear();
+          mousePressed = false;
           controller.abort();
           options.signal.removeEventListener("abort", cancelOwner);
           if (!closing) cancelOwner();

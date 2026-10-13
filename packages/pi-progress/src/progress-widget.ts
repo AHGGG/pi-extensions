@@ -218,7 +218,8 @@ export default function progressWidgetExtension(pi: ExtensionAPI, dependencies: 
       get: () => cloneSettings(settings),
       save: (patch, ownedSignal) => writeSettings(patch, undefined, ownedSignal),
       apply: (next) => {
-        if (signal.aborted || !isCurrent()) return;
+        // A committed save still applies after the interaction closes, not after owner replacement.
+        if (!isCurrent()) return;
         settings = cloneSettings(next);
         if (!settings.enabled) cancelCompletionSummary();
         if (completionTimer === undefined) publish(ctx);

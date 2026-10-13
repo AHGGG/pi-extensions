@@ -112,7 +112,7 @@ test("save failure restores the value and later saves still work", async () => {
 });
 
 for (const cancellation of ["close", "dispose", "parent"] as const) {
-  test(`${cancellation} cancels pending work and prevents late application`, async () => {
+  test(`${cancellation} cancels uncommitted work and prevents late application`, async () => {
     const current = createContext();
     let screen!: ReturnType<typeof createCustomSelectorHarness>;
     Object.assign(current.ctx.ui, {
@@ -123,16 +123,16 @@ for (const cancellation of ["close", "dispose", "parent"] as const) {
     });
     const controller = new AbortController();
     let saveSignal: AbortSignal | undefined;
-    let resolve!: (value: ProgressSettings) => void;
+    let reject!: (reason: unknown) => void;
     const apply = vi.fn();
     const command = showProgressSettings(current.ctx as ExtensionCommandContext, {
       signal: controller.signal,
-      isCurrent: () => true,
+      isCurrent: () => !controller.signal.aborted,
       get: () => ({ ...DEFAULT_PROGRESS_SETTINGS }),
       save: async (_patch, signal) => {
         saveSignal = signal;
-        return new Promise((done) => {
-          resolve = done;
+        return new Promise((_resolve, fail) => {
+          reject = fail;
         });
       },
       apply,
@@ -144,7 +144,7 @@ for (const cancellation of ["close", "dispose", "parent"] as const) {
     else if (cancellation === "dispose") screen.dispose();
     else controller.abort();
     assert.equal(saveSignal?.aborted, true);
-    resolve({ ...DEFAULT_PROGRESS_SETTINGS, enabled: false });
+    reject(saveSignal?.reason);
     await command;
     assert.equal(apply.mock.calls.length, 0);
     assert.deepEqual(current.notifications, []);
