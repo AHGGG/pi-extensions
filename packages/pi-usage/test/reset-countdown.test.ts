@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, test, vi } from "vitest";
 import { createMockContext, createMockPi } from "../../../test/support.js";
 import { formatUsageStatusline, formatUsageStatuslineWithCountdown } from "../src/format.js";
-import type { UsageSettingsRuntime, UsageSettingsState } from "../src/settings.js";
+import { DEFAULT_USAGE_SETTINGS, type UsageSettingsRuntime, type UsageSettingsState } from "../src/settings.js";
 import type { UsageReport } from "../src/types.js";
 
 const now = Date.parse("2026-10-12T00:00:00Z");
@@ -186,6 +186,7 @@ async function setup(provider: (typeof providers)[number], value = quotaReport(p
     kind: "loaded",
     path: join(directory, "pi-usage.json"),
     settings: {
+      ...DEFAULT_USAGE_SETTINGS,
       codexFastMode: false,
       codexStatusResetCountdown: false,
       codexStatusPercentage: "remaining",

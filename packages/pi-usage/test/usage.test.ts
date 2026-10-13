@@ -11,7 +11,7 @@ import {
 import { test, vi } from "vitest";
 import { createMockContext, createMockPi } from "../../../test/support.js";
 import { OAUTH_CREDENTIAL_SOURCE_CHANNEL } from "../src/oauth-credential-source.js";
-import type { UsageSettingsRuntime, UsageSettingsState } from "../src/settings.js";
+import { DEFAULT_USAGE_SETTINGS, type UsageSettingsRuntime, type UsageSettingsState } from "../src/settings.js";
 import usageExtension from "../src/usage.js";
 import { showUsageSettings } from "../src/usage-settings-ui.js";
 
@@ -110,6 +110,7 @@ function memorySettingsRuntime(
   options: {
     codexStatusResetCountdown?: boolean;
     codexStatusPercentage?: "remaining" | "used";
+    statuslineDisplay?: UsageSettingsState["settings"]["statuslineDisplay"];
     fireworksAccountId?: string;
     selectedTargets?: Record<string, string>;
     document?: Record<string, unknown>;
@@ -123,6 +124,8 @@ function memorySettingsRuntime(
     kind,
     path: "/tmp/pi-usage.json",
     settings: {
+      ...DEFAULT_USAGE_SETTINGS,
+      statuslineDisplay: options.statuslineDisplay ?? DEFAULT_USAGE_SETTINGS.statuslineDisplay,
       codexFastMode: false,
       codexStatusResetCountdown: options.codexStatusResetCountdown ?? false,
       codexStatusPercentage: options.codexStatusPercentage ?? "remaining",
@@ -2019,7 +2022,15 @@ test("Codex used percentage and reset countdown repaint locally and stop across 
       { status: 200 },
     );
   };
-  const settings = memorySettingsRuntime({ codexStatusResetCountdown: true, codexStatusPercentage: "used" });
+  const settings = memorySettingsRuntime({
+    codexStatusResetCountdown: true,
+    codexStatusPercentage: "used",
+    statuslineDisplay: {
+      ...DEFAULT_USAGE_SETTINGS.statuslineDisplay,
+      template: "[{windows}] {provider}",
+      countdown: "{window}:{value} ↻ {reset}",
+    },
+  });
   const mock = createMockPi();
   usageExtension(mock.pi, { settingsRuntime: settings.runtime });
   const { ctx, statuses } = createMockContext({
@@ -2035,11 +2046,11 @@ test("Codex used percentage and reset countdown repaint locally and stop across 
 
   await mock.events.get("session_start")?.[0]?.({}, ctx);
   await vi.advanceTimersByTimeAsync(0);
-  assert.equal(statuses.get("usage"), "codex 20% ↻ 3m");
+  assert.equal(statuses.get("usage"), "[5h:20% ↻ 3m] codex");
   assert.equal(fetches, 1);
 
   await vi.advanceTimersByTimeAsync(60_000);
-  assert.equal(statuses.get("usage"), "codex 20% ↻ 2m");
+  assert.equal(statuses.get("usage"), "[5h:20% ↻ 2m] codex");
   assert.equal(fetches, 1);
 
   Object.assign(ctx, { model: undefined });
@@ -2051,7 +2062,7 @@ test("Codex used percentage and reset countdown repaint locally and stop across 
   Object.assign(ctx, { model: codexModel });
   mock.events.get("model_select")?.[0]?.({ model: codexModel }, ctx);
   await vi.advanceTimersByTimeAsync(0);
-  assert.equal(statuses.get("usage"), "codex 20% ↻ 1m");
+  assert.equal(statuses.get("usage"), "[5h:20% ↻ 1m] codex");
   assert.equal(fetches, 2);
 
   mock.events.get("session_shutdown")?.[0]?.({}, ctx);
@@ -2784,6 +2795,7 @@ test("Ctrl+C hard-cancels Settings before conflicting configurable actions", asy
 
   assert.equal(changed, false);
   assert.deepEqual(settings.state().settings, {
+    ...DEFAULT_USAGE_SETTINGS,
     codexFastMode: false,
     codexStatusResetCountdown: false,
     codexStatusPercentage: "remaining",

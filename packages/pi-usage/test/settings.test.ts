@@ -29,12 +29,14 @@ test("normalizes owned settings and ignores the retired xAI field", () => {
     codexStatusResetCountdown: true,
     codexStatusPercentage: "remaining",
     selectedTargets: {},
+    statuslineDisplay: DEFAULT_USAGE_SETTINGS.statuslineDisplay,
   });
   assert.deepEqual(normalizeUsageSettings({ fireworksAccountId: "acme-prod" }), {
     codexFastMode: false,
     codexStatusResetCountdown: true,
     codexStatusPercentage: "remaining",
     selectedTargets: { fireworks: "acme-prod" },
+    statuslineDisplay: DEFAULT_USAGE_SETTINGS.statuslineDisplay,
   });
   assert.deepEqual(
     normalizeUsageSettings({
@@ -46,6 +48,7 @@ test("normalizes owned settings and ignores the retired xAI field", () => {
       codexStatusResetCountdown: true,
       codexStatusPercentage: "remaining",
       selectedTargets: { fireworks: "current", custom: "project-1" },
+      statuslineDisplay: DEFAULT_USAGE_SETTINGS.statuslineDisplay,
     },
   );
   assert.deepEqual(normalizeUsageSettings({ xaiUsage: false }), DEFAULT_USAGE_SETTINGS);
@@ -286,6 +289,7 @@ test("normalizes the Codex reset countdown status preference", () => {
     codexStatusResetCountdown: false,
     codexStatusPercentage: "remaining",
     selectedTargets: {},
+    statuslineDisplay: DEFAULT_USAGE_SETTINGS.statuslineDisplay,
   });
   assert.equal(normalizeUsageSettings({ codexStatusResetCountdown: "false" }), undefined);
 });
@@ -296,6 +300,7 @@ test("normalizes the Codex status percentage preference", () => {
     codexStatusResetCountdown: true,
     codexStatusPercentage: "used",
     selectedTargets: {},
+    statuslineDisplay: DEFAULT_USAGE_SETTINGS.statuslineDisplay,
   });
   assert.equal(normalizeUsageSettings({ codexStatusPercentage: "remaining" })?.codexStatusPercentage, "remaining");
   assert.equal(normalizeUsageSettings({ codexStatusPercentage: "consumed" }), undefined);

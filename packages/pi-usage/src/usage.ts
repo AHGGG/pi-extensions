@@ -181,14 +181,17 @@ export default function usageExtension(pi: ExtensionAPI, dependencies: UsageExte
       outcome.state.report.providerId === "openai-codex" && settings.codexStatusResetCountdown;
     const isCompanionReport = outcome.state.report.source === "openai-chatgpt-companion";
     const now = Date.now();
+    // Fast belongs to the provider placeholder even when a template moves it after the windows.
     const status = formatUsageStatuslineWithCountdown(
       outcome.state.report,
       model,
       now,
       showCodexResetCountdown,
       settings.codexStatusPercentage,
+      settings.statuslineDisplay,
+      (prefix) => fastRuntime.decorateStatus(model, prefix),
     );
-    const value = status.value ? fastRuntime.decorateStatus(model, status.value) : undefined;
+    const value = status.value;
     if (!safeSetStatus(ctx, value)) return;
     if (shouldSchedule && sessionActive) scheduleStatusRefresh(ctx, model);
     if (

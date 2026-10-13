@@ -83,7 +83,17 @@ test("generated runtime is loadable by Pi's Jiti resource loader", async () => {
       await writeFile(join(agentDir, "auth.json"), JSON.stringify({ openai: credential, "openai-codex": companion }), {
         mode: 0o600,
       });
-      await writeFile(join(agentDir, "pi-usage.json"), JSON.stringify({ openaiCompanionUsage: false }));
+      await writeFile(
+        join(agentDir, "pi-usage.json"),
+        JSON.stringify({
+          openaiCompanionUsage: false,
+          statuslineDisplay: {
+            template: "[{windows}] {provider}",
+            countdown: "{window}:{value} ↻ {reset}",
+            separator: " / ",
+          },
+        }),
+      );
       const registry = (context.ctx as ExtensionContext).modelRegistry;
       Object.assign(registry, {
         getAll: () => [model, { ...model, provider: "openai-codex", baseUrl: "https://chatgpt.com/backend-api/codex" }],
@@ -142,7 +152,7 @@ test("generated runtime is loadable by Pi's Jiti resource loader", async () => {
         return new Response(JSON.stringify(payload));
       });
       await command.handler("", context.ctx);
-      assert.equal(context.statuses.get("usage"), "cmd 89% ↻ 3m · wk:97%");
+      assert.equal(context.statuses.get("usage"), "[5h:89% ↻ 3m / wk:97%] cmd");
     } finally {
       for (const handler of extension.handlers.get("session_shutdown") ?? []) await handler({}, context.ctx);
     }
