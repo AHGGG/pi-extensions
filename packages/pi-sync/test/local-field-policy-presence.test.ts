@@ -50,17 +50,21 @@ test("opting a sibling setup into v4 leaves absent policy, identity, baseline an
     await push(ctx, options, undefined, () => backend);
     const before = await loadConfig();
     const beforeState = await readStateForConfig(before);
-    await updateLocalConfig((current) => ({
-      ...current,
-      version: 4,
-      syncSetups: {
-        ...current.syncSetups,
-        sibling: {
-          storage: { ...current.syncSetups.home!.storage, path: "pi-sync/sibling" },
-          sync: { ...current.syncSetups.home!.sync, localFields: ["machine"] },
+    await updateLocalConfig((current) => {
+      const home = current.syncSetups.home;
+      assert.ok(home);
+      return {
+        ...current,
+        version: 4,
+        syncSetups: {
+          ...current.syncSetups,
+          sibling: {
+            storage: { ...home.storage, path: "pi-sync/sibling" },
+            sync: { ...home.sync, localFields: ["machine"] },
+          },
         },
-      },
-    }));
+      };
+    });
     const after = await loadConfig();
     assert.equal(after.localFields, undefined);
     assert.equal(syncConfigReviewIdentity(after), syncConfigReviewIdentity(before));
@@ -75,7 +79,9 @@ test("opting a sibling setup into v4 leaves absent policy, identity, baseline an
     const remote = await backend.readSnapshot(head.snapshotRef);
     assert.equal(remote.version, 1);
     assert.equal(remote.localFields, undefined);
-    assert.match(Buffer.from(remote.files[0]!.contentBase64, "base64").toString(), /portable-until-opt-in/);
+    const file = remote.files[0];
+    assert.ok(file);
+    assert.match(Buffer.from(file.contentBase64, "base64").toString(), /portable-until-opt-in/);
     assert.equal((await readStateForConfig(after)).localFields, undefined);
   }));
 
@@ -110,14 +116,18 @@ test("explicit empty policy requires migration from an accepted absent policy", 
     const backend = new MemorySyncBackend();
     await push(ctx, options, undefined, () => backend);
     const state = await readStateForConfig(await loadConfig());
-    await updateLocalConfig((current) => ({
-      ...current,
-      version: 4,
-      syncSetups: {
-        ...current.syncSetups,
-        home: { ...current.syncSetups.home!, sync: { ...current.syncSetups.home!.sync, localFields: [] } },
-      },
-    }));
+    await updateLocalConfig((current) => {
+      const home = current.syncSetups.home;
+      assert.ok(home);
+      return {
+        ...current,
+        version: 4,
+        syncSetups: {
+          ...current.syncSetups,
+          home: { ...home, sync: { ...home.sync, localFields: [] } },
+        },
+      };
+    });
     assert.equal(syncPolicyChanged(state, await loadConfig()), true);
     await assert.rejects(
       syncBoth(ctx, options, () => backend),

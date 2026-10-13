@@ -117,13 +117,17 @@ test("unresolved group review is conditional and does not replace content-list r
 
 test("empty content retains Settings, History and Diagnostics without transfer shortcuts", async () => {
   await configured(async () => {
-    await updateLocalConfig((settings) => ({
-      ...settings,
-      syncSetups: {
-        ...settings.syncSetups,
-        home: { ...settings.syncSetups.home!, sync: { include: [], automatic: false } },
-      },
-    }));
+    await updateLocalConfig((settings) => {
+      const home = settings.syncSetups.home;
+      assert.ok(home);
+      return {
+        ...settings,
+        syncSetups: {
+          ...settings.syncSetups,
+          home: { ...home, sync: { include: [], automatic: false } },
+        },
+      };
+    });
     assert.deepEqual((await describeManagerState()).actions, ["Settings", "History", "Diagnostics"]);
   });
 });
@@ -274,16 +278,20 @@ for (const row of ["Storage location", "Manage sync setups", "Manage storage con
         mode: "tui",
         input: async () => {
           inputs++;
-          await updateLocalConfig((settings) => ({
-            ...settings,
-            syncSetups: {
-              ...settings.syncSetups,
-              home: {
-                ...settings.syncSetups.home!,
-                storage: { ...settings.syncSetups.home!.storage, path: "refreshed" },
+          await updateLocalConfig((settings) => {
+            const home = settings.syncSetups.home;
+            assert.ok(home);
+            return {
+              ...settings,
+              syncSetups: {
+                ...settings.syncSetups,
+                home: {
+                  ...home,
+                  storage: { ...home.storage, path: "refreshed" },
+                },
               },
-            },
-          }));
+            };
+          });
           return undefined;
         },
       });

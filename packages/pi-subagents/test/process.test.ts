@@ -126,7 +126,7 @@ test("buildPiArgs loads native codemode only when selected and verifies readines
   for (const tools of [["codemode"], ["read", "codemode", "codemode"]]) {
     const args = buildPiArgs(childRequest({ tools }));
     assert.deepEqual(
-      args.filter((argument, index) => args[index - 1] === "-e"),
+      args.filter((_argument, index) => args[index - 1] === "-e"),
       [childCommunicationBridgePath(), "builtin:codemode", childReadinessProbePath()],
     );
     assert.equal(
