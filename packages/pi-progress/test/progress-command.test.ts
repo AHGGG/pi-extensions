@@ -86,12 +86,12 @@ for (const mode of ["tui", "rpc"] as const) {
       await setProgress(harness, current.ctx, [{ text: "done", status: "completed" }]);
       assert.equal(vi.getTimerCount(), 1);
       const widgetCount = current.widgets.length;
-      for (const args of ["", "  ", "unknown", "Clear", "clear extra", "clear clear"]) {
+      for (const args of ["unknown", "Clear", "clear extra", "clear clear", "settings extra"]) {
         await clearWidget(harness, current.ctx, args);
         assert.equal(current.widgets.length, widgetCount);
         assert.equal(vi.getTimerCount(), 1);
         assert.deepEqual(current.notifications.at(-1), {
-          message: "Usage: /progress clear | /progress settings",
+          message: "Usage: /progress | /progress clear | /progress settings",
           type: "warning",
         });
       }

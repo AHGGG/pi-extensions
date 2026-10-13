@@ -26,8 +26,9 @@ interface ProgressSettingsUIOptions {
 export async function showProgressSettings(
   ctx: ExtensionCommandContext,
   options: ProgressSettingsUIOptions,
-): Promise<void> {
+): Promise<"back" | "close" | "stale"> {
   let queue = Promise.resolve();
+  let reason: "back" | "close" | "stale" = "stale";
   try {
     await ctx.ui.custom<void>((tui, theme, _keybindings, done) => {
       const controller = new AbortController();
@@ -35,12 +36,14 @@ export async function showProgressSettings(
       let closing = false;
       const revisions = new Map<string, number>();
       const current = () => !signal.aborted && options.isCurrent();
-      const close = () => {
+      const close = (nextReason: "back" | "close" | "stale") => {
         if (closing) return;
         closing = true;
+        reason = nextReason;
         controller.abort();
         done();
       };
+      const cancelOwner = () => close("stale");
       const initial = options.get();
       const items: SettingItem[] = [
         {
@@ -127,10 +130,10 @@ export async function showProgressSettings(
             tui.requestRender();
           });
         },
-        close,
+        () => close("back"),
       );
-      options.signal.addEventListener("abort", close, { once: true });
-      if (!current()) close();
+      options.signal.addEventListener("abort", cancelOwner, { once: true });
+      if (!current()) cancelOwner();
       return {
         render(width: number) {
           return [
@@ -143,20 +146,21 @@ export async function showProgressSettings(
         invalidate: () => list.invalidate(),
         handleInput(data: string) {
           if (closing || !current()) return;
-          if (matchesKey(data, Key.ctrl("c"))) close();
+          if (matchesKey(data, Key.ctrl("c"))) close("close");
           else list.handleInput(data);
           tui.requestRender();
         },
         dispose() {
           controller.abort();
-          options.signal.removeEventListener("abort", close);
-          if (!closing) close();
+          options.signal.removeEventListener("abort", cancelOwner);
+          if (!closing) cancelOwner();
         },
       };
     });
   } finally {
     await queue;
   }
+  return options.signal.aborted || !options.isCurrent() ? "stale" : reason;
 }
 
 function formatValue(value: ProgressSettings[keyof ProgressSettings]): string {

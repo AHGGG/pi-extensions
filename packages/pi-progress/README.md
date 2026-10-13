@@ -93,13 +93,17 @@ Its guidance recommends updates for meaningful progress changes, skips simple ta
 
 ## 💬 Commands
 
-`/progress` is the extension's only slash command, with autocomplete for both routes:
+`/progress` opens the main menu in TUI or RPC mode. It shows current widget state and offers Settings, Status, Help, and Hide widget.
+Settings opens the same TUI settings screen as the direct route; RPC reports the file path. Status and Help are read-only views.
+Back returns to the main menu; Ctrl+C closes the flow.
+
+Direct routes remain available, with autocomplete:
 
 - `/progress clear` hides the widget and cancels its completion-summary timer in TUI or RPC mode. Saved progress remains unchanged; the next update, branch navigation, or session start can show it again.
 - `/progress settings` opens the display settings screen in TUI mode. RPC mode reports the settings path for manual editing.
 
-No subcommand, unknown subcommands, and trailing arguments show usage without changing state.
-Print and JSON modes reject both routes. Neither route changes conversation history.
+Unknown subcommands and trailing arguments show usage without changing state.
+Print and JSON modes reject the menu and both direct routes. These commands do not change conversation history.
 
 ## 🛠️ Tools
 
@@ -222,6 +226,7 @@ packages/pi-progress/
 │   ├── progress-widget.ts             # Tool/command registration and session/widget lifecycle
 │   ├── progress-state.ts              # Validation, history decoding, and context reconciliation
 │   ├── progress-renderer.ts           # Bounded sanitized widget rendering
+│   ├── progress-menu.ts               # Kit main menu and read-only Status/Help views
 │   ├── progress-settings-ui.ts        # Display settings screen and save lifecycle
 │   └── settings.ts                    # Validated settings reads and atomic queued saves
 ├── dist/                              # Generated Jiti runtime
