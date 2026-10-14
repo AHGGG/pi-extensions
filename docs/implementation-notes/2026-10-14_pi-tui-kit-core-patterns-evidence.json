@@ -1,0 +1,474 @@
+{
+  "before-1": {
+    "iterations": 8,
+    "samples": 7,
+    "results": [
+      {
+        "document": "prose",
+        "workload": "search-preparation",
+        "medianMs": 34.914957999999956,
+        "madMs": 1.278415999999993,
+        "samplesMs": [
+          38.665459, 39.34062499999999, 33.95220800000004, 38.167125, 34.914957999999956, 33.89933400000001,
+          33.63654199999996
+        ],
+        "outputSha256": "31dde247f9d2f05228beaf239c2025699024484e46408f2cd8537f2fc1e4f534"
+      },
+      {
+        "document": "prose",
+        "workload": "alternating-width",
+        "medianMs": 27.363874999999894,
+        "madMs": 0.1850840000001881,
+        "samplesMs": [
+          27.363874999999894, 27.297083000000043, 27.54895900000008, 27.20799999999997, 27.72874999999999,
+          27.094291999999996, 27.670624999999973
+        ],
+        "outputSha256": "450ecaef8a17a9aae9952cd1592277c8e7b03e82d7d0fa45deb9591ba6ed0503"
+      },
+      {
+        "document": "prose",
+        "workload": "theme-invalidation",
+        "medianMs": 32.449333000000024,
+        "madMs": 0.2949580000000651,
+        "samplesMs": [
+          32.15437499999996, 32.449333000000024, 32.18979200000001, 32.10408300000006, 35.85279200000002,
+          33.54224999999997, 32.46116600000005
+        ],
+        "outputSha256": "e0924b887e965db5bfccdb08718c691fc33285f53d32dc0a859786ec30335bcb"
+      },
+      {
+        "document": "tables",
+        "workload": "search-preparation",
+        "medianMs": 120.69670799999994,
+        "madMs": 8.731500000000324,
+        "samplesMs": [
+          120.69670799999994, 156.39112499999965, 147.52166699999998, 127.73466699999972, 116.05849999999964,
+          111.96520799999962, 111.7351249999997
+        ],
+        "outputSha256": "eb7774797f073d3f89c2a83dffdd400fc2d4baa1c98b7722163a1e2650747239"
+      },
+      {
+        "document": "tables",
+        "workload": "alternating-width",
+        "medianMs": 102.28854200000023,
+        "madMs": 1.42379099999971,
+        "samplesMs": [
+          104.53237500000023, 103.71233299999994, 104.27579199999991, 100.86654199999975, 100.30904199999986,
+          101.10654200000045, 102.28854200000023
+        ],
+        "outputSha256": "01d765c0f841befe7995d05fd74f8246e3d45412bc1c756aad61053916692670"
+      },
+      {
+        "document": "tables",
+        "workload": "theme-invalidation",
+        "medianMs": 110.21795899999961,
+        "madMs": 0.8760419999998703,
+        "samplesMs": [
+          110.21795899999961, 110.98033300000043, 108.69062500000018, 108.74812500000007, 109.34191699999974,
+          110.28358399999979, 111.2569169999997
+        ],
+        "outputSha256": "28c34f7a933151c6ec970f0d29d6e8d7e660be61bbb3dc5e4fe13a2f519ee08b"
+      }
+    ]
+  },
+  "before-2": {
+    "iterations": 8,
+    "samples": 7,
+    "results": [
+      {
+        "document": "prose",
+        "workload": "search-preparation",
+        "medianMs": 36.072917000000075,
+        "madMs": 1.9002080000000205,
+        "samplesMs": [
+          38.89666600000004, 38.15929199999999, 34.21870799999999, 37.56304200000005, 34.172709000000054,
+          33.96991600000001, 36.072917000000075
+        ],
+        "outputSha256": "31dde247f9d2f05228beaf239c2025699024484e46408f2cd8537f2fc1e4f534"
+      },
+      {
+        "document": "prose",
+        "workload": "alternating-width",
+        "medianMs": 36.17166599999996,
+        "madMs": 0.15183400000000802,
+        "samplesMs": [
+          35.571500000000015, 36.540250000000015, 36.7739170000001, 36.09050000000002, 36.15916699999991,
+          36.17166599999996, 36.32349999999997
+        ],
+        "outputSha256": "450ecaef8a17a9aae9952cd1592277c8e7b03e82d7d0fa45deb9591ba6ed0503"
+      },
+      {
+        "document": "prose",
+        "workload": "theme-invalidation",
+        "medianMs": 35.75958300000002,
+        "madMs": 1.304540999999972,
+        "samplesMs": [
+          43.115125000000035, 41.648624999999925, 35.68999999999994, 34.45504200000005, 50.13599999999997,
+          35.75958300000002, 35.24537499999997
+        ],
+        "outputSha256": "e0924b887e965db5bfccdb08718c691fc33285f53d32dc0a859786ec30335bcb"
+      },
+      {
+        "document": "tables",
+        "workload": "search-preparation",
+        "medianMs": 110.31070799999998,
+        "madMs": 1.2552909999997155,
+        "samplesMs": [
+          130.01812500000005, 116.72912500000007, 111.29770800000006, 109.05541700000026, 108.46979099999999,
+          110.31070799999998, 109.4223750000001
+        ],
+        "outputSha256": "eb7774797f073d3f89c2a83dffdd400fc2d4baa1c98b7722163a1e2650747239"
+      },
+      {
+        "document": "tables",
+        "workload": "alternating-width",
+        "medianMs": 103.75316699999985,
+        "madMs": 0.34266600000000835,
+        "samplesMs": [
+          104.09583299999986, 103.92616700000008, 103.86437499999965, 103.75316699999985, 102.6010839999999,
+          102.16916700000002, 102.74850000000015
+        ],
+        "outputSha256": "01d765c0f841befe7995d05fd74f8246e3d45412bc1c756aad61053916692670"
+      },
+      {
+        "document": "tables",
+        "workload": "theme-invalidation",
+        "medianMs": 109.53195900000037,
+        "madMs": 0.7207909999992808,
+        "samplesMs": [
+          108.68816700000025, 109.09937500000024, 108.83233299999984, 110.25274999999965, 109.53195900000037,
+          111.24049999999988, 111.55524999999943
+        ],
+        "outputSha256": "28c34f7a933151c6ec970f0d29d6e8d7e660be61bbb3dc5e4fe13a2f519ee08b"
+      }
+    ]
+  },
+  "after-1": {
+    "iterations": 8,
+    "samples": 7,
+    "results": [
+      {
+        "document": "prose",
+        "workload": "search-preparation",
+        "medianMs": 24.710083999999995,
+        "madMs": 0.8188749999999914,
+        "samplesMs": [
+          25.695249999999987, 25.528958999999986, 24.710083999999995, 25.656916000000024, 24.135875, 23.466875000000016,
+          23.90016700000001
+        ],
+        "outputSha256": "31dde247f9d2f05228beaf239c2025699024484e46408f2cd8537f2fc1e4f534"
+      },
+      {
+        "document": "prose",
+        "workload": "alternating-width",
+        "medianMs": 19.734500000000025,
+        "madMs": 0.35191600000007384,
+        "samplesMs": [
+          20.47225000000003, 19.734500000000025, 19.417374999999993, 19.38258399999995, 19.566125000000056,
+          21.242541000000074, 20.820666999999958
+        ],
+        "outputSha256": "450ecaef8a17a9aae9952cd1592277c8e7b03e82d7d0fa45deb9591ba6ed0503"
+      },
+      {
+        "document": "prose",
+        "workload": "theme-invalidation",
+        "medianMs": 23.077708999999913,
+        "madMs": 0.4948339999998552,
+        "samplesMs": [
+          24.453874999999925, 24.80833300000006, 24.698499999999967, 23.04245800000001, 22.582875000000058,
+          22.955708999999956, 23.077708999999913
+        ],
+        "outputSha256": "d1248dc0869e732cdb2fb2c13b9d8854465d198a23e61e13435558712d413683"
+      },
+      {
+        "document": "tables",
+        "workload": "search-preparation",
+        "medianMs": 137.39799999999968,
+        "madMs": 19.372541999999612,
+        "samplesMs": [
+          144.27858300000003, 118.02545800000007, 116.4386669999999, 157.46900000000005, 154.66816700000004,
+          137.39799999999968, 114.11741699999993
+        ],
+        "outputSha256": "eb7774797f073d3f89c2a83dffdd400fc2d4baa1c98b7722163a1e2650747239"
+      },
+      {
+        "document": "tables",
+        "workload": "alternating-width",
+        "medianMs": 97.5858330000001,
+        "madMs": 0.46366600000010294,
+        "samplesMs": [
+          100.73362499999985, 97.25970899999993, 107.71279199999981, 98.58883300000025, 97.18237499999987,
+          97.12216699999999, 97.5858330000001
+        ],
+        "outputSha256": "01d765c0f841befe7995d05fd74f8246e3d45412bc1c756aad61053916692670"
+      },
+      {
+        "document": "tables",
+        "workload": "theme-invalidation",
+        "medianMs": 106.72454199999993,
+        "madMs": 0.7062080000000606,
+        "samplesMs": [
+          107.43074999999999, 106.72454199999993, 105.51979200000005, 115.62745799999993, 106.13279199999988,
+          106.63841700000012, 109.85499999999956
+        ],
+        "outputSha256": "d20307e5daa28bc6712c8bfce8c733195f4c2d0271b99c2596bcdaea8349031f"
+      }
+    ]
+  },
+  "after-2": {
+    "iterations": 8,
+    "samples": 7,
+    "results": [
+      {
+        "document": "prose",
+        "workload": "search-preparation",
+        "medianMs": 24.472000000000037,
+        "madMs": 0.9332499999999868,
+        "samplesMs": [
+          25.470625000000013, 25.80450000000002, 24.472000000000037, 25.828666999999996, 24.03112500000003,
+          23.53875000000005, 23.75758300000001
+        ],
+        "outputSha256": "31dde247f9d2f05228beaf239c2025699024484e46408f2cd8537f2fc1e4f534"
+      },
+      {
+        "document": "prose",
+        "workload": "alternating-width",
+        "medianMs": 20.052458,
+        "madMs": 0.6211240000000089,
+        "samplesMs": [
+          22.908749999999998, 20.487208000000066, 19.431333999999993, 19.137040999999954, 20.052458, 19.33541600000001,
+          20.462957999999958
+        ],
+        "outputSha256": "450ecaef8a17a9aae9952cd1592277c8e7b03e82d7d0fa45deb9591ba6ed0503"
+      },
+      {
+        "document": "prose",
+        "workload": "theme-invalidation",
+        "medianMs": 22.912667000000056,
+        "madMs": 0.14479099999994105,
+        "samplesMs": [
+          23.807999999999993, 22.912667000000056, 22.743624999999952, 22.745666999999912, 22.769166999999925,
+          22.989832999999976, 23.057457999999997
+        ],
+        "outputSha256": "d1248dc0869e732cdb2fb2c13b9d8854465d198a23e61e13435558712d413683"
+      },
+      {
+        "document": "tables",
+        "workload": "search-preparation",
+        "medianMs": 140.49224999999979,
+        "madMs": 5.75,
+        "samplesMs": [
+          142.06445800000006, 145.85016599999994, 116.37587500000018, 116.15274999999997, 140.49224999999979,
+          146.24224999999979, 130.6648750000004
+        ],
+        "outputSha256": "eb7774797f073d3f89c2a83dffdd400fc2d4baa1c98b7722163a1e2650747239"
+      },
+      {
+        "document": "tables",
+        "workload": "alternating-width",
+        "medianMs": 109.13175000000001,
+        "madMs": 9.218207999999777,
+        "samplesMs": [
+          99.91354200000023, 97.63245899999993, 118.15666699999974, 131.60404100000005, 131.80454199999986,
+          108.20245900000009, 109.13175000000001
+        ],
+        "outputSha256": "01d765c0f841befe7995d05fd74f8246e3d45412bc1c756aad61053916692670"
+      },
+      {
+        "document": "tables",
+        "workload": "theme-invalidation",
+        "medianMs": 109.68204100000003,
+        "madMs": 3.1479580000004717,
+        "samplesMs": [
+          134.7870829999997, 127.60183299999971, 116.46083299999964, 108.00845899999968, 106.53408299999955,
+          109.68204100000003, 108.37579099999948
+        ],
+        "outputSha256": "d20307e5daa28bc6712c8bfce8c733195f4c2d0271b99c2596bcdaea8349031f"
+      }
+    ]
+  },
+  "final": {
+    "iterations": 8,
+    "samples": 7,
+    "results": [
+      {
+        "document": "prose",
+        "workload": "search-preparation",
+        "medianMs": 41.08470799999998,
+        "madMs": 3.646582999999964,
+        "samplesMs": [
+          49.11237500000004, 52.003625, 41.08470799999998, 40.998666000000014, 43.574250000000006, 37.438125000000014,
+          35.95450000000005
+        ],
+        "outputSha256": "31dde247f9d2f05228beaf239c2025699024484e46408f2cd8537f2fc1e4f534"
+      },
+      {
+        "document": "prose",
+        "workload": "alternating-width",
+        "medianMs": 41.01791700000001,
+        "madMs": 4.561500000000024,
+        "samplesMs": [
+          31.455375000000004, 49.666458000000034, 47.797541000000024, 41.84895800000004, 41.01791700000001,
+          36.45641699999999, 38.511167
+        ],
+        "outputSha256": "450ecaef8a17a9aae9952cd1592277c8e7b03e82d7d0fa45deb9591ba6ed0503"
+      },
+      {
+        "document": "prose",
+        "workload": "theme-invalidation",
+        "medianMs": 39.877250000000004,
+        "madMs": 2.3700830000000224,
+        "samplesMs": [
+          39.949292000000014, 41.030500000000075, 39.877250000000004, 36.99954200000002, 35.887249999999995,
+          42.247333000000026, 33.38583300000005
+        ],
+        "outputSha256": "e0924b887e965db5bfccdb08718c691fc33285f53d32dc0a859786ec30335bcb"
+      },
+      {
+        "document": "tables",
+        "workload": "search-preparation",
+        "medianMs": 129.03791699999965,
+        "madMs": 13.756750000000466,
+        "samplesMs": [
+          113.19820800000002, 115.71954200000005, 143.51245799999992, 144.96508300000005, 142.79466700000012,
+          118.42233300000044, 129.03791699999965
+        ],
+        "outputSha256": "eb7774797f073d3f89c2a83dffdd400fc2d4baa1c98b7722163a1e2650747239"
+      },
+      {
+        "document": "tables",
+        "workload": "alternating-width",
+        "medianMs": 100.68029100000012,
+        "madMs": 1.2699579999998605,
+        "samplesMs": [
+          131.64691600000015, 118.4842920000001, 103.19887499999959, 99.61741699999993, 100.30154200000015,
+          100.68029100000012, 99.41033300000026
+        ],
+        "outputSha256": "01d765c0f841befe7995d05fd74f8246e3d45412bc1c756aad61053916692670"
+      },
+      {
+        "document": "tables",
+        "workload": "theme-invalidation",
+        "medianMs": 109.39300000000003,
+        "madMs": 0.3538750000006985,
+        "samplesMs": [
+          108.40025000000014, 108.62483300000031, 109.39300000000003, 110.3355419999998, 109.66137499999968,
+          109.74687500000073, 109.31429200000002
+        ],
+        "outputSha256": "28c34f7a933151c6ec970f0d29d6e8d7e660be61bbb3dc5e4fe13a2f519ee08b"
+      }
+    ]
+  },
+  "inputProbe": [
+    {
+      "name": "default",
+      "width": 20,
+      "focusedFrame": "> abc               ",
+      "expected": "Xabc",
+      "actual": "Xabc",
+      "pointerResult": {
+        "handled": true,
+        "focus": true
+      }
+    },
+    {
+      "name": "custom",
+      "width": 20,
+      "focusedFrame": "Search: abc         ",
+      "expected": "Xabc",
+      "actual": "abcX",
+      "pointerResult": {
+        "handled": true,
+        "focus": true
+      }
+    },
+    {
+      "name": "preserved-UX",
+      "width": 20,
+      "focusedFrame": "Search: > abc       ",
+      "expected": "Xabc",
+      "actual": "abcX",
+      "pointerResult": {
+        "handled": true,
+        "focus": true
+      }
+    },
+    {
+      "name": "default-scrolled",
+      "width": 8,
+      "focusedFrame": "> fghij ",
+      "expected": "abcdeXfghij",
+      "actual": "abcdeXfghij",
+      "pointerResult": {
+        "handled": true,
+        "focus": true
+      }
+    },
+    {
+      "name": "custom-scrolled",
+      "width": 14,
+      "focusedFrame": "Search: fghij ",
+      "expected": "abcdeXfghij",
+      "actual": "abcdefghijX",
+      "pointerResult": {
+        "handled": true,
+        "focus": true
+      }
+    },
+    {
+      "name": "default-wide",
+      "width": 24,
+      "focusedFrame": "> 你🙂abc               ",
+      "expected": "X你🙂abc",
+      "actual": "X你🙂abc",
+      "pointerResult": {
+        "handled": true,
+        "focus": true
+      }
+    },
+    {
+      "name": "custom-wide",
+      "width": 24,
+      "focusedFrame": "Search: 你🙂abc         ",
+      "expected": "X你🙂abc",
+      "actual": "你🙂abXc",
+      "pointerResult": {
+        "handled": true,
+        "focus": true
+      }
+    },
+    {
+      "name": "wide-prompt",
+      "width": 20,
+      "focusedFrame": "你: abc             ",
+      "expected": "Xabc",
+      "actual": "abXc",
+      "pointerResult": {
+        "handled": true,
+        "focus": true
+      }
+    },
+    {
+      "name": "narrow",
+      "width": 3,
+      "focusedFrame": "Sea",
+      "expected": null,
+      "actual": "abcX",
+      "pointerResult": {
+        "handled": true,
+        "focus": true
+      }
+    },
+    {
+      "name": "zero",
+      "width": 0,
+      "focusedFrame": "",
+      "expected": null,
+      "actual": "abcX",
+      "pointerResult": {
+        "handled": true,
+        "focus": true
+      }
+    }
+  ]
+}

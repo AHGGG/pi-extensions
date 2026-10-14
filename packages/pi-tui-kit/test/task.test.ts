@@ -1,10 +1,81 @@
 import assert from "node:assert/strict";
 import { initTheme } from "@earendil-works/pi-coding-agent";
-import { test } from "vitest";
+import { Loader, stripTerminalSequences, type TUI, visibleWidth } from "@earendil-works/pi-tui";
+import { test, vi } from "vitest";
 import { createCustomSelectorHarness, createMockContext } from "../../../test/support.js";
+import type { MenuKeybindings } from "../src/components/contracts.js";
+import { TaskLoader } from "../src/components/task-loader.js";
 import { runTask } from "../src/index.js";
 
 initTheme("dark", false);
+
+test("TaskLoader rebuilds callback-theme colors without changing hint text", () => {
+  let color = 31;
+  const harness = createCustomSelectorHarness(
+    (tui: TUI, _theme: unknown, keys: MenuKeybindings) =>
+      new TaskLoader(tui, { fg: (_role, text) => `\u001b[${color}m${text}\u001b[0m` }, keys, "Loading"),
+  );
+  try {
+    const before = harness.render().join("\n");
+    color = 32;
+    harness.invalidate();
+    const after = harness.render().join("\n");
+    assert.equal(stripTerminalSequences(after), stripTerminalSequences(before));
+    assert.ok(after.includes("\u001b[32mescape/ctrl+c"));
+    assert.equal(after.includes("\u001b[31m"), false);
+  } finally {
+    harness.dispose();
+  }
+});
+
+test("TaskLoader bounds resized lines and stops its timer exactly once", () => {
+  vi.useFakeTimers();
+  try {
+    for (const cancellable of [true, false]) {
+      let renders = 0;
+      const loader = new TaskLoader(
+        {
+          requestRender: () => {
+            renders += 1;
+          },
+        } as unknown as TUI,
+        { fg: (_role, text) => text },
+        { matches: (data, binding) => binding === "tui.select.cancel" && data === "x", getKeys: () => ["x"] },
+        "Loading 你🙂",
+        { cancellable },
+      );
+      const spinner = loader.children.find((child) => child instanceof Loader) as Loader;
+      const stop = vi.spyOn(spinner, "stop");
+      let aborts = 0;
+      loader.onAbort = () => {
+        aborts += 1;
+      };
+      try {
+        for (const width of [40, 2.8, 2, 1, 0.5, 0, -1, Number.NaN, Number.POSITIVE_INFINITY, 20]) {
+          const lines = loader.render(width);
+          if (!Number.isFinite(width) || width < 1) assert.deepEqual(lines, []);
+          else for (const line of lines) assert.ok(visibleWidth(line) <= width);
+        }
+        loader.handleInput("x");
+        loader.handleInput("\u0003");
+        assert.equal(aborts, cancellable ? 2 : 0);
+        assert.equal(loader.render(40).join("\n").includes("cancel"), cancellable);
+      } finally {
+        loader.dispose();
+        loader.dispose();
+      }
+      loader.handleInput("x");
+      assert.equal(aborts, cancellable ? 2 : 0);
+      assert.equal(stop.mock.calls.length, 1);
+      const stoppedRenders = renders;
+      vi.advanceTimersByTime(160);
+      assert.equal(renders, stoppedRenders);
+      stop.mockRestore();
+    }
+  } finally {
+    vi.useRealTimers();
+  }
+});
 
 test("runTask executes directly outside TUI without opening custom UI", async () => {
   let customCalls = 0;

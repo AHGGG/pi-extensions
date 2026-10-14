@@ -188,6 +188,7 @@ Owner replacement remains `stale` and takes precedence over any racing Close eve
 For abort-aware work outside a menu, use `runTask()`.
 TUI mode shows the Kit's Pi-styled cancellable bordered loader; RPC, print, and JSON execute the same task directly.
 The effective cancellation bindings are shown in the loader, and Ctrl+C remains a hard-cancel input when those bindings are remapped.
+The loader rebuilds hint colors after theme invalidation and bounds each line after resize; widths below one cell or non-finite widths produce no rows.
 User cancellation, owner replacement, external component disposal, errors, and successful completion remain distinct typed results.
 
 ```ts
