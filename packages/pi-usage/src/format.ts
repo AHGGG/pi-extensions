@@ -1,4 +1,11 @@
 import type { CodexStatusPercentage } from "./settings.js";
+import {
+  renderQuotaStatusline,
+  renderQuotaWindow,
+  resolveStatuslineDisplay,
+  type StatuslineDisplay,
+  safeStatuslineText,
+} from "./statusline-display.js";
 import type { ProviderUsageState, UsageBucket, UsageDisplayState, UsageModel, UsageReport } from "./types.js";
 
 const BAR_SEGMENTS = 20;
@@ -60,6 +67,50 @@ export function formatUsageStatusline(
   now = Date.now(),
   showCodexResetCountdown = true,
   codexStatusPercentage: CodexStatusPercentage = "remaining",
+  display: Partial<StatuslineDisplay> = {},
+): string | undefined {
+  return formatUsageStatuslineWithCountdown(report, model, now, showCodexResetCountdown, codexStatusPercentage, display)
+    .value;
+}
+
+interface StatusCountdown {
+  now: number;
+  active: boolean;
+  display: StatuslineDisplay;
+}
+
+// Record new-provider eligibility while formatting the selected windows so repaint cannot drift from display policy.
+// Codex and ChatGPT companion keep their existing repaint policy in usage.ts.
+export function formatUsageStatuslineWithCountdown(
+  report: UsageReport,
+  model?: UsageModel,
+  now = Date.now(),
+  showCodexResetCountdown = true,
+  codexStatusPercentage: CodexStatusPercentage = "remaining",
+  display: Partial<StatuslineDisplay> = {},
+  decorateCodexPrefix: (prefix: string) => string = (prefix) => prefix,
+): { value: string | undefined; hasCountdown: boolean } {
+  const countdown: StatusCountdown = { now, active: false, display: resolveStatuslineDisplay(display) };
+  const value = formatStatusline(
+    report,
+    model,
+    now,
+    showCodexResetCountdown,
+    codexStatusPercentage,
+    countdown,
+    decorateCodexPrefix,
+  );
+  return { value, hasCountdown: countdown.active };
+}
+
+function formatStatusline(
+  report: UsageReport,
+  model: UsageModel | undefined,
+  now: number,
+  showCodexResetCountdown: boolean,
+  codexStatusPercentage: CodexStatusPercentage,
+  countdown: StatusCountdown,
+  decorateCodexPrefix: (prefix: string) => string,
 ): string | undefined {
   if (report.providerId === "openai" && report.source === "openai-chatgpt-auth") return "chatgpt usage: web only";
   if (report.source === "openai-chatgpt-companion") {
@@ -74,29 +125,37 @@ export function formatUsageStatusline(
   }
   if (report.providerId === "baseten") return formatBasetenStatusline(report);
   if (report.providerId === "openai-codex") {
-    return formatCodexStatusline(report, model, now, showCodexResetCountdown, codexStatusPercentage);
+    return formatCodexStatusline(
+      report,
+      model,
+      now,
+      showCodexResetCountdown,
+      codexStatusPercentage,
+      countdown.display,
+      decorateCodexPrefix,
+    );
   }
   if (report.providerId === "deepseek") return formatDeepSeekStatusline(report);
   if (report.providerId === "fireworks") return formatFireworksStatusline(report);
   if (report.providerId === "vercel-ai-gateway") return formatVercelAIGatewayStatusline(report);
-  if (report.providerId === "github-copilot") return formatGitHubCopilotStatusline(report);
+  if (report.providerId === "github-copilot") return formatGitHubCopilotStatusline(report, countdown);
   if (report.providerId === "openrouter") {
     const limit = report.buckets.find((bucket) => bucket.id === "key-limit");
     if (limit?.remaining !== undefined) return `openrouter ${formatUsd(limit.remaining)} left`;
     const total = report.metrics.find((metric) => metric.id === "usage-total");
     if (typeof total?.value === "number") return `openrouter ${formatUsd(total.value)} used`;
   }
-  if (report.providerId === "opencode-go") return formatOpenCodeZenStatusline(report);
-  if (report.providerId === "command-code") return formatCommandCodeStatusline(report);
-  if (report.providerId === "kimi-coding") return formatKimiCodingStatusline(report);
+  if (report.providerId === "opencode-go") return formatOpenCodeZenStatusline(report, countdown);
+  if (report.providerId === "command-code") return formatCommandCodeStatusline(report, countdown);
+  if (report.providerId === "kimi-coding") return formatKimiCodingStatusline(report, countdown);
   if (report.providerId === "moonshotai" || report.providerId === "moonshotai-cn") {
     return formatMoonshotStatusline(report);
   }
   if (report.providerId === "minimax" || report.providerId === "minimax-cn") {
-    return formatMiniMaxStatusline(report, model);
+    return formatMiniMaxStatusline(report, countdown, model);
   }
   if (report.providerId === "zai" || report.providerId === "zai-coding-cn") {
-    return formatZaiStatusline(report);
+    return formatZaiStatusline(report, countdown);
   }
   return undefined;
 }
@@ -232,7 +291,7 @@ function formatGitHubCopilotReport(lines: string[], report: UsageReport): void {
   }
 }
 
-function formatGitHubCopilotStatusline(report: UsageReport): string {
+function formatGitHubCopilotStatusline(report: UsageReport, countdown: StatusCountdown): string {
   const quota = findGitHubCopilotQuota(report);
   const kind = compactGitHubCopilotQuotaKind(quota);
   if (!quota || quota.limit === undefined || quota.remaining === undefined) {
@@ -240,7 +299,8 @@ function formatGitHubCopilotStatusline(report: UsageReport): string {
   }
   const overage = report.metrics.find((metric) => metric.id === "overage-used");
   const overageSuffix = typeof overage?.value === "number" && overage.value > 0 ? ` +${overage.value} over` : "";
-  return `copilot ${kind === "premium" ? "" : `${kind} `}${quota.remaining}/${quota.limit} ${percentRemaining(quota)}%${overageSuffix}`;
+  const reset = formatQuotaCountdown(quota, countdown);
+  return `copilot ${kind === "premium" ? "" : `${kind} `}${quota.remaining}/${quota.limit} ${percentRemaining(quota)}%${overageSuffix}${reset ? ` ↻ ${reset}` : ""}`;
 }
 
 function findGitHubCopilotQuota(report: UsageReport): UsageBucket | undefined {
@@ -285,14 +345,14 @@ function formatOpenCodeZenReport(lines: string[], report: UsageReport): void {
   }
 }
 
-function formatOpenCodeZenStatusline(report: UsageReport): string | undefined {
-  const parts = ["zen"];
+function formatOpenCodeZenStatusline(report: UsageReport, countdown: StatusCountdown): string | undefined {
+  const parts: string[] = [];
   for (const bucket of report.buckets) {
     if (bucket.used === undefined) continue;
     const compact = bucket.id === "rolling" ? "r" : bucket.id === "weekly" ? "w" : "m";
-    parts.push(`${clampPercent(bucket.used).toFixed(0)}% ${compact}`);
+    parts.push(formatQuotaWindow(bucket, `${clampPercent(bucket.used).toFixed(0)}%`, compact, countdown));
   }
-  return parts.length > 1 ? parts.join(" ") : undefined;
+  return parts.length > 0 ? renderQuotaStatusline("zen", parts, countdown.display) : undefined;
 }
 
 function formatCommandCodeReport(lines: string[], report: UsageReport): void {
@@ -311,8 +371,8 @@ function formatCommandCodeReport(lines: string[], report: UsageReport): void {
   }
 }
 
-function formatCommandCodeStatusline(report: UsageReport): string | undefined {
-  const parts = ["cmd"];
+function formatCommandCodeStatusline(report: UsageReport, countdown: StatusCountdown): string | undefined {
+  const parts: string[] = [];
   for (const [id, label] of [
     ["five-hour", "5h"],
     ["weekly", "wk"],
@@ -320,9 +380,9 @@ function formatCommandCodeStatusline(report: UsageReport): string | undefined {
   ] as const) {
     const bucket = report.buckets.find((candidate) => candidate.id === id);
     if (bucket?.unit !== "usd" || bucket.limit === undefined || bucket.remaining === undefined) continue;
-    parts.push(`${percentRemaining(bucket)}% ${label}`);
+    parts.push(formatQuotaWindow(bucket, `${percentRemaining(bucket)}%`, label, countdown));
   }
-  return parts.length > 1 ? parts.join(" ") : undefined;
+  return parts.length > 0 ? renderQuotaStatusline("cmd", parts, countdown.display) : undefined;
 }
 
 function formatKimiCodingReport(lines: string[], report: UsageReport): void {
@@ -363,7 +423,7 @@ function formatKimiCodingReport(lines: string[], report: UsageReport): void {
   }
 }
 
-function formatKimiCodingStatusline(report: UsageReport): string | undefined {
+function formatKimiCodingStatusline(report: UsageReport, countdown: StatusCountdown): string | undefined {
   const fiveHour = report.buckets.find((bucket) => bucket.id === "five-hour");
   const weekly = report.buckets.find((bucket) => bucket.id === "weekly");
   const monthly = report.buckets.find((bucket) => bucket.id === "monthly");
@@ -371,15 +431,15 @@ function formatKimiCodingStatusline(report: UsageReport): string | undefined {
   const selected = [subWindow, weekly, monthly].filter(
     (bucket, index, buckets): bucket is UsageBucket => bucket !== undefined && buckets.indexOf(bucket) === index,
   );
-  const parts = ["kimi"];
+  const parts: string[] = [];
   for (const bucket of selected) {
     if (bucket.remaining === undefined || (bucket.unit !== "percent" && !bucket.limit)) continue;
     const fallback = bucket.id === "weekly" ? "weekly" : "5h";
     const window = bucket.id === "monthly" ? "mo" : formatWindowLabel(bucket.windowMinutes, fallback, true);
     const remaining = bucket.unit === "percent" ? Math.round(clampPercent(bucket.remaining)) : percentRemaining(bucket);
-    parts.push(`${remaining}% ${window}`);
+    parts.push(formatQuotaWindow(bucket, `${remaining}%`, window, countdown));
   }
-  return parts.length > 1 ? parts.join(" ") : undefined;
+  return parts.length > 0 ? renderQuotaStatusline("kimi", parts, countdown.display) : undefined;
 }
 
 function formatMoonshotReport(lines: string[], report: UsageReport): void {
@@ -418,7 +478,11 @@ function formatMiniMaxReport(lines: string[], report: UsageReport): void {
   }
 }
 
-function formatMiniMaxStatusline(report: UsageReport, model?: UsageModel): string | undefined {
+function formatMiniMaxStatusline(
+  report: UsageReport,
+  countdown: StatusCountdown,
+  model?: UsageModel,
+): string | undefined {
   const prefix = report.providerId === "minimax-cn" ? "minimax cn" : "minimax";
   if (report.source === "minimax-account-balance") {
     const available = report.metrics.find((metric) => metric.id === "available-balance");
@@ -427,22 +491,22 @@ function formatMiniMaxStatusline(report: UsageReport, model?: UsageModel): strin
   const selectedGroup = selectMiniMaxGroup(report, model);
   if (!selectedGroup) return undefined;
   const selected = report.buckets.filter((bucket) => bucket.groupId === selectedGroup);
-  const parts = [prefix];
+  const parts: string[] = [];
   for (const bucket of selected) {
     const fallback = bucket.id.endsWith(":weekly") ? "weekly" : "5h";
     const window = formatWindowLabel(bucket.windowMinutes, fallback, true);
     if (bucket.period === "unlimited") {
-      parts.push(`unlimited ${window}`);
+      parts.push(renderQuotaWindow("unlimited", window, undefined, countdown.display));
       continue;
     }
     if (bucket.unit === "percent" && bucket.remaining !== undefined) {
-      parts.push(`${bucket.remaining}% ${window}`);
+      parts.push(formatQuotaWindow(bucket, `${bucket.remaining}%`, window, countdown));
       continue;
     }
     if (bucket.limit === undefined || bucket.remaining === undefined) continue;
-    parts.push(`${percentRemaining(bucket)}% ${window}`);
+    parts.push(formatQuotaWindow(bucket, `${percentRemaining(bucket)}%`, window, countdown));
   }
-  return parts.length > 1 ? parts.join(" ") : undefined;
+  return parts.length > 0 ? renderQuotaStatusline(prefix, parts, countdown.display) : undefined;
 }
 
 function selectMiniMaxGroup(report: UsageReport, model?: UsageModel): string | undefined {
@@ -493,18 +557,25 @@ function wildcardKeyMatches(pattern: string, value: string): boolean {
   return pattern.endsWith("*") || (last !== undefined && value.endsWith(last));
 }
 
-function formatZaiStatusline(report: UsageReport): string | undefined {
+function formatZaiStatusline(report: UsageReport, countdown: StatusCountdown): string | undefined {
   const selected = [
     report.buckets.find((bucket) => bucket.id === "five-hour"),
     report.buckets.find((bucket) => bucket.id === "weekly"),
   ];
-  const parts = ["zai"];
+  const parts: string[] = [];
   for (const bucket of selected) {
     if (!bucket?.limit || bucket.remaining === undefined) continue;
     const fallback = bucket.id === "weekly" ? "weekly" : "5h";
-    parts.push(`${percentRemaining(bucket)}% ${formatWindowLabel(bucket.windowMinutes, fallback, true)}`);
+    parts.push(
+      formatQuotaWindow(
+        bucket,
+        `${percentRemaining(bucket)}%`,
+        formatWindowLabel(bucket.windowMinutes, fallback, true),
+        countdown,
+      ),
+    );
   }
-  return parts.length > 1 ? parts.join(" ") : undefined;
+  return parts.length > 0 ? renderQuotaStatusline("zai", parts, countdown.display) : undefined;
 }
 
 function formatCurrencyMetric(metric: UsageReport["metrics"][number]): string {
@@ -595,30 +666,33 @@ function formatGenericReport(lines: string[], report: UsageReport): void {
 
 function formatCodexStatusline(
   report: UsageReport,
-  model?: UsageModel,
-  now = Date.now(),
-  showResetCountdown = true,
-  percentage: CodexStatusPercentage = "remaining",
+  model: UsageModel | undefined,
+  now: number,
+  showResetCountdown: boolean,
+  percentage: CodexStatusPercentage,
+  display: StatuslineDisplay,
+  decoratePrefix: (prefix: string) => string,
 ): string | undefined {
   const group = selectCodexGroup(report, model);
-  if (!group) return formatCodexCreditsStatus(report);
+  if (!group) return decoratePrefix(formatCodexCreditsStatus(report));
   const buckets = report.buckets.filter((bucket) => (bucket.groupId ?? bucket.id) === group);
   const labelBucket = buckets[0];
-  const parts = [group === "codex" ? "codex" : `codex ${compactLimitLabel(labelBucket?.groupLabel ?? group)}`];
+  const prefix = decoratePrefix(
+    group === "codex" ? "codex" : `codex ${compactLimitLabel(safeStatuslineText(labelBucket?.groupLabel ?? group))}`,
+  );
+  const parts: string[] = [];
   for (const bucket of buckets) {
     if (bucket.remaining === undefined) continue;
     const displayedPercentage = percentage === "used" ? (bucket.used ?? 100 - bucket.remaining) : bucket.remaining;
     const percent = `${clampPercent(displayedPercentage).toFixed(0)}%`;
     const fallback = bucket.id.endsWith(":secondary") ? "weekly" : "5h";
     const window = formatWindowLabel(bucket.windowMinutes, fallback, true);
-    if (!showResetCountdown) {
-      parts.push(`${percent} ${window}`);
-      continue;
-    }
-    const reset = formatResetCountdown(bucket.resetsAt, now);
-    parts.push(`${percent} ${reset ? `↻ ${reset}` : window}`);
+    const reset = showResetCountdown ? formatResetCountdown(bucket.resetsAt, now) : undefined;
+    parts.push(renderQuotaWindow(percent, window, reset, display));
   }
-  return parts.length > 1 ? parts.join(" ") : formatCodexCreditsStatus(report);
+  return parts.length > 0
+    ? renderQuotaStatusline(prefix, parts, display)
+    : decoratePrefix(formatCodexCreditsStatus(report));
 }
 
 function formatCodexCreditsStatus(report: UsageReport): string {
@@ -709,6 +783,25 @@ function formatWindowLabel(minutes: number | undefined, fallback: "5h" | "weekly
   if (minutes % 1_440 === 0) return `${minutes / 1_440}d`;
   if (minutes % 60 === 0) return `${minutes / 60}h`;
   return `${minutes}m`;
+}
+
+function formatQuotaWindow(bucket: UsageBucket, percent: string, window: string, countdown: StatusCountdown): string {
+  const reset = formatQuotaCountdown(bucket, countdown);
+  return renderQuotaWindow(percent, window, reset, countdown.display);
+}
+
+function formatQuotaCountdown(bucket: UsageBucket, countdown: StatusCountdown): string | undefined {
+  if (
+    bucket.period === "unlimited" ||
+    bucket.resetsAt === undefined ||
+    !Number.isFinite(bucket.resetsAt * 1_000) ||
+    !Number.isFinite(countdown.now) ||
+    bucket.resetsAt * 1_000 <= countdown.now
+  )
+    return undefined;
+  const reset = formatResetCountdown(bucket.resetsAt, countdown.now);
+  if (reset !== undefined) countdown.active = true;
+  return reset;
 }
 
 function formatResetCountdown(resetsAt: number | undefined, now: number): string | undefined {

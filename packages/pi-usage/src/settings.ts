@@ -4,6 +4,12 @@ import { chmod, mkdir, open, rename, rm, writeFile } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { isFireworksAccountId } from "./providers/fireworks.js";
+import {
+  DEFAULT_STATUSLINE_DISPLAY,
+  resolveStatuslineDisplay,
+  type StatuslineDisplay,
+  statuslineDisplayIssue,
+} from "./statusline-display.js";
 import { isBoundedTargetId } from "./usage-targets.js";
 
 export const USAGE_SETTINGS_FILE = "pi-usage.json";
@@ -16,6 +22,7 @@ export interface UsageSettings {
   codexStatusResetCountdown: boolean;
   codexStatusPercentage: CodexStatusPercentage;
   selectedTargets: Record<string, string>;
+  statuslineDisplay: StatuslineDisplay;
 }
 
 export const DEFAULT_USAGE_SETTINGS: Readonly<UsageSettings> = Object.freeze({
@@ -23,6 +30,7 @@ export const DEFAULT_USAGE_SETTINGS: Readonly<UsageSettings> = Object.freeze({
   codexStatusResetCountdown: true,
   codexStatusPercentage: "remaining",
   selectedTargets: Object.freeze({}),
+  statuslineDisplay: DEFAULT_STATUSLINE_DISPLAY,
 });
 
 export interface UsageSettingsState {
@@ -64,6 +72,7 @@ export function usageSettingsPath(): string {
 
 export function normalizeUsageSettings(value: unknown): UsageSettings | undefined {
   if (!isRecord(value)) return undefined;
+  if (statuslineDisplayIssue(value.statuslineDisplay)) return undefined;
   if (Object.hasOwn(value, "codexFastMode") && typeof value.codexFastMode !== "boolean") {
     return undefined;
   }
@@ -96,6 +105,7 @@ export function normalizeUsageSettings(value: unknown): UsageSettings | undefine
     codexStatusPercentage:
       value.codexStatusPercentage === "used" ? "used" : DEFAULT_USAGE_SETTINGS.codexStatusPercentage,
     selectedTargets: effectiveTargets,
+    statuslineDisplay: resolveStatuslineDisplay(value.statuslineDisplay as Partial<StatuslineDisplay> | undefined),
   };
 }
 
@@ -118,7 +128,13 @@ export async function loadUsageSettings(path = usageSettingsPath(), signal?: Abo
     throwIfAborted(signal);
     const document = JSON.parse(text) as unknown;
     const settings = normalizeUsageSettings(document);
-    if (!settings || !isRecord(document)) throw new Error("invalid settings shape");
+    if (!settings || !isRecord(document)) {
+      throw new Error(
+        isRecord(document)
+          ? (statuslineDisplayIssue(document.statuslineDisplay) ?? "invalid settings shape")
+          : "invalid settings shape",
+      );
+    }
     return { kind: "loaded", path, settings, document };
   } catch (error) {
     if (signal?.aborted) throw error;

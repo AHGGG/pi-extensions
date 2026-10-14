@@ -2,6 +2,7 @@
 // account cache, cancellation, and session lifecycle share one consistency boundary.
 import { randomUUID } from "node:crypto";
 import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { isOfficialCodexModel } from "./codex-fast.js";
 import { FAST_USAGE_WARNING, registerCodexFastMode } from "./codex-fast-runtime.js";
 import {
   type CodexResetAvailability,
@@ -19,7 +20,7 @@ import {
   resolveCodexResetAuth,
 } from "./codex-resets.js";
 import { abortError, awaitWithDeadline, errorMessage, runWithConcurrency, UsageCache } from "./core.js";
-import { formatProviderStates, formatUsageStatusline } from "./format.js";
+import { formatProviderStates, formatUsageStatuslineWithCountdown } from "./format.js";
 import { createOAuthCredentialCandidateReader } from "./oauth-credential-source.js";
 import { UnsupportedOpenAIUsageAuthError } from "./providers/openai-chatgpt.js";
 import {
@@ -180,31 +181,36 @@ export default function usageExtension(pi: ExtensionAPI, dependencies: UsageExte
       outcome.state.report.providerId === "openai-codex" && settings.codexStatusResetCountdown;
     const isCompanionReport = outcome.state.report.source === "openai-chatgpt-companion";
     const now = Date.now();
-    const rawValue = formatUsageStatusline(
+    // Fast belongs to the provider placeholder even when a template moves it after the windows.
+    const status = formatUsageStatuslineWithCountdown(
       outcome.state.report,
       model,
       now,
       showCodexResetCountdown,
       settings.codexStatusPercentage,
+      settings.statuslineDisplay,
+      (prefix) => fastRuntime.decorateStatus(model, prefix),
     );
-    const value = rawValue ? fastRuntime.decorateStatus(model, rawValue) : undefined;
+    const value = status.value;
     if (!safeSetStatus(ctx, value)) return;
     if (shouldSchedule && sessionActive) scheduleStatusRefresh(ctx, model);
     if (
       sessionActive &&
-      (showCodexResetCountdown || isCompanionReport) &&
-      outcome.state.report.buckets.some(
-        (bucket) =>
-          (!isCompanionReport || bucket.groupId === "chatgpt-plan") &&
-          bucket.resetsAt !== undefined &&
-          Number.isFinite(bucket.resetsAt) &&
-          bucket.resetsAt * 1_000 > now,
-      )
+      (status.hasCountdown ||
+        ((showCodexResetCountdown || isCompanionReport) &&
+          outcome.state.report.buckets.some(
+            (bucket) =>
+              (!isCompanionReport || bucket.groupId === "chatgpt-plan") &&
+              bucket.resetsAt !== undefined &&
+              Number.isFinite(bucket.resetsAt) &&
+              bucket.resetsAt * 1_000 > now,
+          )))
     ) {
       const generation = statusGeneration;
       statusCountdownTimer = setTimeout(() => {
-        statusCountdownTimer = undefined;
+        // A queued obsolete callback must not detach its successor's owned timer.
         if (!sessionActive || generation !== statusGeneration) return;
+        statusCountdownTimer = undefined;
         publishStatus(ctx, outcome, model, false);
       }, STATUS_COUNTDOWN_REFRESH_MS);
       statusCountdownTimer.unref?.();
@@ -765,14 +771,27 @@ export default function usageExtension(pi: ExtensionAPI, dependencies: UsageExte
 
   const showMenu = async (ctx: ExtensionCommandContext): Promise<void> => {
     if (!ctx.hasUI) throw new Error("/usage requires TUI or RPC mode.");
-    statusGeneration += 1;
-    const menuGeneration = statusGeneration;
-    statusController?.abort();
-    statusController = undefined;
-    clearStatusTimers();
     const controller = new AbortController();
     activeControllers.add(controller);
     try {
+      if (isOfficialCodexModel(ctx.model)) {
+        const refreshed = await runMenuOperation(
+          ctx,
+          "Checking Codex Fast capability…",
+          controller.signal,
+          async (signal) => {
+            await fastRuntime.refreshCapabilities(ctx, signal);
+            return true;
+          },
+        );
+        if (!refreshed || controller.signal.aborted) return;
+      }
+      // Capability updates can refresh status; take menu ownership after discovery.
+      statusGeneration += 1;
+      const menuGeneration = statusGeneration;
+      statusController?.abort();
+      statusController = undefined;
+      clearStatusTimers();
       let stableCurrent = await queryStableCurrent(ctx, false, controller, "Checking current usage…");
       if (!stableCurrent) return;
       publishStableCurrent(ctx, stableCurrent);
@@ -919,7 +938,9 @@ export default function usageExtension(pi: ExtensionAPI, dependencies: UsageExte
                 ? [`Fast mode: ${fastAvailability.enabled ? "On" : "Off"}`, FAST_USAGE_WARNING]
                 : fastAvailability.kind === "unavailable"
                   ? [`Fast mode: Unavailable · ${fastAvailability.reason}`]
-                  : [];
+                  : fastAvailability.kind === "unknown"
+                    ? [`Fast mode: Unknown · ${fastAvailability.reason}`]
+                    : [];
             return {
               kind: "actions",
               title: "Provider usage",
@@ -936,11 +957,12 @@ export default function usageExtension(pi: ExtensionAPI, dependencies: UsageExte
                       },
                     ]
                   : []),
-                ...(fastAvailability.kind === "available"
+                ...(fastAvailability.kind === "available" ||
+                (fastState.settings.codexFastMode && isOfficialCodexModel(ctx.model))
                   ? [
                       {
                         id: "toggle-fast",
-                        label: fastAvailability.enabled ? "Turn Fast mode off" : "Turn Fast mode on",
+                        label: fastState.settings.codexFastMode ? "Turn Fast mode off" : "Turn Fast mode on",
                         description:
                           fastState.kind === "invalid"
                             ? "Repair pi-usage.json and reload before changing Fast mode."
@@ -1114,10 +1136,11 @@ export default function usageExtension(pi: ExtensionAPI, dependencies: UsageExte
           },
           "toggle-fast": async () => {
             const availability = fastRuntime.availability(ctx.model);
-            if (availability.kind !== "available" || fastState.kind === "invalid") {
+            const enabled = settingsRuntime.get().settings.codexFastMode;
+            if ((availability.kind !== "available" && !enabled) || fastState.kind === "invalid") {
               return { kind: "rejected" };
             }
-            const changed = await fastRuntime.toggle(ctx, !availability.enabled, controller.signal);
+            const changed = await fastRuntime.toggle(ctx, !enabled, controller.signal);
             if (!changed) return { kind: "rejected" };
             fastState = settingsRuntime.get();
             return { kind: "stay" };
@@ -1449,5 +1472,8 @@ export default function usageExtension(pi: ExtensionAPI, dependencies: UsageExte
 
   fastRuntime = registerCodexFastMode(pi, settingsRuntime, (ctx) => startStatusRefresh(ctx, ctx.model, false), {
     registerSessionStart: false,
+    credentialReader,
+    candidateReader: credentialCandidates,
+    timeoutMs: DEFAULT_TIMEOUT_MS,
   });
 }

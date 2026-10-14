@@ -16,6 +16,7 @@ import {
   fingerprintMessage,
   hasActiveCheckpointClaim,
   latestCheckpoint,
+  parseCheckpointDetails,
   REPLACEMENT_BYTE_BUDGET,
 } from "./checkpoint.js";
 import { projectedKeptMessages, projectSessionCheckpointContext } from "./checkpoint-projection.js";
@@ -28,7 +29,8 @@ import {
   observeSseRejections,
   streamOperationRejection,
 } from "./compaction-failure.js";
-import { rewriteCheckpointForReplay, validateContextManagementHistory } from "./context-management.js";
+import { captureCompactionBranch } from "./compaction-ownership.js";
+import { validateContextManagementHistory } from "./context-management.js";
 import {
   type CompactionRoute,
   isChatGPTCompactionCandidate,
@@ -36,7 +38,7 @@ import {
   resolveAuthenticatedCompactionRoute,
   resolveCompactionRoute,
 } from "./model-api.js";
-import { hasCheckpointMarker } from "./protocol.js";
+import { hasCheckpointMarker, rewriteCheckpointMarker } from "./protocol.js";
 import { RejectedRoutes, rejectionRouteKey } from "./rejection-state.js";
 import { requestRemoteCompaction } from "./remote.js";
 import {
@@ -48,6 +50,10 @@ import {
 import { terminalText } from "./terminal.js";
 
 const STATUS_KEY = "codex-compact";
+const CONTINUATION_TYPE = "codex-compact:continue-v1";
+const CONTINUATION_MESSAGE =
+  "Conversation compaction is complete. Continue unfinished work under the original conversation instructions, " +
+  "using tools when needed. If the work is already complete, provide the final result without repeating completed actions.";
 
 function activeCheckpoint(ctx: ExtensionContext) {
   return latestCheckpoint(ctx.sessionManager.getBranch());
@@ -165,8 +171,7 @@ async function compactRemotely(
   if (configuredRoute.kind === "native" || !model)
     return settings.enabled && hasActiveCheckpointClaim(ctx.sessionManager.getBranch()) ? { cancel: true } : undefined;
   let route = configuredRoute;
-  // The menu tracks the configured preference; dispatch identities below use
-  // the authenticated protocol so one rejected operation cannot pause another.
+  // Keep the preference identity stable; the dispatch identity uses resolved auth.
   const publicRouteKey = rejectionRouteKey(model, configuredRoute);
   let routeKey = publicRouteKey;
   let endpointObserved = false;
@@ -174,9 +179,15 @@ async function compactRemotely(
   const sessionId = ctx.sessionManager.getSessionId();
   const checkpoint = latestCheckpoint(event.branchEntries);
   const checkpointPresent = hasActiveCheckpointClaim(event.branchEntries);
-  const leafId = event.branchEntries.at(-1)?.id;
+  const branchIsCurrent = captureCompactionBranch(event.branchEntries);
+  const systemPrompt = ctx.getSystemPrompt?.();
+  const tools = JSON.stringify([pi.getActiveTools(), activeTools(pi)]);
   const stillCurrent = () =>
-    sessionStillOwned(ctx, sessionId, signal) && isCurrent() && ctx.sessionManager.getBranch().at(-1)?.id === leafId;
+    sessionStillOwned(ctx, sessionId, signal) &&
+    isCurrent() &&
+    ctx.getSystemPrompt?.() === systemPrompt &&
+    JSON.stringify([pi.getActiveTools(), activeTools(pi)]) === tools &&
+    branchIsCurrent(ctx.sessionManager.getBranch());
   let requestValues: string[] = [];
   let remoteAttempted = false;
   let rejectionError: Error | undefined;
@@ -203,9 +214,8 @@ async function compactRemotely(
       (value): value is string => typeof value === "string" && value.length > 0,
     );
     if (route.protocol !== "context-management" && isChatGPTCompactionCandidate(model, auth)) {
-      // isUsingOAuth() is a UI snapshot. Match request-time auth provenance to
-      // the credential we will actually send, without parsing or caching tokens.
-      const providerAuth = await ctx.modelRegistry.getProviderAuth(model.provider);
+      // Missing provenance is not evidence of OAuth. Older adapters keep their route.
+      const providerAuth = await ctx.modelRegistry.getProviderAuth?.(model.provider);
       if (!stillCurrent()) return { cancel: true };
       const authenticatedRoute = resolveAuthenticatedCompactionRoute(model, settings, auth, providerAuth);
       if (authenticatedRoute.kind === "remote") route = authenticatedRoute;
@@ -325,10 +335,13 @@ async function compactRemotely(
     if (!checkpointPresent) return undefined;
     if (!checkpoint) return { cancel: true };
     if (settings.checkpointRecovery === "cancel") return { cancel: true };
+    let nativeFallbackAllowed = false;
     try {
       const current = projectedCurrentMessages(event, model, route);
       if (!current.prior) throw new Error("Checkpoint recovery lost its checkpoint");
       const messages = summaryPrefix(current.messages, keptMessages(event), fingerprintMessage);
+      // Native fallback is intentionally lossy, but never bypass projection or ownership checks.
+      nativeFallbackAllowed = true;
       const auth = await ctx.modelRegistry.getApiKeyAndHeaders(model);
       if (!stillCurrent()) return { cancel: true };
       if (!auth.ok) throw new Error(auth.error);
@@ -365,6 +378,7 @@ async function compactRemotely(
             // inference endpoint. Compare that exact public dispatch identity.
             if (route.protocol === "responses-compact") endpoint.pathname += "/compact";
             if (endpointObserved && rejectionRouteKey(model, route, endpoint.toString()) !== routeKey) {
+              nativeFallbackAllowed = false;
               return Response.json(
                 { error: { message: "Checkpoint recovery backend changed before dispatch" } },
                 { status: 400, headers: { "x-should-retry": "false" } },
@@ -378,13 +392,17 @@ async function compactRemotely(
       if (!stillCurrent()) return { cancel: true };
       return { compaction };
     } catch (recoveryError) {
-      if (stillCurrent() && ctx.hasUI && settings.notifyOnFallback) {
+      if (!stillCurrent()) return { cancel: true };
+      if (ctx.hasUI && settings.notifyOnFallback) {
+        const outcome = nativeFallbackAllowed
+          ? "using Pi native compaction. Older context stored only in the opaque checkpoint may be lost."
+          : "compaction cancelled and history preserved.";
         ctx.ui.notify(
-          `Checkpoint recovery could not complete; compaction cancelled and history preserved. ${compactionFailureDetail(recoveryError, requestValues)}`,
+          `Checkpoint recovery could not complete; ${outcome} ${compactionFailureDetail(recoveryError, requestValues)}`,
           "warning",
         );
       }
-      return { cancel: true };
+      return nativeFallbackAllowed ? undefined : { cancel: true };
     }
   } finally {
     remoteController.abort();
@@ -400,11 +418,21 @@ export function createCodexCompactExtension(
   return (pi) => {
     const providerWarnings = new Set<string>();
     const settingsRuntime = options.settingsRuntime ?? createCodexCompactSettingsRuntime();
+    type ContinuationRun = {
+      used: boolean;
+      pending?: {
+        checkpointId: string;
+        routeKey: string;
+        settingsKey: string;
+        entryId?: string;
+      };
+    };
     type Owner = {
       controller: AbortController;
       rejected: RejectedRoutes;
       sessionId: string;
       operation?: AbortController;
+      run?: ContinuationRun;
       lastRoute?: { key: string; protocol: RemoteCompactionProtocol };
     };
     const owners = new WeakMap<object, Owner>();
@@ -513,8 +541,17 @@ export function createCodexCompactExtension(
       }
     });
 
+    // before_agent_start follows pre-prompt compaction and runs once per user run,
+    // unlike agent_start, which also fires for Pi retries and our continuation.
+    pi.on("before_agent_start", (_event, ctx) => {
+      const owner = ownerFor(ctx);
+      if (!owner.controller.signal.aborted) owner.run = { used: false };
+    });
+
     pi.on("session_before_compact", (event, ctx) => {
       const owner = ownerFor(ctx);
+      const run = owner.run;
+      if (run) run.pending = undefined;
       cancelOperation(ctx);
       const operation = new AbortController();
       owner.operation = operation;
@@ -546,10 +583,114 @@ export function createCodexCompactExtension(
           if (isCurrent() && key) owner.lastRoute = { key, protocol };
         },
         options.fetch,
-      ).finally(() => {
-        if (owner.operation === operation) owner.operation = undefined;
-        operation.abort();
-      });
+      )
+        .then((result) => {
+          const details =
+            result && "compaction" in result ? parseCheckpointDetails(result.compaction?.details) : undefined;
+          if (
+            run &&
+            owner.run === run &&
+            !run.used &&
+            isCurrent() &&
+            !owner.controller.signal.aborted &&
+            event.reason !== "manual" &&
+            !event.willRetry &&
+            route.kind === "remote" &&
+            key &&
+            // Auto/V2 preferences can resolve to Context Management for ChatGPT OAuth.
+            // Arm continuation from the successful checkpoint, not the preference.
+            details?.protocol === "context-management"
+          ) {
+            // A returned result is not yet a committed checkpoint. Only the matching
+            // session_compact event can arm it for the settlement boundary.
+            run.pending = { checkpointId: details.checkpointId, routeKey: key, settingsKey: JSON.stringify(settings) };
+          }
+          return result;
+        })
+        .finally(() => {
+          if (owner.operation === operation) owner.operation = undefined;
+          operation.abort();
+        });
+    });
+
+    pi.on("session_compact", (event, ctx) => {
+      const owner = owners.get(ctx.sessionManager);
+      const run = owner?.run;
+      const pending = run?.pending;
+      if (!owner || !run || !pending || pending.entryId) return;
+      const checkpoint = activeCheckpoint(ctx);
+      if (
+        !owner.controller.signal.aborted &&
+        owner.sessionId === ctx.sessionManager.getSessionId() &&
+        event.fromExtension &&
+        event.reason !== "manual" &&
+        !event.willRetry &&
+        checkpoint?.entry.id === event.compactionEntry.id &&
+        checkpoint.details.checkpointId === pending.checkpointId
+      ) {
+        pending.entryId = checkpoint.entry.id;
+      } else {
+        run.pending = undefined;
+      }
+    });
+
+    pi.on("agent_before_settle", (event, ctx) => {
+      const owner = owners.get(ctx.sessionManager);
+      const run = owner?.run;
+      const pending = run?.pending;
+      if (!owner || !run || !pending?.entryId) return;
+      // Consume the candidate even when another participant already continues.
+      // Repeated events cannot replay it at a later or unrelated boundary.
+      run.pending = undefined;
+      const settings = settingsRuntime.get().settings;
+      const route = resolveCompactionRoute(ctx.model, settings);
+      const checkpoint = activeCheckpoint(ctx);
+      if (
+        run.used ||
+        owner.controller.signal.aborted ||
+        ctx.signal?.aborted ||
+        owner.sessionId !== ctx.sessionManager.getSessionId() ||
+        event.outcome !== "completed" ||
+        route.kind !== "remote" ||
+        checkpoint?.details.protocol !== "context-management" ||
+        !ctx.model ||
+        rejectionRouteKey(ctx.model, route) !== pending.routeKey ||
+        JSON.stringify(settings) !== pending.settingsKey ||
+        checkpoint?.entry.id !== pending.entryId ||
+        checkpoint.details.checkpointId !== pending.checkpointId ||
+        !isCheckpointCompatible(checkpoint.details, ctx.model, settings) ||
+        (event.continue && event.context.canContinue) ||
+        // Boundary pendingMessages also includes context-only custom messages.
+        // They can make canContinue true without scheduling any provider request.
+        (ctx.hasPendingMessages() && event.context.canContinue) ||
+        !projectSessionCheckpointContext(event.context.contextMessages, ctx.sessionManager.getBranch(), checkpoint)
+      ) {
+        return;
+      }
+      run.used = true;
+      return {
+        entries: [
+          ...event.entries,
+          {
+            type: "custom_message" as const,
+            customType: CONTINUATION_TYPE,
+            content: CONTINUATION_MESSAGE,
+            display: false,
+            details: { checkpointId: pending.checkpointId },
+          },
+        ],
+        continue: true,
+      };
+    });
+
+    pi.on("session_compact_failed", (_event, ctx) => {
+      const run = owners.get(ctx.sessionManager)?.run;
+      if (run) run.pending = undefined;
+    });
+
+    pi.on("agent_settled", (_event, ctx) => {
+      const owner = owners.get(ctx.sessionManager);
+      if (owner) owner.run = undefined;
     });
 
     pi.on("context", (event, ctx) => {
@@ -562,19 +703,29 @@ export function createCodexCompactExtension(
     });
 
     pi.on("before_provider_request", (event, ctx) => {
+      // This hook is for normal session requests, not the separate maintenance
+      // call. Mid-turn compaction and queued work already satisfy continuation.
+      const run = owners.get(ctx.sessionManager)?.run;
+      if (run?.pending?.entryId) run.pending = undefined;
       if (!settingsRuntime.get().settings.enabled) return undefined;
       const settings = settingsRuntime.get().settings;
       const checkpoint = activeCheckpoint(ctx);
       if (!checkpoint || !isCheckpointCompatible(checkpoint.details, ctx.model, settings)) return undefined;
       const marker = checkpointMarker(checkpoint.details.checkpointId);
       if (!hasCheckpointMarker(event.payload, marker)) return undefined;
-      return rewriteCheckpointForReplay(event.payload, marker, checkpoint.details.replacementHistory);
+      return rewriteCheckpointMarker(event.payload, marker, checkpoint.details.replacementHistory);
     });
 
-    pi.on("session_tree", (_event, ctx) => cancelOperation(ctx));
+    pi.on("session_tree", (_event, ctx) => {
+      cancelOperation(ctx);
+      const owner = owners.get(ctx.sessionManager);
+      if (owner) owner.run = undefined;
+    });
 
     pi.on("model_select", (event, ctx) => {
       cancelOperation(ctx);
+      const owner = owners.get(ctx.sessionManager);
+      if (owner) owner.run = undefined;
       if (!settingsRuntime.get().settings.enabled) return;
       const settings = settingsRuntime.get().settings;
       const checkpoint = activeCheckpoint(ctx);
@@ -595,6 +746,7 @@ export function createCodexCompactExtension(
       owner.controller.abort();
       owner.rejected = new RejectedRoutes();
       owner.operation = undefined;
+      owner.run = undefined;
       // Keep an aborted tombstone until session_start so queued old-context
       // events cannot recreate an active controller after shutdown.
       providerWarnings.clear();

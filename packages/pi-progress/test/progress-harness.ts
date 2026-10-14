@@ -4,11 +4,17 @@ import type {
   ContextEvent,
   ExtensionAPI,
   ExtensionContext,
+  RegisteredCommand,
   SessionEntry,
   Theme,
 } from "@earendil-works/pi-coding-agent";
 import type { Component, TUI } from "@earendil-works/pi-tui";
-import progressWidgetExtension, { type ProgressDetails, type ProgressStep, TOOL_NAME } from "../src/progress-widget.js";
+import progressWidgetExtension, {
+  type ProgressDetails,
+  type ProgressStep,
+  type ProgressWidgetDependencies,
+  TOOL_NAME,
+} from "../src/progress-widget.js";
 import { DEFAULT_PROGRESS_SETTINGS, type ProgressSettings, type ProgressSettingsLoadResult } from "../src/settings.js";
 
 type Handler = (event: never, ctx: ExtensionContext) => unknown;
@@ -35,24 +41,23 @@ export function defaultSettingsResult(): ProgressSettingsLoadResult {
   return {
     kind: "missing",
     path: "/tmp/pi-progress.json",
-    settings: { widget: { ...DEFAULT_PROGRESS_SETTINGS.widget } },
+    settings: { ...DEFAULT_PROGRESS_SETTINGS },
   };
 }
 
-export function loadedSettings(widget: Partial<ProgressSettings["widget"]>): ProgressSettingsLoadResult {
+export function loadedSettings(settings: Partial<ProgressSettings>): ProgressSettingsLoadResult {
   return {
     kind: "loaded",
     path: "/tmp/pi-progress.json",
-    settings: { widget: { ...DEFAULT_PROGRESS_SETTINGS.widget, ...widget } },
+    settings: { ...DEFAULT_PROGRESS_SETTINGS, ...settings },
   };
 }
 
-export function createHarness(
-  options: { loadSettings?: (path?: string, signal?: AbortSignal) => Promise<ProgressSettingsLoadResult> } = {},
-) {
+export function createHarness(options: ProgressWidgetDependencies = {}) {
   const handlers = new Map<string, Handler[]>();
   const entries: Array<{ customType: string; data: unknown }> = [];
   const tools: RegisteredTool[] = [];
+  const commands = new Map<string, Omit<RegisteredCommand, "name" | "sourceInfo">>();
   const pi = {
     on(event: string, handler: Handler) {
       handlers.set(event, [...(handlers.get(event) ?? []), handler]);
@@ -60,17 +65,22 @@ export function createHarness(
     registerTool(definition: RegisteredTool) {
       tools.push(definition);
     },
+    registerCommand(name: string, command: Omit<RegisteredCommand, "name" | "sourceInfo">) {
+      commands.set(name, command);
+    },
     appendEntry(customType: string, data: unknown) {
       entries.push({ customType, data: structuredClone(data) });
     },
   } as unknown as ExtensionAPI;
   progressWidgetExtension(pi, {
+    ...options,
     loadSettings: options.loadSettings ?? (async () => defaultSettingsResult()),
   });
 
   return {
     entries,
     tools,
+    commands,
     get tool(): RegisteredTool {
       assert.equal(tools.length, 1);
       const tool = tools[0];

@@ -58,7 +58,7 @@
     "typecheck": "node ./scripts/run-typechecks.mjs",
     "test": "node ./scripts/run-tests.mjs",
     "check": "npm run build && node ./scripts/run-checks.mjs",
-    "check:biome": "biome check .",
+    "check:biome": "biome check . --error-on-warnings",
     "check:boundaries": "node ./scripts/check-extension-boundaries.mjs",
     "prepare": "node scripts/prepare.mjs",
     "benchmark:codex-compact": "node ./packages/pi-codex-compact/benchmark/run.mjs",

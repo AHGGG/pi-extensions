@@ -1,8 +1,16 @@
 import assert from "node:assert/strict";
-import { onTestFinished, test } from "vitest";
-import { createMockContext, createMockPi } from "../../../test/support.js";
-import type { UsageSettingsRuntime, UsageSettingsState } from "../src/settings.js";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { initTheme } from "@earendil-works/pi-coding-agent";
+import { matchesKey } from "@earendil-works/pi-tui";
+import { type TestContext, test } from "vitest";
+import { createCustomSelectorHarness, createMockContext, createMockPi } from "../../../test/support.js";
+
+import { createUsageSettingsRuntime } from "../src/settings.js";
 import usageExtension from "../src/usage.js";
+
+initTheme("dark", false);
 
 const codexModel = {
   id: "gpt-5.6-sol",
@@ -17,204 +25,266 @@ const codexModel = {
   maxTokens: 128_000,
 };
 
-function runtime(kind: UsageSettingsState["kind"] = "loaded") {
-  let state: UsageSettingsState = {
-    kind,
-    path: "/tmp/pi-usage.json",
-    settings: {
-      codexFastMode: false,
-      codexStatusResetCountdown: false,
-      codexStatusPercentage: "remaining",
-      selectedTargets: {},
-    },
-    ...(kind === "invalid" ? { issue: "bad file" } : { document: {} }),
+async function fixture(
+  t: TestContext,
+  options: {
+    enabled?: boolean;
+    invalid?: boolean;
+    model?: typeof codexModel;
+    models?: unknown[];
+    offline?: boolean;
+    directoryFetch?: (signal: AbortSignal) => Promise<Response>;
+    context?: Record<string, unknown>;
+  } = {},
+) {
+  const model = options.model ?? codexModel;
+  const payload = Buffer.from(
+    JSON.stringify({ "https://api.openai.com/auth": { chatgpt_account_id: "menu-account" } }),
+  ).toString("base64url");
+  const credential = {
+    type: "oauth" as const,
+    access: `fixture.${payload}.signature`,
+    refresh: "fixture-menu-refresh",
+    expires: Date.now() + 60_000,
+    accountId: "menu-account",
   };
-  const patches: unknown[] = [];
-  const settingsRuntime: UsageSettingsRuntime = {
-    get: () => structuredClone(state),
-    async reload() {
-      return structuredClone(state);
-    },
-    async update(patch) {
-      patches.push(patch);
-      state = {
-        ...state,
-        kind: "loaded",
-        settings: { ...state.settings, ...patch },
-        document: { ...state.document, ...patch },
-      };
-      return structuredClone(state);
-    },
-    async updateSelectedTarget() {
-      throw new Error("target selection is not used in Codex Fast menu tests");
-    },
-    async flush() {},
-  };
-  return {
-    settingsRuntime,
-    patches,
-    get state() {
-      return state;
-    },
-  };
-}
-
-function registry() {
-  return {
-    getApiKeyAndHeaders: async () => ({ ok: true as const, apiKey: "codex-token" }),
-    getProviderAuth: async () => ({ auth: { apiKey: "codex-token" } }),
-    getAvailable: () => [codexModel],
-    getAll: () => [codexModel],
-    getProviderAuthStatus: () => ({ configured: true }),
-    getProviderDisplayName: () => "OpenAI Codex",
-  };
-}
-
-function response(): Promise<Response> {
-  return Promise.resolve(
-    new Response(
-      JSON.stringify({
-        rate_limit: { primary_window: { used_percent: 20, limit_window_seconds: 18_000 } },
-      }),
-      { status: 200 },
-    ),
-  );
-}
-
-test("/usage shows Fast state and toggles the same persistent preference", async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), "pi-fast-menu-test-"));
+  const path = join(directory, "pi-usage.json");
+  const originalDocument = options.invalid
+    ? '{"codexFastMode":"invalid"}'
+    : JSON.stringify({ codexFastMode: options.enabled ?? false });
+  await writeFile(path, originalDocument);
+  const settings = createUsageSettingsRuntime(path);
+  await settings.reload();
   const originalFetch = globalThis.fetch;
-  t.onTestFinished(() => {
-    globalThis.fetch = originalFetch;
-  });
-  globalThis.fetch = response;
-  const memory = runtime();
+  const requests: string[] = [];
+  let authReads = 0;
+  globalThis.fetch = async (input, init) => {
+    const url = new URL(String(input));
+    requests.push(url.pathname);
+    if (url.pathname === "/backend-api/codex/models") {
+      if (options.directoryFetch) return options.directoryFetch(init?.signal as AbortSignal);
+      if (options.offline) throw new TypeError("The model directory is temporarily unavailable.");
+      return Response.json({ models: options.models ?? [{ slug: model.id, service_tiers: [{ id: "priority" }] }] });
+    }
+    assert.equal(url.pathname, "/backend-api/wham/usage");
+    return Response.json({ rate_limit: { primary_window: { used_percent: 20, limit_window_seconds: 18_000 } } });
+  };
   const mock = createMockPi();
-  usageExtension(mock.pi, { settingsRuntime: memory.settingsRuntime });
-  const choices = ["Turn Fast mode on", "Close"];
+  usageExtension(mock.pi, { settingsRuntime: settings, credentialReader: () => credential });
   const titles: string[] = [];
-  const { ctx, notifications } = createMockContext({
+  const choices: string[] = [];
+  let selection: string[] = [];
+  const current = createMockContext({
     hasUI: true,
     mode: "rpc",
-    model: codexModel,
-    select: async (title: string) => {
+    model,
+    select: async (title: string, values: string[]) => {
       titles.push(title);
+      selection = values;
       return choices.shift();
     },
-    modelRegistry: registry(),
-  });
-  await mock.commands.get("usage")?.handler("", ctx);
-  assert.deepEqual(memory.patches, [{ codexFastMode: true }]);
-  assert.match(titles[0] ?? "", /Fast mode: Off/);
-  assert.match(titles[0] ?? "", /1\.5× faster.*uses more/);
-  assert.match(notifications[0]?.message ?? "", /Fast mode enabled/);
-});
-
-test.each(["gpt-6-astra", "gpt-6-luna", "gpt-6-sol", "gpt-6.1-sol"])("/usage offers Fast for %s", async (id) => {
-  const originalFetch = globalThis.fetch;
-  onTestFinished(() => {
-    globalThis.fetch = originalFetch;
-  });
-  globalThis.fetch = response;
-  const memory = runtime();
-  const mock = createMockPi();
-  usageExtension(mock.pi, { settingsRuntime: memory.settingsRuntime });
-  const gpt6 = { ...codexModel, id, name: id };
-  let title = "";
-  let options: string[] = [];
-  const { ctx } = createMockContext({
-    hasUI: true,
-    mode: "rpc",
-    model: gpt6,
-    select: async (prompt: string, values: string[]) => {
-      title = prompt;
-      options = values;
-      return "Close";
-    },
     modelRegistry: {
-      ...registry(),
-      getAvailable: () => [gpt6],
-      getAll: () => [gpt6],
+      getApiKeyAndHeaders: async () => {
+        authReads += 1;
+        return { ok: true as const, apiKey: credential.access };
+      },
+      getProviderAuth: async () => ({ source: "OAuth", auth: { apiKey: credential.access } }),
+      getAvailable: () => [model],
+      getAll: () => [model],
+      getProviderAuthStatus: () => ({ configured: true }),
+      getProviderDisplayName: () => "OpenAI Codex",
     },
+    ...options.context,
   });
-  await mock.commands.get("usage")?.handler("", ctx);
-  assert.match(title, /Fast mode: Off/);
-  assert.ok(options.includes("Turn Fast mode on"));
+  t.onTestFinished(async () => {
+    try {
+      for (const shutdown of mock.events.get("session_shutdown") ?? []) await shutdown({}, current.ctx);
+    } finally {
+      globalThis.fetch = originalFetch;
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+  return {
+    ...current,
+    path,
+    originalDocument,
+    settings,
+    mock,
+    requests,
+    get authReads() {
+      return authReads;
+    },
+    titles,
+    choices,
+    get selection() {
+      return selection;
+    },
+    open: () => mock.commands.get("usage")?.handler("", current.ctx),
+  };
+}
+
+test("/usage discovers an unlisted model and toggles the same persistent Fast preference", async (t) => {
+  const future = { ...codexModel, id: "future-menu-model", name: "Future Menu Model" };
+  const f = await fixture(t, { model: future });
+  f.choices.push("Turn Fast mode on", "Close");
+  await f.open();
+  assert.equal(f.settings.get().settings.codexFastMode, true);
+  assert.equal(JSON.parse(await readFile(f.path, "utf8")).codexFastMode, true);
+  assert.match(f.titles[0] ?? "", /Fast mode: Off/);
+  assert.match(f.titles[0] ?? "", /1\.5× faster.*uses more/);
+  assert.match(f.notifications[0]?.message ?? "", /Fast mode enabled/);
 });
 
-test("/usage cancellation does not change Fast and unsupported models show no toggle", async (t) => {
-  const originalFetch = globalThis.fetch;
-  t.onTestFinished(() => {
-    globalThis.fetch = originalFetch;
-  });
-  globalThis.fetch = response;
-  const cancelled = runtime();
-  const mock = createMockPi();
-  usageExtension(mock.pi, { settingsRuntime: cancelled.settingsRuntime });
-  let options: string[] = [];
-  const { ctx } = createMockContext({
-    hasUI: true,
-    mode: "rpc",
-    model: codexModel,
-    select: async (_title: string, values: string[]) => {
-      options = values;
-      return undefined;
-    },
-    modelRegistry: registry(),
-  });
-  await mock.commands.get("usage")?.handler("", ctx);
-  assert.ok(options.includes("Turn Fast mode on"));
-  assert.deepEqual(cancelled.patches, []);
-
-  const unsupported = runtime();
-  const unsupportedMock = createMockPi();
-  usageExtension(unsupportedMock.pi, { settingsRuntime: unsupported.settingsRuntime });
-  let unsupportedTitle = "";
-  let unsupportedOptions: string[] = [];
-  const unsupportedModel = { ...codexModel, id: "gpt-5.4-mini" };
-  const unsupportedContext = createMockContext({
-    hasUI: true,
-    mode: "rpc",
-    model: unsupportedModel,
-    select: async (title: string, values: string[]) => {
-      unsupportedTitle = title;
-      unsupportedOptions = values;
-      return "Close";
-    },
-    modelRegistry: {
-      ...registry(),
-      getAvailable: () => [unsupportedModel],
-      getAll: () => [unsupportedModel],
-    },
-  });
-  await unsupportedMock.commands.get("usage")?.handler("", unsupportedContext.ctx);
-  assert.match(unsupportedTitle, /Fast mode: Unavailable/);
-  assert.ok(!unsupportedOptions.some((value) => value.includes("Fast mode on")));
+test("/usage cancellation preserves the stored Fast preference", async (t) => {
+  const f = await fixture(t);
+  await f.open();
+  assert.ok(f.selection.includes("Turn Fast mode on"));
+  assert.equal(f.settings.get().settings.codexFastMode, false);
+  assert.equal(await readFile(f.path, "utf8"), f.originalDocument);
 });
 
-test("invalid settings make the /usage Fast action visibly read-only", async (t) => {
-  const originalFetch = globalThis.fetch;
-  t.onTestFinished(() => {
-    globalThis.fetch = originalFetch;
+test.for([
+  { name: "missing model", models: [], label: "Unknown" },
+  { name: "missing capability fields", models: [{ slug: codexModel.id }], label: "Unknown" },
+  {
+    name: "explicit unsupported capability",
+    models: [{ slug: codexModel.id, service_tiers: [] }],
+    label: "Unavailable",
+  },
+])("/usage displays $name without offering an unsafe enable action", async ({ models, label }, t) => {
+  const f = await fixture(t, { models });
+  f.choices.push("Close");
+  await f.open();
+  assert.match(f.titles[0] ?? "", new RegExp(`Fast mode: ${label}`));
+  assert.ok(!f.selection.includes("Turn Fast mode on"));
+  assert.equal(await readFile(f.path, "utf8"), f.originalDocument);
+});
+
+test("/usage keeps its menu current when discovery refreshes an enabled Fast status", async (t) => {
+  const f = await fixture(t, { enabled: true });
+  f.choices.push("Close");
+  await f.open();
+  assert.match(f.titles[0] ?? "", /Fast mode: On/);
+  assert.ok(f.selection.includes("Turn Fast mode off"));
+  assert.equal(f.settings.get().settings.codexFastMode, true);
+});
+
+test("/usage can disable an enabled preference while discovery is unknown", async (t) => {
+  const f = await fixture(t, { enabled: true, offline: true });
+  f.choices.push("Turn Fast mode off", "Close");
+  await f.open();
+  assert.match(f.titles[0] ?? "", /Fast mode: Unknown/);
+  assert.equal(f.settings.get().settings.codexFastMode, false);
+  assert.equal(JSON.parse(await readFile(f.path, "utf8")).codexFastMode, false);
+});
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((release) => {
+    resolve = release;
   });
-  globalThis.fetch = response;
-  const invalid = runtime("invalid");
-  const mock = createMockPi();
-  usageExtension(mock.pi, { settingsRuntime: invalid.settingsRuntime });
-  let rendered = "";
-  let options: string[] = [];
-  const { ctx } = createMockContext({
-    hasUI: true,
-    mode: "rpc",
-    model: codexModel,
-    select: async (title: string, values: string[]) => {
-      rendered = title;
-      options = values;
-      return "Close";
+  return { promise, resolve };
+}
+
+test.for(["print", "json"] as const)("/usage rejects %s before authentication or directory I/O", async (mode, t) => {
+  const f = await fixture(t, { context: { mode, hasUI: false } });
+  await assert.rejects(Promise.resolve(f.open()), /requires TUI or RPC mode/);
+  assert.equal(f.authReads, 0);
+  assert.deepEqual(f.requests, []);
+  assert.equal(await readFile(f.path, "utf8"), f.originalDocument);
+});
+
+test.for([
+  { name: "Escape", input: "\u001b" },
+  { name: "Ctrl+C", input: "\u0003" },
+  { name: "remapped cancellation", input: "q", remapped: true },
+  { name: "component disposal", dispose: true },
+  { name: "session shutdown", shutdown: true },
+  { name: "session replacement", replace: true },
+  { name: "shared background request", input: "\u001b", background: true },
+])("/usage cancels directory discovery through $name", async (scenario, t) => {
+  const started = deferred<void>();
+  let requestSignal: AbortSignal | undefined;
+  let harness: ReturnType<typeof createCustomSelectorHarness> | undefined;
+  let closeUi: (() => void) | undefined;
+  let closing = false;
+  let customCalls = 0;
+  const f = await fixture(t, {
+    directoryFetch: (signal) => {
+      requestSignal = signal;
+      started.resolve();
+      return new Promise<Response>((_resolve, reject) => {
+        const abort = () => reject(new DOMException("Directory request cancelled", "AbortError"));
+        if (signal.aborted) abort();
+        else signal.addEventListener("abort", abort, { once: true });
+      });
     },
-    modelRegistry: registry(),
+    context: {
+      mode: "tui",
+      select: undefined,
+      custom: (factory: unknown) => {
+        customCalls += 1;
+        if (closing) return Promise.resolve(undefined);
+        harness = createCustomSelectorHarness(
+          factory,
+          80,
+          scenario.remapped
+            ? {
+                matches: (data, action) => action === "tui.select.cancel" && matchesKey(data, "q"),
+                getKeys: (action) => (action === "tui.select.cancel" ? ["q"] : []),
+              }
+            : undefined,
+        );
+        return new Promise<unknown>((resolve) => {
+          closeUi = () => resolve(undefined);
+          void harness?.resultPromise.then(resolve);
+        }).finally(() => harness?.dispose());
+      },
+    },
   });
-  await mock.commands.get("usage")?.handler("", ctx);
-  assert.match(rendered, /Fast mode: Off/);
-  assert.ok(options.includes("Turn Fast mode on"));
-  assert.deepEqual(invalid.patches, []);
+  const shutdown = async () => {
+    for (const handler of f.mock.events.get("session_shutdown") ?? []) await handler({}, f.ctx);
+  };
+  if (scenario.background) {
+    await f.mock.events.get("model_select")?.at(-1)?.({ model: codexModel }, f.ctx);
+    await started.promise;
+  }
+  const pending = Promise.resolve(f.open());
+  try {
+    await started.promise;
+    // A shared request starts before the menu; synchronize on the menu's auth read too.
+    if (scenario.background) {
+      while (f.authReads < 2) await new Promise<void>((resolve) => setImmediate(resolve));
+    }
+    assert.ok(harness, "the cancellable loader must exist before awaiting directory I/O");
+    if (scenario.shutdown) await shutdown();
+    else if (scenario.replace) {
+      const replacement = createMockContext({ hasUI: true, mode: "rpc" });
+      for (const handler of f.mock.events.get("session_start") ?? []) await handler({}, replacement.ctx);
+    } else if (scenario.dispose) {
+      harness.dispose();
+      closeUi?.();
+    } else harness.handleInput(scenario.input ?? "\u001b");
+    await pending;
+    assert.equal(customCalls, 1, "cancellation must not open the quota loader or menu");
+    assert.equal(requestSignal?.aborted, !scenario.background);
+    assert.deepEqual(f.requests, ["/backend-api/codex/models"]);
+    assert.equal(await readFile(f.path, "utf8"), f.originalDocument);
+  } finally {
+    closing = true;
+    harness?.dispose();
+    closeUi?.();
+    await shutdown();
+    await pending;
+  }
+});
+
+test("invalid settings keep /usage Fast controls visibly read-only", async (t) => {
+  const f = await fixture(t, { invalid: true });
+  f.choices.push("Close");
+  await f.open();
+  assert.match(f.titles[0] ?? "", /Fast mode: Off/);
+  assert.ok(f.selection.includes("Turn Fast mode on"));
+  assert.equal(await readFile(f.path, "utf8"), f.originalDocument);
 });

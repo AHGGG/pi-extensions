@@ -92,6 +92,7 @@ test("registers five fixed main-agent tools with stable schemas and explicit lim
     "grep",
     "find",
     "ls",
+    "codemode",
   ]);
   assert.deepEqual(tools[0]?.parameters.properties?.thinkingLevel?.enum, [
     "off",
@@ -249,7 +250,7 @@ test("spawns jobs with default and explicit tools and thinking levels", async ()
     "explicit",
     {
       task: "Implement one thing",
-      tools: ["read", "edit", "read", "write"],
+      tools: ["read", "edit", "read", "write", "codemode", "codemode"],
       skills: ["packages/pi-subagents/skills/using-pi-subagents"],
       extensions: [
         {
@@ -283,7 +284,7 @@ test("spawns jobs with default and explicit tools and thinking levels", async ()
         thinkingLevel: "high",
       },
       {
-        tools: ["read", "edit", "write"],
+        tools: ["read", "edit", "write", "codemode"],
         skills: [path.resolve("packages/pi-subagents/skills/using-pi-subagents")],
         extensions: [
           {

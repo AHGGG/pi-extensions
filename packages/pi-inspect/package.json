@@ -1,6 +1,6 @@
 {
   "name": "@narumitw/pi-inspect",
-  "version": "0.2.0",
+  "version": "0.2.2",
   "description": "Read-only browser inspector for Pi session context and live tool calls.",
   "type": "module",
   "license": "MIT",
@@ -43,7 +43,7 @@
   },
   "dependencies": {
     "@radix-ui/colors": "3.0.0",
-    "@radix-ui/react-collapsible": "1.1.20",
+    "@radix-ui/react-collapsible": "1.1.21",
     "@radix-ui/react-icons": "1.3.2",
     "@radix-ui/themes": "3.3.0",
     "esbuild": "0.28.2",

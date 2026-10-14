@@ -140,7 +140,8 @@ for (const committed of [false, true]) {
         withTempHome(async (root) => {
           const f = await fixture(root, ["machine"], committed);
           await updateLocalConfig((current) => {
-            const setup = current.syncSetups.home!;
+            const setup = current.syncSetups.home;
+            assert.ok(setup);
             return {
               ...current,
               syncSetups: { ...current.syncSetups, home: { ...setup, sync: { ...setup.sync, localFields: [] } } },
@@ -150,6 +151,7 @@ for (const committed of [false, true]) {
           assert.ok(await readMergeJournal(config));
           if (route === "pull") {
             const head = await f.backend.readHead();
+            assert.ok(head);
             const matching = portableSnapshot(
               {
                 ...snapshot([{ path: "settings.json", content: Buffer.from(f.bytes) }]),
@@ -158,7 +160,7 @@ for (const committed of [false, true]) {
               },
               [],
             );
-            await f.backend.publishSnapshot(matching, { kind: "revision", revision: head!.revision });
+            await f.backend.publishSnapshot(matching, { kind: "revision", revision: head.revision });
           }
           const head = await f.backend.readHead();
           let confirmations = 0;
@@ -180,8 +182,10 @@ for (const committed of [false, true]) {
               (name) => name.startsWith(path.basename(mergeJournalPath(config))) && name.endsWith(".resolved"),
             );
             assert.equal(archives.length, 1);
+            const archive = archives[0];
+            assert.ok(archive);
             assert.deepEqual(
-              await fs.readFile(path.join(path.dirname(mergeJournalPath(config)), archives[0]!)),
+              await fs.readFile(path.join(path.dirname(mergeJournalPath(config)), archive)),
               f.journalBytes,
             );
             assert.deepEqual((await readStateForConfig(config)).localFields, []);

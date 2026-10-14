@@ -3,12 +3,17 @@ import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { join } from "node:path";
 import {
   DefaultResourceLoader,
+  type ExtensionCommandContext,
   type ExtensionContext,
   ExtensionRunner,
+  initTheme,
   SettingsManager,
 } from "@earendil-works/pi-coding-agent";
 import { test } from "vitest";
 import { registerRuntimeBuilderContract } from "../../../test/runtime-builder-contract.js";
+import { createCustomSelectorHarness } from "../../../test/support.js";
+
+initTheme("dark");
 
 const { packageRoot, loadBuilder } = registerRuntimeBuilderContract({
   packageId: "pi-progress",
@@ -38,7 +43,7 @@ test("generated runtime is loadable by Pi's Jiti resource loader", async () => {
     assert.equal(loaded.extensions.length, 1);
     const extension = loaded.extensions[0];
     assert.deepEqual([...(extension?.tools.keys() ?? [])], ["update_progress"]);
-    assert.equal(extension?.commands.size, 0);
+    assert.deepEqual([...(extension?.commands.keys() ?? [])], ["progress"]);
     assert.ok(extension?.handlers.has("session_start"));
     assert.ok(extension?.handlers.has("context"));
     assert.ok(extension?.handlers.has("session_tree"));
@@ -90,6 +95,56 @@ test("generated runtime is loadable by Pi's Jiti resource loader", async () => {
       steps: [{ text: "Verify generated runtime — waiting for approval", status: "blocked" }],
     });
     assert.equal(typeof widgets.at(-1)?.content, "function");
+    const command = extension.commands.get("progress");
+    assert.ok(command);
+    // Exercise the emitted menu's lazy import through Pi's Jiti-loaded runtime.
+    const choices = ["Status", "Back", "Settings", "Close"];
+    const dialogs: { title: string; options: string[] }[] = [];
+    const rpcCtx = {
+      ...ctx,
+      mode: "rpc",
+      ui: {
+        ...ctx.ui,
+        select: async (title: string, options: string[]) => {
+          dialogs.push({ title, options });
+          return choices.shift();
+        },
+      },
+    } as unknown as ExtensionCommandContext;
+    await command.handler("", rpcCtx);
+    assert.equal(choices.length, 0);
+    assert.equal(dialogs.length, 4);
+    assert.match(dialogs[1]?.title ?? "", /Progress Status/u);
+    assert.ok(notifications.some(({ message }) => /Edit settings manually:/u.test(message)));
+    let settingsFrame: string[] = [];
+    let itemLimitFrame: string[] = [];
+    Object.assign(ctx.ui, {
+      custom: async (factory: unknown) => {
+        const screen = createCustomSelectorHarness(factory, 80);
+        try {
+          settingsFrame = screen.render(80);
+          for (let index = 0; index < 3; index++) screen.handleInput("\u001b[B");
+          screen.handleInput("\r");
+          screen.handleInput("25");
+          itemLimitFrame = screen.render(80);
+          screen.handleInput("\u0003");
+          return await screen.resultPromise;
+        } finally {
+          screen.dispose();
+        }
+      },
+    });
+    await command.handler("settings", ctx as ExtensionCommandContext);
+    assert.equal(settingsFrame[0], "─".repeat(80));
+    assert.equal(settingsFrame.at(-1), "─".repeat(80));
+    assert.match(itemLimitFrame.join("\n"), /Visible item limit/u);
+    assert.match(itemLimitFrame.join("\n"), /> 25/u);
+    await command.handler("clear", ctx as ExtensionCommandContext);
+    assert.deepEqual(widgets.at(-1), { key: "progress", content: undefined });
+    assert.deepEqual(notifications.at(-1), {
+      message: "Progress widget cleared. Saved progress is unchanged.",
+      type: "info",
+    });
     const cleared = await tool.definition.execute(
       "generated-progress-clear",
       { steps: [] },

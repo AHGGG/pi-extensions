@@ -1,5 +1,25 @@
 # @narumitw/pi-codex-compact
 
+## 0.56.1
+
+### Patch Changes
+
+- 56174af: Allow bookkeeping entries appended during compaction without mistaking them for a changed conversation or branch, including active Goal usage snapshots. Preserve cancellation when context, ancestry, effective instructions, tools, or lifecycle ownership changes.
+
+## 0.56.0
+
+### Minor Changes
+
+- 3d3a328: Keep checkpoint-aware recovery first, then use Pi-native compaction if the recovery request fails, times out, or returns invalid output. Native fallback may lose older context stored only in the opaque checkpoint and can consume additional quota. Explicit Cancel, cancellation, stale ownership, and checkpoint projection or backend integrity failures still preserve history by cancelling compaction.
+
+## 0.55.2
+
+### Patch Changes
+
+- 783bb3f: Continue work after successful automatic Context Management compaction without another user message. Reuse Pi-owned retries and queued work, or append one persisted continuation message through the settlement boundary, with at most one forced continuation per user run. Preserve cancellation, exact checkpoint replay, and normal tool access; manual compaction and other protocols remain unchanged.
+  
+  Replace the maintenance request's fixed `OK` reply with a concise work handoff and request-local tool restrictions. Additional inference and tool actions can consume quota; hosted model compliance and the root cause of issue #1538 remain unverified.
+
 ## 0.55.1
 
 ### Patch Changes

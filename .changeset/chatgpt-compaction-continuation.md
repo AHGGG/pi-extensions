@@ -2,6 +2,6 @@
 "@narumitw/pi-codex-compact": patch
 ---
 
-Use experimental Context Management for verified OpenAI ChatGPT OAuth requests, including Auto and Remote V2 preferences, instead of dispatching compaction operations rejected by that login. Preserve the configured preference and expose the last resolved protocol in the menu.
+Use experimental Context Management for verified official OpenAI ChatGPT OAuth before dispatch, preserving API-key routing and saved protocol preferences. Show the last resolved protocol without refreshing authentication from the menu.
 
-Scope maintenance acknowledgements to their own response and add a stable developer boundary after compatible checkpoint replay so unfinished tasks can continue through Pi's existing loop without harness changes or synthetic user turns.
+Integrate the upstream handoff and bounded automatic-continuation implementation using the actual checkpoint protocol, including Auto and V2 preferences adapted to Context Management. Remove the superseded fork-only developer replay boundary to avoid overlapping continuation policies.

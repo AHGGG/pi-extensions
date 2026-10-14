@@ -1,69 +1,75 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { InMemoryCredentialStore, type Model, type Provider } from "@earendil-works/pi-ai";
+import { type Api, InMemoryCredentialStore, type Model, type Provider } from "@earendil-works/pi-ai";
 import {
   createAgentSession,
   DefaultResourceLoader,
+  type ExtensionAPI,
   ModelRuntime,
   SessionManager,
   SettingsManager,
-  type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
-import { Type } from "typebox";
 import { test, vi } from "vitest";
-import { latestCheckpoint } from "../src/checkpoint.js";
-import { COMPACTION_MAINTENANCE_MESSAGE, COMPACTION_REPLAY_MESSAGE } from "../src/context-management.js";
 import type { JsonObject } from "../src/protocol.js";
 
-const model: Model<"openai-responses"> = {
-  id: "gpt-5.5",
+const model: Model<Api> = {
+  id: "context-management-runtime",
   name: "Context Management runtime fixture",
   api: "openai-responses",
   provider: "openai",
-  baseUrl: "https://pi-compaction.invalid/v1",
+  baseUrl: "https://api.openai.com/v1",
   reasoning: true,
   input: ["text"],
   cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-  contextWindow: 20_000,
-  maxTokens: 2_000,
+  contextWindow: 100_000,
+  maxTokens: 10_000,
+};
+const checkpoint = { type: "compaction", id: "cmp_runtime", encrypted_content: "opaque-runtime-fixture" };
+const maintenanceOutput = {
+  type: "message",
+  id: "msg_maintenance",
+  role: "assistant",
+  status: "completed",
+  content: [
+    { type: "output_text", text: "Goal: finish the task. Next: inspect the pending changes.", annotations: [] },
+  ],
 };
 
-const checkpoint = { type: "compaction", id: "cmp_runtime", encrypted_content: "opaque-runtime-state" };
-const reasoning = { type: "reasoning", id: "rs_runtime", summary: [], encrypted_content: "signed-runtime-state" };
-function assistant(text: string, id = "msg_runtime"): JsonObject {
-  return {
-    type: "message",
-    id,
-    role: "assistant",
-    status: "completed",
-    content: [{ type: "output_text", text, annotations: [] }],
-  };
-}
-const maintenance = [checkpoint, reasoning, assistant("OK", "msg_maintenance")];
-
-function toolCall(name: string): JsonObject {
-  return {
-    type: "function_call",
-    id: `fc_${name}`,
-    call_id: `call_${name}`,
-    name,
-    arguments: "{}",
-    status: "completed",
-  };
-}
-
-function response(items: JsonObject[], inputTokens = 64): Response {
+// The hosted model is replaced only at the transport boundary. Pi owns compaction,
+// persistence, context projection, provider hooks, continuation, and settlement.
+function response(text: string, inputTokens: number, maintenance: boolean): Response {
+  const item = maintenance
+    ? maintenanceOutput
+    : {
+        ...maintenanceOutput,
+        id: "msg_task",
+        content: [{ type: "output_text", text, annotations: [] }],
+      };
+  const outputIndex = maintenance ? 1 : 0;
   const events = [
-    ...items.map((item, output_index) => ({ type: "response.output_item.done", output_index, item })),
+    ...(maintenance ? [{ type: "response.output_item.done", output_index: 0, item: checkpoint }] : []),
+    {
+      type: "response.output_item.added",
+      output_index: outputIndex,
+      item: { ...item, status: "in_progress", content: [] },
+    },
+    {
+      type: "response.content_part.added",
+      output_index: outputIndex,
+      content_index: 0,
+      part: { type: "output_text", text: "", annotations: [] },
+    },
+    { type: "response.output_text.delta", output_index: outputIndex, content_index: 0, delta: text },
+    { type: "response.output_item.done", output_index: outputIndex, item },
     {
       type: "response.completed",
       response: {
         id: "resp_runtime",
         status: "completed",
-        output: items,
-        usage: { input_tokens: inputTokens, output_tokens: 16, total_tokens: inputTokens + 16 },
+        output: [item],
+        usage: { input_tokens: inputTokens, output_tokens: 3, total_tokens: inputTokens + 3 },
       },
     },
   ];
@@ -72,276 +78,345 @@ function response(items: JsonObject[], inputTokens = 64): Response {
   });
 }
 
-function input(payload: JsonObject): JsonObject[] {
-  assert.ok(Array.isArray(payload.input));
-  return payload.input as JsonObject[];
-}
-
-function replayNote(items: JsonObject[]): JsonObject[] {
-  return items.filter((item) => JSON.stringify(item).includes(COMPACTION_REPLAY_MESSAGE));
-}
-
-type Harness = {
-  session: Awaited<ReturnType<typeof createAgentSession>>["session"];
-  sessionManager: SessionManager;
-  requests: JsonObject[];
-};
-
-async function withSession(
-  responder: (payload: JsonObject) => Response | Promise<Response>,
-  run: (harness: Harness) => Promise<void>,
-  customTools: ToolDefinition[] = [],
-): Promise<void> {
-  const directory = await mkdtemp(join(tmpdir(), "pi-compaction-handoff-"));
-  const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
-  process.env.PI_CODING_AGENT_DIR = directory;
-  let session: Harness["session"] | undefined;
-  try {
-    vi.resetModules();
-    const { createCodexCompactExtension } = await import("../src/codex-compact.js");
-    const { DEFAULT_CODEX_COMPACT_SETTINGS } = await import("../src/settings.js");
-    // Exercise Pi's actual Responses serializer/parser without making a live request.
-    const specifier = "@earendil-works/pi-ai/providers/openai";
-    const { openaiProvider } = (await import(specifier)) as typeof import("@earendil-works/pi-ai/providers/openai");
-    const native = openaiProvider();
-    const requests: JsonObject[] = [];
-    const fetch: typeof globalThis.fetch = async (url, init) => {
-      assert.equal(String(url), `${model.baseUrl}/responses`);
-      const payload = JSON.parse(String(init?.body)) as JsonObject;
-      requests.push(structuredClone(payload));
-      return responder(payload);
-    };
-    const provider: Provider<"openai-responses"> = {
-      ...native,
-      getModels: () => [model],
-      getAllModels: () => [model],
-      refreshModels: undefined,
-      stream(activeModel, context, options) {
-        return native.stream<"openai-responses">(activeModel, context, { ...options, fetch: options?.fetch ?? fetch });
+function toolResponse(): Response {
+  const item = {
+    type: "function_call",
+    id: "fc_read",
+    call_id: "call_read",
+    name: "read",
+    arguments: JSON.stringify({ path: "pending.txt" }),
+  };
+  const events = [
+    { type: "response.output_item.added", output_index: 0, item: { ...item, arguments: "" } },
+    { type: "response.function_call_arguments.delta", output_index: 0, delta: item.arguments },
+    { type: "response.output_item.done", output_index: 0, item },
+    {
+      type: "response.completed",
+      response: {
+        id: "resp_tool",
+        status: "completed",
+        output: [item],
+        usage: { input_tokens: 90_000, output_tokens: 10, total_tokens: 90_010 },
       },
-      streamSimple(activeModel, context, options) {
-        return native.streamSimple(activeModel, context, { ...options, fetch: options?.fetch ?? fetch });
-      },
-    };
-    const modelRuntime = await ModelRuntime.create({
-      credentials: new InMemoryCredentialStore(),
-      modelsPath: null,
-      modelsStorePath: join(directory, "models-store.json"),
-      refreshOnCreate: false,
-    });
-    modelRuntime.registerNativeProvider(provider);
-    await modelRuntime.setRuntimeApiKey(model.provider, "fixture-key");
-    const settingsManager = SettingsManager.inMemory({
-      compaction: { enabled: true, reserveTokens: 2_000, keepRecentTokens: 1_000 },
-      retry: { enabled: false },
-    });
-    const state = {
-      kind: "loaded" as const,
-      path: join(directory, "pi-codex-compact.json"),
-      settings: { ...DEFAULT_CODEX_COMPACT_SETTINGS, protocol: "context-management" as const, maxRetries: 0 },
-      document: {},
-    };
-    const resourceLoader = new DefaultResourceLoader({
-      cwd: directory,
-      agentDir: directory,
-      settingsManager,
-      noExtensions: true,
-      noSkills: true,
-      noPromptTemplates: true,
-      noThemes: true,
-      noContextFiles: true,
-      extensionFactories: [
-        createCodexCompactExtension({
-          fetch,
-          settingsRuntime: {
-            get: () => state,
-            async reload() {
-              return state;
-            },
-            async update() {
-              return state;
-            },
-            async flush() {},
-          },
-        }),
-      ],
-    });
-    await resourceLoader.reload();
-    const sessionManager = SessionManager.inMemory(directory);
-    const created = await createAgentSession({
-      cwd: directory,
-      agentDir: directory,
-      modelRuntime,
-      model,
-      resourceLoader,
-      sessionManager,
-      settingsManager,
-      customTools,
-      noTools: "builtin",
-      thinkingLevel: "off",
-    });
-    session = created.session;
-    assert.deepEqual(created.extensionsResult.errors, []);
-    await session.bindExtensions({ mode: "print" });
-    await run({ session, sessionManager, requests });
-  } finally {
-    session?.dispose();
-    if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
-    else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
-    await rm(directory, { recursive: true, force: true });
-  }
-}
-
-test("automatic compaction hands tool work back to Pi without a fresh user message or visible maintenance answer", async () => {
-  const actions: string[] = [];
-  let ordinaryRequests = 0;
-  await withSession(
-    (payload) => {
-      if (payload.context_management) return response(maintenance);
-      ordinaryRequests += 1;
-      if (ordinaryRequests === 1) return response([toolCall("write_fixture")], 17_000);
-      if (ordinaryRequests === 2) return response([toolCall("verify_fixture")]);
-      return response([assistant("User task complete.")]);
     },
-    async ({ session, sessionManager, requests }) => {
-      await session.prompt("Write the fixture, verify it, and report the result.");
-      assert.equal(session.isIdle, true);
-      assert.deepEqual(actions, ["write", "verify"]);
-      assert.equal(ordinaryRequests, 3);
-      assert.equal(requests.length, 4);
-      const maintenanceRequest = requests[1];
-      assert.deepEqual(maintenanceRequest.context_management, [{ type: "compaction", compact_threshold: 1024 }]);
-      assert.equal(maintenanceRequest.tool_choice, "none");
-      assert.deepEqual(input(maintenanceRequest).at(-1), {
-        role: "user",
-        content: [{ type: "input_text", text: COMPACTION_MAINTENANCE_MESSAGE }],
-      });
-      const resumed = requests[2];
-      const resumedInput = input(resumed);
-      const checkpointIndex = resumedInput.findIndex((item) => item.type === "compaction");
-      assert.ok(checkpointIndex >= 0);
-      assert.deepEqual(resumedInput.slice(checkpointIndex, checkpointIndex + maintenance.length), maintenance);
-      assert.equal(resumedInput[checkpointIndex + maintenance.length].role, "developer");
-      assert.equal(replayNote(resumedInput).length, 1);
-      assert.equal(
-        resumedInput.some((item) => item.role === "user"),
-        false,
-      );
-      assert.equal(resumed.context_management, undefined);
-      assert.notEqual(resumed.tool_choice, "none");
-      assert.equal(resumed.instructions, requests[0].instructions);
-      assert.deepEqual(resumed.tools, requests[0].tools);
-      assert.deepEqual(input(requests[3]).slice(0, resumedInput.length), resumedInput);
-      assert.deepEqual(requests[3].tools, resumed.tools);
-      assert.equal(replayNote(input(requests[3])).length, 1);
-      assert.deepEqual(latestCheckpoint(sessionManager.getBranch())?.details.replacementHistory, maintenance);
-      assert.equal(sessionManager.getBranch().filter((entry) => entry.type === "compaction").length, 1);
-      const messages = sessionManager.getBranch().flatMap((entry) => (entry.type === "message" ? [entry.message] : []));
-      assert.equal(messages.filter((message) => message.role === "user").length, 1);
-      assert.equal(
-        messages.some(
-          (message) =>
-            message.role === "assistant" && message.content.some((part) => part.type === "text" && part.text === "OK"),
-        ),
-        false,
-      );
-    },
-    [
-      {
-        name: "write_fixture",
-        label: "Write fixture",
-        description: "Write the fixture once",
-        parameters: Type.Object({}),
-        async execute() {
-          actions.push("write");
-          return { content: [{ type: "text", text: `WRITE_DONE:${"x".repeat(6_000)}` }], details: {} };
-        },
-      },
-      {
-        name: "verify_fixture",
-        label: "Verify fixture",
-        description: "Verify the completed write",
-        parameters: Type.Object({}),
-        async execute() {
-          actions.push("verify");
-          return { content: [{ type: "text", text: "Verified the completed write." }], details: {} };
-        },
-      },
-    ],
-  );
-});
-
-test("manual compaction stays idle and reload preserves the handoff before a newer user request", async () => {
-  let ordinaryRequests = 0;
-  await withSession(
-    (payload) => {
-      if (payload.context_management) return response(maintenance);
-      ordinaryRequests += 1;
-      return response([assistant(ordinaryRequests === 1 ? `Task complete. ${"x".repeat(6_000)}` : "OK")]);
-    },
-    async ({ session, sessionManager, requests }) => {
-      await session.prompt("Complete the task and provide a detailed report.");
-      assert.equal(session.isIdle, true);
-      await session.compact();
-      assert.equal(session.isIdle, true);
-      assert.equal(ordinaryRequests, 1);
-      assert.equal(requests.length, 2);
-      assert.deepEqual(latestCheckpoint(sessionManager.getBranch())?.details.replacementHistory, maintenance);
-      await session.reload();
-      assert.equal(ordinaryRequests, 1);
-      const newerRequest = "That task is finished. For this new request, reply only OK.";
-      await session.prompt(newerRequest);
-      assert.equal(ordinaryRequests, 2);
-      const replayed = input(requests.at(-1) as JsonObject);
-      assert.equal(replayNote(replayed).length, 1);
-      assert.match(JSON.stringify(replayed.at(-1)), /For this new request, reply only OK/);
-      assert.equal(replayed.filter((item) => item.role === "user").length, 1);
-      assert.equal(session.isIdle, true);
-    },
-  );
-});
-
-test("cancelled maintenance publishes no checkpoint or continuation state", async () => {
-  let started!: () => void;
-  const maintenanceStarted = new Promise<void>((resolve) => {
-    started = resolve;
+  ];
+  return new Response(events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join(""), {
+    headers: { "content-type": "text/event-stream" },
   });
-  let bodyCancelled = false;
-  let ordinaryRequests = 0;
-  await withSession(
-    (payload) => {
-      if (payload.context_management) {
-        started();
-        return new Response(
-          new ReadableStream<Uint8Array>({
-            cancel() {
-              bodyCancelled = true;
+}
+
+for (const trigger of [
+  "overflow",
+  "threshold",
+  "pre-prompt",
+  "queued",
+  "boundary",
+  "repeat",
+  "mid-turn",
+  "manual",
+  "cancel",
+  "context-agent-end",
+  "context-compact",
+  "queued-custom",
+  "context-and-queued",
+] as const) {
+  test(`real Pi ${trigger} compaction scopes maintenance and preserves ordinary replay`, async () => {
+    const directory = await mkdtemp(join(tmpdir(), "pi-context-management-runtime-"));
+    const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+    process.env.PI_CODING_AGENT_DIR = directory;
+    let session: Awaited<ReturnType<typeof createAgentSession>>["session"] | undefined;
+    try {
+      vi.resetModules();
+      const { createCodexCompactExtension } = await import("../src/codex-compact.js");
+      const { DEFAULT_CODEX_COMPACT_SETTINGS } = await import("../src/settings.js");
+      const specifier = "@earendil-works/pi-ai/providers/openai";
+      const { openaiProvider } = (await import(specifier)) as { openaiProvider(): Provider };
+      const native = openaiProvider();
+      const requests: JsonObject[] = [];
+      let ordinaryRequests = 0;
+      const postRunThreshold = [
+        "threshold",
+        "queued",
+        "boundary",
+        "repeat",
+        "cancel",
+        "context-agent-end",
+        "context-compact",
+        "queued-custom",
+        "context-and-queued",
+      ].includes(trigger);
+      const fixtureFetch: typeof fetch = async (_input, init) => {
+        const payload: JsonObject = JSON.parse(String(init?.body));
+        requests.push(payload);
+        if (payload.context_management) return response(maintenanceOutput.content[0].text, 20, true);
+        ordinaryRequests += 1;
+        if (trigger === "overflow" && ordinaryRequests === 1) {
+          return Response.json(
+            { error: { message: "maximum context length exceeded", code: "context_length_exceeded" } },
+            { status: 400 },
+          );
+        }
+        if (trigger === "mid-turn" && ordinaryRequests === 1) return toolResponse();
+        const inputTokens =
+          (postRunThreshold && ordinaryRequests === 1) || (trigger === "repeat" && ordinaryRequests === 2)
+            ? 90_000
+            : 20;
+        const text =
+          trigger === "repeat" && ordinaryRequests === 2 ? `task response ${"detail ".repeat(8000)}` : "task response";
+        return response(text, inputTokens, false);
+      };
+      const credentials = new InMemoryCredentialStore();
+      await credentials.modify("openai", async () => ({ type: "api_key", key: "runtime-fixture" }));
+      const modelRuntime = await ModelRuntime.create({
+        credentials,
+        modelsPath: null,
+        modelsStorePath: join(directory, "models-store.json"),
+        refreshOnCreate: false,
+      });
+      modelRuntime.registerNativeProvider({
+        ...native,
+        streamSimple: (activeModel, context, options) =>
+          native.streamSimple(activeModel, context, { ...options, maxRetries: 0, fetch: fixtureFetch }),
+      });
+      const state = {
+        kind: "loaded" as const,
+        path: join(directory, "pi-codex-compact.json"),
+        document: {},
+        settings: { ...DEFAULT_CODEX_COMPACT_SETTINGS, protocol: "context-management" as const },
+      };
+      const settingsManager = SettingsManager.inMemory({
+        compaction: { enabled: true, reserveTokens: 15_000, keepRecentTokens: 10_000 },
+        retry: { enabled: false },
+      });
+      let companionContinued = false;
+      let contextSent = false;
+      let cancellation: Promise<void> | undefined;
+      const companion = (pi: ExtensionAPI) => {
+        const sendContext = () => {
+          if (contextSent) return;
+          contextSent = true;
+          pi.sendMessage(
+            { customType: "neutral-runtime-context", content: "Keep this task context.", display: false },
+            { triggerTurn: false },
+          );
+        };
+        pi.on("agent_end", () => {
+          if (trigger === "context-agent-end") sendContext();
+        });
+        pi.on("session_compact", async (event) => {
+          if (event.reason === "manual") return;
+          if (trigger === "context-compact" || trigger === "context-and-queued") sendContext();
+          if (trigger === "queued-custom" && !companionContinued) {
+            companionContinued = true;
+            pi.sendMessage(
+              { customType: "neutral-runtime-queued", content: "Continue the pending task.", display: false },
+              { deliverAs: "followUp" },
+            );
+          }
+          if ((trigger === "queued" || trigger === "context-and-queued") && !companionContinued) {
+            companionContinued = true;
+            assert.ok(session);
+            await session.followUp("Queued next step");
+          }
+          if (trigger === "cancel") cancellation = session?.abort();
+        });
+        pi.on("agent_before_settle", async (event, ctx) => {
+          if (trigger === "repeat") {
+            // Ensure the next provider response is newer than the persisted
+            // compaction timestamp, as required by Pi's stale-usage guard.
+            const entry = ctx.sessionManager
+              .getBranch()
+              .filter((value) => value.type === "compaction")
+              .at(-1);
+            if (entry)
+              while (Date.now() <= new Date(entry.timestamp).getTime())
+                await new Promise<void>((resolve) => setImmediate(resolve));
+          }
+          if (trigger === "boundary" && !companionContinued) {
+            companionContinued = true;
+            return {
+              entries: [
+                ...event.entries,
+                {
+                  type: "custom_message",
+                  customType: "neutral-runtime-continuation",
+                  content: "Continue the pending task",
+                  display: false,
+                },
+              ],
+              continue: true,
+            };
+          }
+        });
+      };
+      const resourceLoader = new DefaultResourceLoader({
+        cwd: directory,
+        agentDir: directory,
+        settingsManager,
+        noExtensions: true,
+        noSkills: true,
+        noPromptTemplates: true,
+        noThemes: true,
+        agentsFilesOverride: () => ({ agentsFiles: [] }),
+        extensionFactories: [
+          companion,
+          createCodexCompactExtension({
+            fetch: fixtureFetch,
+            settingsRuntime: {
+              get: () => state,
+              reload: async () => state,
+              update: async () => state,
+              flush: async () => {},
             },
           }),
-          { headers: { "content-type": "text/event-stream" } },
-        );
+        ],
+      });
+      await resourceLoader.reload();
+      assert.deepEqual(resourceLoader.getExtensions().errors, []);
+      const sessionManager = SessionManager.inMemory(directory);
+      for (let index = 0; index < 4; index += 1) {
+        sessionManager.appendMessage({
+          role: "user",
+          content: `Older task history ${"data ".repeat(4000)}`,
+          timestamp: Date.now() - 10_000 + index * 2,
+        });
+        sessionManager.appendMessage({
+          role: "assistant",
+          content: [{ type: "text", text: "Still working on the pending task." }],
+          api: model.api,
+          provider: model.provider,
+          model: model.id,
+          usage: {
+            input: trigger === "pre-prompt" ? 90_000 : 20_000,
+            output: 10,
+            cacheRead: 0,
+            cacheWrite: 0,
+            totalTokens: trigger === "pre-prompt" ? 90_010 : 20_010,
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+          },
+          stopReason: "stop",
+          timestamp: Date.now() - 10_000 + index * 2 + 1,
+        });
       }
-      ordinaryRequests += 1;
-      return response([assistant(ordinaryRequests === 1 ? `Finished. ${"x".repeat(6_000)}` : "New request handled.")]);
-    },
-    async ({ session, sessionManager, requests }) => {
-      await session.prompt("Complete the task.");
-      const originalIds = sessionManager.getBranch().map((entry) => entry.id);
-      const rejected = assert.rejects(session.compact(), /cancel/i);
-      await maintenanceStarted;
-      session.abortCompaction();
-      await rejected;
-      assert.equal(bodyCancelled, true);
-      assert.equal(session.isIdle, true);
-      assert.equal(ordinaryRequests, 1);
-      assert.deepEqual(
-        sessionManager.getBranch().map((entry) => entry.id),
-        originalIds,
+      ({ session } = await createAgentSession({
+        cwd: directory,
+        agentDir: directory,
+        modelRuntime,
+        model,
+        resourceLoader,
+        settingsManager,
+        sessionManager,
+        tools: ["read"],
+      }));
+      await session.bindExtensions({ mode: "print" });
+      await writeFile(join(directory, "pending.txt"), "Tool execution remains available after compaction.");
+      const compactionEvents: Array<{ reason: string; willRetry: boolean }> = [];
+      session.subscribe((event) => {
+        if (event.type === "compaction_end") compactionEvents.push(event);
+      });
+      if (trigger === "manual") await session.compact();
+      await session.prompt("Complete the pending task.");
+      await cancellation;
+      assert.equal(
+        requests.length,
+        trigger === "repeat" ? 4 : ["pre-prompt", "manual", "cancel"].includes(trigger) ? 2 : 3,
       );
-      assert.equal(latestCheckpoint(sessionManager.getBranch()), undefined);
-      await session.prompt("Handle a new request.");
-      assert.equal(ordinaryRequests, 2);
-      assert.equal(replayNote(input(requests.at(-1) as JsonObject)).length, 0);
-    },
-  );
-});
+      assert.equal(session.isIdle, true);
+      assert.match(
+        JSON.stringify(
+          session.messages
+            .slice()
+            .reverse()
+            .find((message) => message.role === "assistant"),
+        ),
+        /task response/,
+      );
+      assert.doesNotMatch(JSON.stringify(session.messages), /msg_maintenance|PI_CONTEXT_COMPACTION_V1/);
+      const compactions = sessionManager.getBranch().filter((entry) => entry.type === "compaction");
+      assert.equal(compactions.length, trigger === "repeat" ? 2 : 1);
+      assert.equal(compactions[0].fromHook, true);
+      assert.equal(compactionEvents.length, trigger === "repeat" ? 2 : 1);
+      if (trigger !== "manual") {
+        assert.equal(compactionEvents[0].willRetry, trigger === "overflow");
+        assert.equal(compactionEvents[0].reason, trigger === "overflow" ? "overflow" : "threshold");
+      }
+      const maintenanceRequests = requests.filter((payload) => payload.context_management);
+      assert.equal(maintenanceRequests.length, trigger === "repeat" ? 2 : 1);
+      const maintenanceInput = maintenanceRequests[0].input as JsonObject[];
+      assert.match(JSON.stringify(maintenanceInput.at(-1)), /continuation handoff/);
+      assert.doesNotMatch(JSON.stringify(maintenanceInput.at(-1)), /reply only OK/i);
+      const persisted = compactions[0].details as { replacementHistory: JsonObject[] };
+      assert.deepEqual(persisted.replacementHistory, [checkpoint, maintenanceOutput]);
+      assert.equal(maintenanceRequests[0].tool_choice, "none");
+
+      const continuationEntries = sessionManager
+        .getBranch()
+        .filter((entry) => entry.type === "custom_message" && entry.customType === "codex-compact:continue-v1");
+      assert.equal(
+        continuationEntries.length,
+        ["threshold", "repeat", "context-agent-end", "context-compact"].includes(trigger) ? 1 : 0,
+      );
+      if (contextSent) {
+        const contextEntries = sessionManager
+          .getBranch()
+          .filter((entry) => entry.type === "custom_message" && entry.customType === "neutral-runtime-context");
+        assert.equal(contextEntries.length, 1);
+        assert.ok(contextEntries[0].type === "custom_message");
+        assert.equal(contextEntries[0].content, "Keep this task context.");
+        if (trigger !== "context-and-queued") {
+          const workAfterCompaction = requests.slice(requests.indexOf(maintenanceRequests[0]) + 1);
+          assert.match(JSON.stringify(workAfterCompaction[0].input), /Keep this task context\./);
+        }
+      }
+      const lastUser = sessionManager
+        .getBranch()
+        .slice()
+        .reverse()
+        .find((entry) => entry.type === "message" && entry.message.role === "user");
+      assert.ok(lastUser?.type === "message" && lastUser.message.role === "user");
+      assert.deepEqual(lastUser.message.content, [
+        {
+          type: "text",
+          text:
+            trigger === "queued" || trigger === "context-and-queued"
+              ? "Queued next step"
+              : "Complete the pending task.",
+        },
+      ]);
+      if (trigger === "mid-turn")
+        assert.ok(session.messages.some((message) => message.role === "toolResult" && !message.isError));
+
+      // A later user request keeps the persisted continuation at its original boundary.
+      await session.prompt("Continue the task with the next step.");
+      const maintenanceIndex = requests.indexOf(maintenanceRequests.at(-1) as JsonObject);
+      const replayRequests = requests.slice(maintenanceIndex + 1);
+      assert.equal(replayRequests.length, trigger === "repeat" || trigger === "cancel" ? 1 : 2);
+      for (const payload of replayRequests) {
+        const input = payload.input as JsonObject[];
+        const checkpointIndex = input.findIndex((item) => item.type === "compaction");
+        assert.ok(checkpointIndex >= 0);
+        assert.deepEqual(input.slice(checkpointIndex, checkpointIndex + 2), [checkpoint, maintenanceOutput]);
+        assert.doesNotMatch(JSON.stringify(payload), /PI_CONTEXT_COMPACTION_V1|compact_threshold/);
+        assert.notEqual(payload.tool_choice, "none");
+        assert.equal(input.filter((item) => item.type === "compaction").length, 1);
+        assert.match(JSON.stringify(payload.tools), /"name":"read"/);
+      }
+      if (replayRequests.length === 2) {
+        const baseline = replayRequests[0];
+        const next = replayRequests[1];
+        assert.deepEqual(
+          (next.input as JsonObject[]).slice(0, (baseline.input as JsonObject[]).length),
+          baseline.input,
+        );
+        assert.deepEqual(next.tools, baseline.tools);
+        assert.equal(next.instructions, baseline.instructions);
+      }
+      assert.equal(requests.filter((payload) => payload.context_management).length, trigger === "repeat" ? 2 : 1);
+    } finally {
+      session?.dispose();
+      if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+      else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+}

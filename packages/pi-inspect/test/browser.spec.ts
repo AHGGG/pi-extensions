@@ -83,9 +83,8 @@ test("existing prompt/tools/skills/context/codemode, filtering, read-only select
   await nav(page, data.delta).click();
   await expect(page.getByText("+ changed", { exact: false })).toBeVisible();
   await page.getByRole("tab", { name: "tools", exact: true }).click();
-  await expect(
-    page.getByRole("button", { name: "Historical declared tools · preview branch", exact: true }),
-  ).toBeVisible();
+  await expect(page.getByRole("region", { name: "Historical declared tools", exact: true })).toBeVisible();
+  await expect(page.getByRole("navigation", { name: "Declared tools" })).toContainText("No declared tools.");
   await expect(page.locator(".inspector-panel .inventory-card")).toHaveCount(0);
   await page.getByRole("tab", { name: "skills", exact: true }).click();
   await openObjects(page, "Evidence on preview branch");

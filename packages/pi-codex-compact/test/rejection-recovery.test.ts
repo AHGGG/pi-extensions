@@ -6,7 +6,7 @@ import {
   type SessionBeforeCompactEvent,
   type SessionEntry,
 } from "@earendil-works/pi-coding-agent";
-import { test } from "vitest";
+import { test, vi } from "vitest";
 import { createMockContext, createMockPi } from "../../../test/support.js";
 import {
   checkpointMarker,
@@ -16,7 +16,6 @@ import {
   latestCheckpoint,
 } from "../src/checkpoint.js";
 import { createCodexCompactExtension } from "../src/codex-compact.js";
-import { COMPACTION_REPLAY_MESSAGE } from "../src/context-management.js";
 import { resolveCompactionRoute } from "../src/model-api.js";
 import { RejectedRoutes, rejectionRouteKey } from "../src/rejection-state.js";
 import {
@@ -198,7 +197,6 @@ async function harness(
       getSystemPrompt: () => "original instructions",
       modelRegistry: {
         getProvider: () => provider,
-        getProviderAuth: async () => ({ auth: { apiKey: "secret-fixture" }, source: "stored credential" }),
         getApiKeyAndHeaders: async () => {
           options.onAuth?.(++authCalls);
           return {
@@ -239,6 +237,7 @@ async function harness(
     mock,
     run,
     payloads,
+    provider,
     entries,
     runtime,
     makeContext,
@@ -406,25 +405,112 @@ test("Cancel setting avoids summary quota and preserves replay across repeated r
     },
     h.ctx,
   );
-  assert.deepEqual(replay, {
-    input: [
-      { type: "compaction", encrypted_content: "opaque-assistant-only-fact" },
-      { role: "developer", content: [{ type: "input_text", text: COMPACTION_REPLAY_MESSAGE }] },
-    ],
-  });
+  assert.deepEqual(replay, { input: [{ type: "compaction", encrypted_content: "opaque-assistant-only-fact" }] });
 });
 
-test("summary recovery failure cancels without changing opaque history", async () => {
+test("summary recovery failure hands off to Pi native without prematurely changing opaque history", async () => {
   const h = await harness({
     checkpoint: true,
     response: async () => Response.json({ error: rejection }, { status: 401 }),
   });
   const before = structuredClone(h.entries);
-  assert.deepEqual(await h.run(), { cancel: true });
+  assert.equal(await h.run(), undefined);
   assert.equal(h.payloads.length, 2);
   assert.deepEqual(h.entries, before);
-  assert.match(h.notifications.at(-1)?.message ?? "", /cancelled and history preserved/);
+  assert.match(h.notifications.at(-1)?.message ?? "", /using Pi native compaction.*opaque checkpoint may be lost/);
   assert.doesNotMatch(h.notifications.at(-1)?.message ?? "", /secret-fixture/);
+});
+
+for (const failure of ["malformed", "unsafe", "empty", "oversized", "timeout"] as const) {
+  test(`recovery ${failure} failure hands off to native after releasing its request`, async () => {
+    let calls = 0;
+    let recoverySignal: AbortSignal | undefined;
+    const h = await harness({
+      checkpoint: true,
+      settings: { maxRetries: 0 },
+      response: async () => {
+        if (++calls === 1) return Response.json({ error: rejection }, { status: 401 });
+        if (failure === "timeout") return new Promise<Response>(() => {});
+        if (failure === "malformed") return new Response("data: not-json\n\n");
+        const text = failure === "empty" ? "" : "x".repeat(failure === "oversized" ? 2 * 1024 * 1024 + 1 : 1);
+        const output =
+          failure === "unsafe"
+            ? [{ type: "function_call", id: "fc", name: "read", call_id: "fc", arguments: "{}" }]
+            : [{ type: "message", id: "msg", role: "assistant", content: [{ type: "output_text", text }] }];
+        return new Response(
+          [
+            ...output.flatMap((item, output_index) => [
+              { type: "response.output_item.added", output_index, item },
+              { type: "response.output_item.done", output_index, item },
+            ]),
+            { type: "response.completed", response: { id: "resp", status: "completed", output } },
+          ]
+            .map((event) => `data: ${JSON.stringify(event)}\n\n`)
+            .join(""),
+          { headers: { "content-type": "text/event-stream" } },
+        );
+      },
+    });
+    const provider = h.provider;
+    const originalStream = provider.stream.bind(provider);
+    provider.stream = (model, context, options) => {
+      if (JSON.stringify(context).includes(checkpointMarker("old-checkpoint"))) recoverySignal = options?.signal;
+      return originalStream(model, context, options);
+    };
+    const before = structuredClone(h.entries);
+    try {
+      if (failure === "timeout") vi.useFakeTimers();
+      const pending = h.run();
+      if (failure === "timeout") await vi.advanceTimersByTimeAsync(300_001);
+      assert.equal(await pending, undefined);
+      assert.equal(calls, 2);
+      assert.deepEqual(h.entries, before);
+      assert.equal(recoverySignal?.aborted, true);
+      assert.match(h.notifications.at(-1)?.message ?? "", /using Pi native compaction/);
+      if (failure === "empty" || failure === "oversized")
+        assert.match(h.notifications.at(-1)?.message ?? "", /empty or oversized summary/);
+      if (failure === "unsafe") assert.match(h.notifications.at(-1)?.message ?? "", /Unsafe checkpoint recovery/);
+      if (failure === "timeout") assert.match(h.notifications.at(-1)?.message ?? "", /timed out/);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+}
+
+for (const mode of ["tui", "rpc", "print", "json"] as const) {
+  test(`${mode} recovery fallback warns only through supported UI and redacts secrets`, async () => {
+    const h = await harness({
+      checkpoint: true,
+      response: async () => Response.json({ error: { message: "secret-fixture\u001b[31m" } }, { status: 400 }),
+    });
+    Object.assign(h.ctx, { mode, hasUI: mode === "tui" || mode === "rpc" });
+    assert.equal(await h.run(), undefined);
+    if (mode === "tui" || mode === "rpc") {
+      assert.match(h.notifications.at(-1)?.message ?? "", /opaque checkpoint may be lost/);
+      assert.doesNotMatch(h.notifications.at(-1)?.message ?? "", /secret-fixture/);
+      assert.equal(h.notifications.at(-1)?.message.includes("\u001b"), false);
+    } else assert.equal(h.notifications.length, 0);
+  });
+}
+
+test("notifications disabled still permits recovery-to-native handoff", async () => {
+  const h = await harness({
+    checkpoint: true,
+    settings: { notifyOnFallback: false },
+    response: async () => Response.json({ error: rejection }, { status: 401 }),
+  });
+  assert.equal(await h.run(), undefined);
+  assert.equal(h.notifications.length, 0);
+});
+
+test("unverifiable checkpoint projection cancels rather than handing off to native", async () => {
+  const h = await harness({ checkpoint: true });
+  const old = h.entries[0];
+  assert.equal(old.type, "message");
+  if (old.type === "message") old.message = { role: "user", content: "changed retained snapshot", timestamp: 1 };
+  assert.deepEqual(await h.run(), { cancel: true });
+  assert.equal(h.payloads.length, 0);
+  assert.match(h.notifications.at(-1)?.message ?? "", /cancelled and history preserved/);
 });
 
 for (const patch of [{ id: "other-model" }, { provider: "proxy" }, { baseUrl: "https://proxy.test/v1" }] as const) {
@@ -568,42 +654,50 @@ test("incompatible checkpoint cancels before any request", async () => {
   assert.deepEqual(h.entries, before);
 });
 
-for (const transition of ["cancel", "reload", "settings", "branch"] as const) {
-  test(`delayed summary after ${transition} cannot replace checkpoint history`, async () => {
-    let release!: (response: Response) => void;
-    let started!: () => void;
-    const ready = new Promise<void>((resolve) => {
-      started = resolve;
+for (const transition of ["cancel", "reload", "settings", "branch", "shutdown", "replacement", "model"] as const) {
+  for (const failed of [false, true]) {
+    test(`delayed ${failed ? "failed" : "successful"} summary after ${transition} cannot publish or fall back`, async () => {
+      let release!: (response: Response) => void;
+      let started!: () => void;
+      const ready = new Promise<void>((resolve) => {
+        started = resolve;
+      });
+      const response = new Promise<Response>((resolve) => {
+        release = resolve;
+      });
+      let calls = 0;
+      const h = await harness({
+        checkpoint: true,
+        response: async () => {
+          calls += 1;
+          if (calls === 1) return Response.json({ error: rejection }, { status: 401 });
+          started();
+          return response;
+        },
+      });
+      const controller = new AbortController();
+      const pending = h.run(h.ctx, controller.signal);
+      await ready;
+      const before = structuredClone(h.entries);
+      const warnings = h.notifications.length;
+      if (transition === "cancel") controller.abort();
+      if (transition === "reload")
+        await h.mock.events.get("session_start")?.[0]({ type: "session_start", reason: "reload" }, h.ctx);
+      if (transition === "settings") await h.runtime.update({ checkpointRecovery: "cancel" });
+      if (transition === "branch") h.entries.push({ ...user("new-leaf", 10), parentId: "tail" });
+      if (transition === "shutdown")
+        await h.mock.events.get("session_shutdown")?.[0]({ type: "session_shutdown", reason: "exit" }, h.ctx);
+      if (transition === "replacement") h.replaceId();
+      if (transition === "model") h.setModel({ id: "other-model" });
+      if (transition === "reload") h.statuses.set("codex-compact", "replacement-owned");
+      release(failed ? Response.json({ error: rejection }, { status: 401 }) : summaryResponse());
+      assert.deepEqual(await pending, { cancel: true });
+      assert.deepEqual(h.entries.slice(0, before.length), before);
+      assert.equal(h.notifications.length, warnings);
+      if (transition === "reload") assert.equal(h.statuses.get("codex-compact"), "replacement-owned");
+      else if (transition !== "replacement") assert.equal(h.statuses.get("codex-compact"), undefined);
     });
-    const response = new Promise<Response>((resolve) => {
-      release = resolve;
-    });
-    let calls = 0;
-    const h = await harness({
-      checkpoint: true,
-      response: async () => {
-        calls += 1;
-        if (calls === 1) return Response.json({ error: rejection }, { status: 401 });
-        started();
-        return response;
-      },
-    });
-    const controller = new AbortController();
-    const pending = h.run(h.ctx, controller.signal);
-    await ready;
-    const before = structuredClone(h.entries);
-    if (transition === "cancel") controller.abort();
-    if (transition === "reload")
-      await h.mock.events.get("session_start")?.[0]({ type: "session_start", reason: "reload" }, h.ctx);
-    if (transition === "settings") await h.runtime.update({ checkpointRecovery: "cancel" });
-    if (transition === "branch") h.entries.push({ ...user("new-leaf", 10), parentId: "tail" });
-    if (transition === "reload") h.statuses.set("codex-compact", "replacement-owned");
-    release(summaryResponse());
-    assert.deepEqual(await pending, { cancel: true });
-    assert.deepEqual(h.entries.slice(0, before.length), before);
-    if (transition === "reload") assert.equal(h.statuses.get("codex-compact"), "replacement-owned");
-    else assert.equal(h.statuses.get("codex-compact"), undefined);
-  });
+  }
 }
 
 test("checkpoint recovery setting changes apply immediately without clearing rejection", async () => {

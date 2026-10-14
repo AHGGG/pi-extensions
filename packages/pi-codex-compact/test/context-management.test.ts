@@ -73,7 +73,7 @@ async function request(fetch: typeof globalThis.fetch, options = {}) {
   });
 }
 
-test("explicit server compaction remains selectable and the saved default remains auto", () => {
+test("server compaction is an explicit opt-in setting, not a new auto route", () => {
   assert.equal(normalizeCodexCompactSettings({ protocol })?.protocol, "context-management");
   assert.equal(normalizeCodexCompactSettings({})?.protocol, "auto");
 });
@@ -217,11 +217,13 @@ for (const signature of [undefined, null, ""]) {
 
 test("maintenance control is appended exactly once and prior checkpoint expansion preserves its suffix", async () => {
   const prior = [latest, suffix];
+  let maintenanceText = "";
   await request(
     async (_input, init) => {
       const payload = JSON.parse(String(init?.body));
       assert.deepEqual(payload.input.slice(1, -1), prior);
       assert.equal(payload.input[0].content, "original system");
+      maintenanceText = payload.input.at(-1).content[0].text;
       assert.deepEqual(payload.input.at(-1), {
         role: "user",
         content: [{ type: "input_text", text: COMPACTION_MAINTENANCE_MESSAGE }],
@@ -237,7 +239,39 @@ test("maintenance control is appended exactly once and prior checkpoint expansio
       priorCheckpoint: { marker: "prior marker", replacementHistory: prior },
     },
   );
+  assert.match(
+    maintenanceText,
+    /continuation handoff with the goal, completed work, pending work, next action, and blockers/,
+  );
+  assert.match(maintenanceText, /For this request only, do not perform tasks or call tools\./);
+  assert.match(maintenanceText, /This maintenance instruction expires when this response completes\./);
+  assert.match(
+    maintenanceText,
+    /On later requests, follow the original conversation instructions and continue any unfinished task/,
+  );
+  assert.doesNotMatch(maintenanceText, /reply only OK/i);
 });
+
+for (const text of [
+  "OK",
+  "Goal: finish the task. Completed: inspection. Pending: tests. Next: run tests. Blockers: none.",
+]) {
+  test(`maintenance output is retained exactly for ${text === "OK" ? "legacy acknowledgment" : "work handoff"}`, async () => {
+    const output = { ...suffix, content: [{ type: "output_text", text, annotations: [] }] };
+    const result = await request(async () => sse([latest, output], { output: [output] }));
+    assert.deepEqual(result.replacementHistory, [latest, output]);
+    const details = createCheckpointDetails({
+      provider: model.provider,
+      api: model.api,
+      profile: "openai-responses-v1",
+      modelId: model.id,
+      protocol,
+      replacementHistory: result.replacementHistory ?? [],
+      keptMessages: [],
+    });
+    assert.deepEqual(parseCheckpointDetails(details)?.replacementHistory, [latest, output]);
+  });
+}
 
 test("auth, custom headers, environment and original tool definitions stay provider-owned", async () => {
   let optionsSeen = false;

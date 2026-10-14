@@ -27,6 +27,7 @@ function registeredProgressTool(): RegisteredTool {
     registerTool(definition: RegisteredTool) {
       tools.push(definition);
     },
+    registerCommand() {},
     on() {},
   } as unknown as ExtensionAPI;
   progressWidgetExtension(pi);

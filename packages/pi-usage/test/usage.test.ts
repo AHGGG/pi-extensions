@@ -11,7 +11,7 @@ import {
 import { test, vi } from "vitest";
 import { createMockContext, createMockPi } from "../../../test/support.js";
 import { OAUTH_CREDENTIAL_SOURCE_CHANNEL } from "../src/oauth-credential-source.js";
-import type { UsageSettingsRuntime, UsageSettingsState } from "../src/settings.js";
+import { DEFAULT_USAGE_SETTINGS, type UsageSettingsRuntime, type UsageSettingsState } from "../src/settings.js";
 import usageExtension from "../src/usage.js";
 import { showUsageSettings } from "../src/usage-settings-ui.js";
 
@@ -110,6 +110,7 @@ function memorySettingsRuntime(
   options: {
     codexStatusResetCountdown?: boolean;
     codexStatusPercentage?: "remaining" | "used";
+    statuslineDisplay?: UsageSettingsState["settings"]["statuslineDisplay"];
     fireworksAccountId?: string;
     selectedTargets?: Record<string, string>;
     document?: Record<string, unknown>;
@@ -123,6 +124,8 @@ function memorySettingsRuntime(
     kind,
     path: "/tmp/pi-usage.json",
     settings: {
+      ...DEFAULT_USAGE_SETTINGS,
+      statuslineDisplay: options.statuslineDisplay ?? DEFAULT_USAGE_SETTINGS.statuslineDisplay,
       codexFastMode: false,
       codexStatusResetCountdown: options.codexStatusResetCountdown ?? false,
       codexStatusPercentage: options.codexStatusPercentage ?? "remaining",
@@ -419,7 +422,7 @@ test("current Codex usage can redeem a selected reset and refresh account state"
   });
   assert.equal(new Headers(consume.init?.headers).get("chatgpt-account-id"), "account-123");
   assert.ok(usageRequests >= 2);
-  assert.equal(statuses.get("usage"), "codex 100% 5h");
+  assert.equal(statuses.get("usage"), "codex 5h:100%");
   assert.match(titles.at(-1) ?? "", /Usage reset.*0 usage limit resets left/isu);
 });
 
@@ -1010,7 +1013,7 @@ test("current Kimi usage follows account changes and clears status on model repl
 
   await mock.events.get("session_start")?.[0]?.({}, ctx);
   await settle();
-  assert.equal(statuses.get("usage"), "kimi 99% 5h 96% wk");
+  assert.equal(statuses.get("usage"), "kimi 5h:99% · wk:96%");
   await command.handler("", ctx);
   assert.match(titles[0] ?? "", /Kimi For Coding Usage · Current/);
   assert.match(titles[0] ?? "", /1 of 100 used · 99% left/);
@@ -1018,7 +1021,7 @@ test("current Kimi usage follows account changes and clears status on model repl
   activeKey = "kimi-account-b";
   mock.events.get("turn_start")?.[0]?.({}, ctx);
   await settle();
-  assert.equal(statuses.get("usage"), "kimi 75% 5h 96% wk");
+  assert.equal(statuses.get("usage"), "kimi 5h:75% · wk:96%");
   assert.ok(fetchedKeys.includes("Bearer kimi-account-a"));
   assert.ok(fetchedKeys.includes("Bearer kimi-account-b"));
 
@@ -1546,8 +1549,10 @@ test("DeepSeek account rotation at the request boundary retries without querying
 
 test("MiniMax account rotation at the request boundary retries without querying the stale key", async (t) => {
   const originalFetch = globalThis.fetch;
+  const clock = vi.spyOn(Date, "now").mockReturnValue(1_800_000_000_000);
   t.onTestFinished(() => {
     globalThis.fetch = originalFetch;
+    clock.mockRestore();
   });
   let authLookups = 0;
   const fetchedKeys: string[] = [];
@@ -1602,7 +1607,7 @@ test("MiniMax account rotation at the request boundary retries without querying 
 
   assert.ok(authLookups >= 5);
   assert.deepEqual(fetchedKeys, ["Bearer minimax-account-b"]);
-  assert.equal(statuses.get("usage"), "minimax 15% 5h 80% wk");
+  assert.equal(statuses.get("usage"), "minimax 15% ↻ 5h · 80% ↻ 6d16h");
   mock.events.get("session_shutdown")?.[0]?.({}, ctx);
   assert.equal(statuses.get("usage"), undefined);
 });
@@ -1745,23 +1750,25 @@ test("Z.AI providers publish statusline usage and refresh through /usage", async
   await mock.events.get("session_start")?.[0]?.({}, ctx);
   await settle();
   assert.equal(fetches, 2);
-  assert.equal(statuses.get("usage"), "zai 90% 5h 80% wk");
+  assert.equal(statuses.get("usage"), "zai 5h:90% · wk:80%");
 
   mock.events.get("turn_start")?.[0]?.({}, ctx);
   await settle();
   assert.equal(fetches, 2);
-  assert.equal(statuses.get("usage"), "zai 90% 5h 80% wk");
+  assert.equal(statuses.get("usage"), "zai 5h:90% · wk:80%");
 
   await command.handler("", ctx);
   assert.equal(fetches, 2);
   assert.match(titles[0] ?? "", /5h window:\s+\[█{18}░{2}\] 90% left/);
-  assert.equal(statuses.get("usage"), "zai 90% 5h 80% wk");
+  assert.equal(statuses.get("usage"), "zai 5h:90% · wk:80%");
 });
 
 test("Command Code publishes statusline usage from the alpha endpoints", async (t) => {
   const originalFetch = globalThis.fetch;
+  const clock = vi.spyOn(Date, "now").mockReturnValue(Date.parse("2026-10-12T00:00:00Z"));
   t.onTestFinished(() => {
     globalThis.fetch = originalFetch;
+    clock.mockRestore();
   });
   const seen: string[] = [];
   globalThis.fetch = async (input) => {
@@ -1814,7 +1821,8 @@ test("Command Code publishes statusline usage from the alpha endpoints", async (
     "https://api.commandcode.ai/alpha/billing/subscriptions",
     `https://api.commandcode.ai/alpha/usage/summary?since=${encodeURIComponent("2026-09-22T06:17:06.000Z")}`,
   ]);
-  assert.equal(statuses.get("usage"), "cmd 99% 5h 92% wk 96% mo");
+  assert.equal(statuses.get("usage"), "cmd 5h:99% · wk:92% · 96% ↻ 10d6h");
+  mock.events.get("session_shutdown")?.[0]?.({}, ctx);
 });
 
 test("automatic provider failures back off instead of retrying every turn", async (t) => {
@@ -2014,7 +2022,15 @@ test("Codex used percentage and reset countdown repaint locally and stop across 
       { status: 200 },
     );
   };
-  const settings = memorySettingsRuntime({ codexStatusResetCountdown: true, codexStatusPercentage: "used" });
+  const settings = memorySettingsRuntime({
+    codexStatusResetCountdown: true,
+    codexStatusPercentage: "used",
+    statuslineDisplay: {
+      ...DEFAULT_USAGE_SETTINGS.statuslineDisplay,
+      template: "[{windows}] {provider}",
+      countdown: "{window}:{value} ↻ {reset}",
+    },
+  });
   const mock = createMockPi();
   usageExtension(mock.pi, { settingsRuntime: settings.runtime });
   const { ctx, statuses } = createMockContext({
@@ -2030,11 +2046,11 @@ test("Codex used percentage and reset countdown repaint locally and stop across 
 
   await mock.events.get("session_start")?.[0]?.({}, ctx);
   await vi.advanceTimersByTimeAsync(0);
-  assert.equal(statuses.get("usage"), "codex 20% ↻ 3m");
+  assert.equal(statuses.get("usage"), "[5h:20% ↻ 3m] codex");
   assert.equal(fetches, 1);
 
   await vi.advanceTimersByTimeAsync(60_000);
-  assert.equal(statuses.get("usage"), "codex 20% ↻ 2m");
+  assert.equal(statuses.get("usage"), "[5h:20% ↻ 2m] codex");
   assert.equal(fetches, 1);
 
   Object.assign(ctx, { model: undefined });
@@ -2046,7 +2062,7 @@ test("Codex used percentage and reset countdown repaint locally and stop across 
   Object.assign(ctx, { model: codexModel });
   mock.events.get("model_select")?.[0]?.({ model: codexModel }, ctx);
   await vi.advanceTimersByTimeAsync(0);
-  assert.equal(statuses.get("usage"), "codex 20% ↻ 1m");
+  assert.equal(statuses.get("usage"), "[5h:20% ↻ 1m] codex");
   assert.equal(fetches, 2);
 
   mock.events.get("session_shutdown")?.[0]?.({}, ctx);
@@ -2179,11 +2195,11 @@ test("a slow command cannot overwrite status after the selected model changes", 
   Object.assign(ctx, { model: codexModel });
   mock.events.get("model_select")?.[0]?.({ model: codexModel }, ctx);
   await settle();
-  assert.equal(statuses.get("usage"), "codex 80% 5h");
+  assert.equal(statuses.get("usage"), "codex 5h:80%");
 
   resolveSlowFetch(await usageFetch("https://openrouter.ai/api/v1/key"));
   await commandPromise;
-  assert.equal(statuses.get("usage"), "codex 80% 5h");
+  assert.equal(statuses.get("usage"), "codex 5h:80%");
 });
 
 test("statusline follows runtime auth changes and clears for unsupported selected providers", async (t) => {
@@ -2779,6 +2795,7 @@ test("Ctrl+C hard-cancels Settings before conflicting configurable actions", asy
 
   assert.equal(changed, false);
   assert.deepEqual(settings.state().settings, {
+    ...DEFAULT_USAGE_SETTINGS,
     codexFastMode: false,
     codexStatusResetCountdown: false,
     codexStatusPercentage: "remaining",

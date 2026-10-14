@@ -1,5 +1,17 @@
 # @narumitw/pi-inspect
 
+## 0.2.2
+
+### Patch Changes
+
+- c0d362f: Update the Radix collapsible runtime dependency to the latest patch release.
+
+## 0.2.1
+
+### Patch Changes
+
+- 617069f: Show searchable structured tool documentation in Details → Tools, including expandable parameter schemas, constraints, documented returns, and original captured JSON access. Recognize Pi's Codemode return syntax, preserve declared types, and show conservative requiredness for composed schemas.
+
 ## 0.2.0
 
 ### Minor Changes

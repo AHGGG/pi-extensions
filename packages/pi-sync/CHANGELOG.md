@@ -1,5 +1,17 @@
 # @narumitw/pi-sync
 
+## 0.54.2
+
+### Patch Changes
+
+- 491fc28: Fix Windows EPERM errors when syncing snapshot backups and staged recovery files by opening regular files with write access for flushing.
+
+## 0.54.1
+
+### Patch Changes
+
+- 2191720: Show clear local and remote change summaries with one explicit safe-default confirmation and optional read-only details. Keep remote snapshot publication separate from file changes and preserve cancellation and stale-state guards. On compact terminals, scroll the main summary before approval; resizing resets the review and the safe default.
+
 ## 0.54.0
 
 ### Minor Changes

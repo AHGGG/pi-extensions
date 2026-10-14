@@ -337,10 +337,10 @@ test("Codex adapter preserves windows, credits, and model-specific statusline bu
   assert.match(formatUsageReport(report, "current"), /5h limit:/);
   assert.match(formatUsageReport(report, "current"), /Weekly limit:/);
   const statusNow = 1_000_000;
-  assert.equal(formatUsageStatusline(report, undefined, statusNow), "codex 70% ↻ 2h30m 20% ↻ 2d15m");
-  assert.equal(formatUsageStatusline(report, undefined, statusNow, false), "codex 70% 5h 20% wk");
-  assert.equal(formatUsageStatusline(report, undefined, statusNow, true, "used"), "codex 30% ↻ 2h30m 80% ↻ 2d15m");
-  assert.equal(formatUsageStatusline(report, undefined, statusNow, false, "used"), "codex 30% 5h 80% wk");
+  assert.equal(formatUsageStatusline(report, undefined, statusNow), "codex 70% ↻ 2h30m · 20% ↻ 2d15m");
+  assert.equal(formatUsageStatusline(report, undefined, statusNow, false), "codex 5h:70% · wk:20%");
+  assert.equal(formatUsageStatusline(report, undefined, statusNow, true, "used"), "codex 30% ↻ 2h30m · 80% ↻ 2d15m");
+  assert.equal(formatUsageStatusline(report, undefined, statusNow, false, "used"), "codex 5h:30% · wk:80%");
   assert.equal(
     formatUsageStatusline(
       report,
@@ -353,7 +353,7 @@ test("Codex adapter preserves windows, credits, and model-specific statusline bu
       true,
       "used",
     ),
-    "codex spark 10% 5h",
+    "codex spark 5h:10%",
   );
 
   const sparkBucket = report.buckets.find((bucket) => bucket.groupId === "gpt-5.3-codex-spark");
@@ -365,6 +365,6 @@ test("Codex adapter preserves windows, credits, and model-specific statusline bu
       name: "-".repeat(100_000),
       provider: "openai-codex",
     }),
-    "codex spark 90% 5h",
+    "codex spark 5h:90%",
   );
 });

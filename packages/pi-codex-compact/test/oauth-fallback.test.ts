@@ -5,7 +5,6 @@ import { test } from "vitest";
 import { createMockContext, createMockPi } from "../../../test/support.js";
 import { checkpointMarker, createCheckpointDetails, fallbackSummary } from "../src/checkpoint.js";
 import { createCodexCompactExtension } from "../src/codex-compact.js";
-import { COMPACTION_REPLAY_MESSAGE } from "../src/context-management.js";
 import {
   type CodexCompactSettings,
   type CodexCompactSettingsRuntime,
@@ -150,7 +149,6 @@ async function harness(
     },
     modelRegistry: {
       getApiKeyAndHeaders: async () => ({ ok: true, ...auth, headers: options.headers, env: options.env }),
-      getProviderAuth: async () => ({ auth, source: "OAuth" }),
       getProvider: () => provider,
       isUsingOAuth: () => assert.fail("credential snapshots must not determine routing or diagnosis"),
     },
@@ -185,8 +183,12 @@ for (const protocol of ["auto", "responses-compact", "remote-v2"] as const) {
     assert.deepEqual(await h.run(), { cancel: true }, "opaque history is not handed to native text-only compaction");
     assert.deepEqual(
       h.requests,
-      ["https://api.openai.com/v1/responses"],
-      "OAuth selects Context Management before dispatch, then does not retry a rejected operation",
+      [
+        protocol === "remote-v2"
+          ? "https://api.openai.com/v1/responses"
+          : "https://api.openai.com/v1/responses/compact",
+      ],
+      "neither permission retries nor automatic alternate-protocol requests",
     );
     assert.deepEqual(h.entries, h.original);
     assert.deepEqual(h.mock.entries, []);
@@ -212,12 +214,7 @@ for (const protocol of ["auto", "responses-compact", "remote-v2"] as const) {
       },
       h.ctx,
     );
-    assert.deepEqual(replay, {
-      input: [
-        { type: "compaction", encrypted_content: "existing-opaque" },
-        { role: "developer", content: [{ type: "input_text", text: COMPACTION_REPLAY_MESSAGE }] },
-      ],
-    });
+    assert.deepEqual(replay, { input: [{ type: "compaction", encrypted_content: "existing-opaque" }] });
   });
 }
 

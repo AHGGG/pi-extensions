@@ -13,6 +13,9 @@ import {
   type UsageProviderAdapter,
 } from "../src/index.js";
 
+// Keep adapter assertions focused on static fallback after every fixture reset has expired.
+const STATIC_STATUS_NOW = Date.parse("2031-01-01T00:00:00Z");
+
 const MODELS = {
   minimax: {
     id: "MiniMax-M3",
@@ -124,7 +127,7 @@ test("MiniMax Token Plan normalizes legacy and current count semantics", () => {
   assert.match(formatted, /^MiniMax Token Plan · Current/mu);
   assert.match(formatted, /Rolling window:\s+228 of 1500 left · 15%/u);
   assert.match(formatted, /Weekly window:\s+800 of 1000 left · 80%/u);
-  assert.equal(formatUsageStatusline(report), "minimax 15% 5h 80% wk");
+  assert.equal(formatUsageStatusline(report, undefined, STATIC_STATUS_NOW), "minimax 5h:15% · wk:80%");
 });
 
 test("MiniMax Token Plan preserves unlimited windows and sanitizes model labels", () => {
@@ -139,7 +142,7 @@ test("MiniMax Token Plan preserves unlimited windows and sanitizes model labels"
   assert.equal(report.buckets[0]?.groupLabel, "MiniMax Unlimited");
   assert.equal(report.buckets[0]?.period, "unlimited");
   assert.match(formatUsageReport(report, "configured"), /Rolling window:\s+unlimited/u);
-  assert.equal(formatUsageStatusline(report), "minimax cn unlimited 5h unlimited wk");
+  assert.equal(formatUsageStatusline(report, undefined, STATIC_STATUS_NOW), "minimax cn 5h:unlimited · wk:unlimited");
 });
 
 test("MiniMax statusline preserves mixed windows and selects the active model group", () => {
@@ -149,7 +152,7 @@ test("MiniMax statusline preserves mixed windows and selects the active model gr
     current_interval_status: 3,
   };
   const mixed = normalizeMiniMaxUsagePayload("minimax", "token-plan", mixedPayload, 2_500);
-  assert.equal(formatUsageStatusline(mixed), "minimax unlimited 5h 80% wk");
+  assert.equal(formatUsageStatusline(mixed, undefined, STATIC_STATUS_NOW), "minimax 5h:unlimited · wk:80%");
 
   const groupedPayload = quotaPayload();
   groupedPayload.model_remains = [
@@ -163,8 +166,11 @@ test("MiniMax statusline preserves mixed windows and selects the active model gr
     },
   ];
   const grouped = normalizeMiniMaxUsagePayload("minimax", "token-plan", groupedPayload, 2_600);
-  assert.equal(formatUsageStatusline(grouped, MODELS.minimax), "minimax 80% 5h 60% wk");
-  assert.equal(formatUsageStatusline(grouped, { ...MODELS.minimax, id: "Other-X", name: "Other X" }), undefined);
+  assert.equal(formatUsageStatusline(grouped, MODELS.minimax, STATIC_STATUS_NOW), "minimax 5h:80% · wk:60%");
+  assert.equal(
+    formatUsageStatusline(grouped, { ...MODELS.minimax, id: "Other-X", name: "Other X" }, STATIC_STATUS_NOW),
+    undefined,
+  );
 });
 
 test("MiniMax statusline prefers an exact model group over an earlier wildcard", () => {
@@ -179,7 +185,7 @@ test("MiniMax statusline prefers an exact model group over an earlier wildcard",
     { ...overlappingPayload.model_remains[0], model_name: "MiniMax-M3" },
   ];
   const overlapping = normalizeMiniMaxUsagePayload("minimax", "token-plan", overlappingPayload, 2_700);
-  assert.equal(formatUsageStatusline(overlapping, MODELS.minimax), "minimax 15% 5h 80% wk");
+  assert.equal(formatUsageStatusline(overlapping, MODELS.minimax, STATIC_STATUS_NOW), "minimax 5h:15% · wk:80%");
 });
 
 test("MiniMax pay-as-you-go keeps exact regional balance strings and debt components", () => {
@@ -201,7 +207,7 @@ test("MiniMax pay-as-you-go keeps exact regional balance strings and debt compon
     );
     assert.match(formatUsageReport(report, "current"), /Available balance:\s+(?:USD|CNY) 98\.00001/u);
     assert.equal(
-      formatUsageStatusline(report),
+      formatUsageStatusline(report, undefined, STATIC_STATUS_NOW),
       `${providerId === "minimax-cn" ? "minimax cn" : "minimax"} ${currency} 98.00001`,
     );
   }
@@ -336,9 +342,12 @@ test("MiniMax statusline falls back to general group when no model-specific matc
     ],
   };
   const report = normalizeMiniMaxUsagePayload("minimax", "token-plan", payload, 1_000);
-  assert.equal(formatUsageStatusline(report, MODELS.minimax), "minimax 38% 5h 32% wk");
-  assert.equal(formatUsageStatusline(report), "minimax 38% 5h 32% wk");
-  assert.equal(formatUsageStatusline(report, { ...MODELS.minimax, provider: "openai-codex" }), undefined);
+  assert.equal(formatUsageStatusline(report, MODELS.minimax, STATIC_STATUS_NOW), "minimax 5h:38% · wk:32%");
+  assert.equal(formatUsageStatusline(report, undefined, STATIC_STATUS_NOW), "minimax 5h:38% · wk:32%");
+  assert.equal(
+    formatUsageStatusline(report, { ...MODELS.minimax, provider: "openai-codex" }, STATIC_STATUS_NOW),
+    undefined,
+  );
 });
 
 test("MiniMax Token Plan rejects rows with zero total and no usable percent", () => {
@@ -424,7 +433,7 @@ test("MiniMax Token Plan count buckets with remaining 0 still render", () => {
   assert.doesNotMatch(formatted, /unavailable/iu);
   assert.match(formatted, /Rolling window:\s+0 of 1500 left · 0%/u);
   assert.match(formatted, /Weekly window:\s+0 of 1000 left · 0%/u);
-  assert.equal(formatUsageStatusline(report), "minimax 0% 5h 0% wk");
+  assert.equal(formatUsageStatusline(report, undefined, STATIC_STATUS_NOW), "minimax 5h:0% · wk:0%");
 });
 
 test("MiniMax runtime auth accepts only its matching official region", async () => {

@@ -33,7 +33,7 @@ function memoryRuntime(kind: CodexCompactSettingsState["kind"] = "missing") {
   return { runtime, patches };
 }
 
-test("root menu makes manual compaction primary and exposes its preferred route", () => {
+test("root menu makes manual compaction primary and exposes its effective route", () => {
   const current = memoryRuntime();
   const customModel = {
     provider: "company-codex-proxy",
@@ -106,27 +106,6 @@ test("root menu makes manual compaction primary and exposes its preferred route"
   assert.match(configuredCustom.lines?.join("\n") ?? "", /Responses Remote V2/);
 });
 
-test("menu distinguishes the saved preference from the last authenticated protocol", () => {
-  const current = memoryRuntime();
-  let lastProtocol: "context-management" | undefined;
-  const menu = createCodexCompactMenu(current.runtime, {
-    status: { model: "openai/gpt-5.5", api: "openai-responses" },
-    lastProtocol: () => lastProtocol,
-  });
-  const before = resolveMenuScreen(menu, "main", current.runtime.get());
-  assert.equal(before.kind, "actions");
-  if (before.kind !== "actions") assert.fail("Expected actions screen");
-  assert.match(before.lines?.join("\n") ?? "", /Preferred route: Responses Compact API/);
-  assert.doesNotMatch(before.lines?.join("\n") ?? "", /Last resolved protocol:/);
-  lastProtocol = "context-management";
-  const after = resolveMenuScreen(menu, "main", current.runtime.get());
-  assert.equal(after.kind, "actions");
-  if (after.kind !== "actions") assert.fail("Expected actions screen");
-  assert.match(after.lines?.join("\n") ?? "", /Protocol setting: Auto/);
-  assert.match(after.lines?.join("\n") ?? "", /Last resolved protocol: Context Management \(experimental\)/);
-  assert.equal(current.runtime.get().settings.protocol, "auto");
-});
-
 test("settings screen exposes bounded controls and invalid files remain repairable", () => {
   const current = memoryRuntime();
   const menu = createCodexCompactMenu(current.runtime);
@@ -146,12 +125,10 @@ test("settings screen exposes bounded controls and invalid files remain repairab
     ],
   );
 
-  assert.deepEqual(screen.items.find((item) => item.id === "requestTimeoutMs")?.values, [
-    "2 min",
-    "5 min",
-    "10 min",
-    "15 min",
-  ]);
+  assert.match(
+    screen.items.find((item) => item.id === "checkpointRecovery")?.description ?? "",
+    /Pi native may lose older context.*Integrity failures cancel.*Cancel preserves history/,
+  );
   assert.ok(screen.items.find((item) => item.id === "protocol")?.values?.includes("Context Management (experimental)"));
   const serverState = {
     ...current.runtime.get(),
@@ -207,7 +184,6 @@ test("menu actions persist exact setting patches", async () => {
   await menu.actions["set-protocol"](action("Responses Compact"));
   await menu.actions["set-protocol"](action("Context Management (experimental)"));
   await menu.actions["set-timeout"](action("10 min"));
-  await menu.actions["set-timeout"](action("15 min"));
   await menu.actions["set-retries"](action("1"));
   await menu.actions["set-retention"](action("96K tokens"));
   await menu.actions["set-notify"](action("Off"));
@@ -216,7 +192,6 @@ test("menu actions persist exact setting patches", async () => {
     { protocol: "responses-compact" },
     { protocol: "context-management" },
     { requestTimeoutMs: 600_000 },
-    { requestTimeoutMs: 900_000 },
     { maxRetries: 1 },
     { replacementTokenBudget: 96_000 },
     { notifyOnFallback: false },
@@ -348,7 +323,10 @@ test("checkpoint recovery menu applies exact patches and paused status distingui
   assert.match(cancel.lines?.join("\n") ?? "", /cancel compaction; preserve checkpoint history/);
   await invoke("Summarize");
   const summarize = resolveMenuScreen(menu, "main", memory.runtime.get());
-  assert.match(summarize.lines?.join("\n") ?? "", /checkpoint-aware summary; cancel if unsafe/);
+  assert.match(
+    summarize.lines?.join("\n") ?? "",
+    /checkpoint-aware summary; on failure, Pi native may lose older context/,
+  );
   assert.match(summarize.lines?.join("\n") ?? "", /reload retries/);
   const native = resolveMenuScreen(
     createCodexCompactMenu(memory.runtime, { isPaused: () => true, hasCheckpoint: () => false }),

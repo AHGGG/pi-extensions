@@ -20,8 +20,8 @@ export function summaryPrefix(
   return messages.slice(0, prefixLength);
 }
 
-// This is an inference request, not another remote compaction protocol. Never fall
-// through to Pi's text-only summary generator when an opaque checkpoint is active.
+// This is an inference request, not another remote compaction protocol. The caller
+// owns the lossy native-fallback policy after this request releases its resources.
 export async function recoverCheckpoint(request: RemoteCompactionRequest, event: SessionBeforeCompactEvent) {
   if (!request.priorCheckpoint) throw new Error("Checkpoint recovery requires a compatible checkpoint");
   if (request.signal.aborted) throw abortError();

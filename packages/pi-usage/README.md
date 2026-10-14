@@ -85,6 +85,26 @@ Target selections are stored only as IDs in the provider-neutral `selectedTarget
 The former `fireworksAccountId` field remains read-compatible: it supplies `selectedTargets.fireworks` in memory only when the generic value is absent.
 A successful explicit Fireworks account selection writes the generic field and removes the legacy field atomically; ordinary reads do not rewrite the file.
 
+### Quota statusline display
+
+Edit `statuslineDisplay` manually in the user settings file, then run `/reload`.
+It applies to Codex, Command Code, Kimi, MiniMax Token Plan Global/China, Z.AI Global/China, and OpenCode Go.
+For example, retain window labels alongside countdowns and change the separator:
+
+```json
+{
+  "statuslineDisplay": {
+    "countdown": "{window}:{value} ↻ {reset}",
+    "separator": " / "
+  }
+}
+```
+
+This produces output such as `codex 5h:89% ↻ 2h30m / wk:97%`.
+Missing fields keep the current defaults. Invalid templates produce a warning in TUI and RPC, use default settings, and block saves until the file is repaired; the file remains untouched.
+There is no interactive template editor.
+See the [display template reference](./docs/statusline-display.md) for defaults, placeholders, validation, and unchanged provider behavior.
+
 ### ChatGPT companion usage
 
 **Experimental source:** this read-only feature uses undocumented ChatGPT backend endpoints that may change without notice.
@@ -115,11 +135,17 @@ Run `/fast` without arguments to toggle Fast for the active supported Codex mode
 Fast is about 1.5× faster and uses more of your plan allowance.
 The `codexFastMode` preference defaults to Off.
 
-Fast currently applies only to official `openai-codex-responses` requests for `gpt-5.5`, `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna`, `gpt-6-astra`, `gpt-6-luna`, `gpt-6-sol`, and `gpt-6.1-sol` at `https://chatgpt.com`.
+Fast applies to official `openai-codex-responses` requests at `https://chatgpt.com` when the current account's Codex model directory advertises a `priority` service tier or the legacy `fast` speed tier.
+Discovery validates the active OAuth account and caches its model capabilities for five minutes, with background refresh on session and model changes.
+`/fast` and `/usage` can refresh capability information before enabling Fast or displaying its controls, while provider request hooks use the account-validated cache and leave directory refresh in the background.
+
 The `fast` label indicates requested priority routing, not a measured speedup; actual availability and speed depend on the service.
-It sends `service_tier: "priority"` while enabled and explicit `service_tier: "default"` otherwise.
+It sends `service_tier: "priority"` while enabled and supported, and explicit `service_tier: "default"` otherwise.
 The statusline adds `fast` only while the preference is effective, for example `codex fast 59% ↻ 2h30m` with the default reset countdown.
-Unsupported models and custom or proxy origins are left unchanged.
+A missing model, incomplete capability information, or first directory failure displays **Unknown** and uses standard routing, with `codex (Fast unknown)` shown when the preference remains enabled.
+Temporary network failures reuse successful discovery for the same account, while authentication rejection or malformed directory data invalidates that account's capability information.
+The preference can still be turned off while capability information is unknown.
+Other providers, APIs, and custom or proxy origins retain their own request payloads.
 
 A toggle affects provider requests whose payload hook starts after the save; a request already sent is unchanged.
 Repair or remove an invalid file, then run `/reload` before trying the toggle again.
@@ -141,7 +167,7 @@ This preference changes only Codex statusline formatting, not provider data or t
 ### Codex statusline reset countdown
 
 The `codexStatusResetCountdown` preference defaults to `true`. It replaces the window labels with the time remaining until each returned limit resets.
-Turn **Codex reset countdown** Off in the TUI Settings screen, or set it to `false` in `pi-usage.json` and run `/reload`, to restore the legacy `5h` and `wk` labels:
+Turn **Codex reset countdown** Off in the TUI Settings screen, or set it to `false` in `pi-usage.json` and run `/reload`, to show static labels such as `codex 5h:59% · wk:61%`:
 
 ```json
 {
@@ -191,6 +217,16 @@ After the active runtime credential changes, the next command, turn, or schedule
 ## 📊 Statusline behavior
 
 The `usage` status item is active only for selected providers that publish statusline usage.
+By default, Codex, Command Code, Kimi, MiniMax Token Plan, Z.AI, and OpenCode Go separate quota windows with ` · ` and place static labels before values, for example `cmd 5h:100% · wk:97% · mo:98%`.
+Countdown segments retain their spacing without window labels, for example `codex 89% ↻ 2h30m · 97% ↻ 5d17h`; a missing reset time falls back to a static label, such as `codex 89% ↻ 2h30m · wk:97%`.
+Single windows have no separator. [Display templates](./docs/statusline-display.md) can change this quota presentation. These presentation changes do not alter the reported values; consumers parsing the old status text must adapt to the new format. ChatGPT companion formatting is unchanged.
+
+Kimi, MiniMax Token Plan Global/China, Z.AI Global/China, Command Code, OpenCode Go, and finite GitHub Copilot quotas show countdowns automatically when a displayed quota has a valid future reset time.
+For example, `kimi 77% ↻ 2h52m · mo:87%` mixes a countdown with a static fallback; Copilot preserves its counts, percentage, and any overage, such as `copilot 245/300 82% ↻ 6d`.
+These providers fall back to their existing static output when reset times are missing, invalid, or expired; unlimited quotas and balance/spend reports do not show countdowns.
+Their countdowns are not controlled by the Codex-only settings. Codex and ChatGPT companion retain their existing reset behavior, including `↻ 0m` for expired returned resets.
+Countdowns repaint locally every minute while a displayed eligible reset remains in the future, without additional provider requests; hidden windows and unselected model groups do not activate this repaint for the newly supported providers.
+
 It refreshes every five minutes while the session remains on such a provider and is cleared when the model changes to an unsupported or menu-only provider.
 DeepSeek publishes each returned currency as a separate exact balance segment and reports when the API is unavailable.
 Fireworks publishes exact per-currency rated spend totals and reports when no rated usage exists.

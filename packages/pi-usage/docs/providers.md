@@ -81,7 +81,7 @@ Contract fixtures derive from [Specode's pinned implementation](https://github.c
 - Source: the Codex usage and earned-reset endpoints using Pi's resolved runtime authorization
 - Displayed data: returned duration-based windows, resets, credits, earned usage-limit resets, and additional model buckets
 - Reset mutation: `POST /wham/rate-limit-reset-credits/consume` with a unique redemption request ID and, when available, the selected opaque credit ID
-- Statusline examples: `codex 59% ↻ 2h30m 61% ↻ 2d15m`, `codex fast 59% ↻ 2h30m`, or `codex spark 100% ↻ 2h30m`. Set `codexStatusPercentage` to `"used"` to show consumed percentages, or set `codexStatusResetCountdown` to `false` for the legacy `5h` and `wk` labels.
+- Statusline examples: `codex 59% ↻ 2h30m · 61% ↻ 2d15m`, `codex fast 59% ↻ 2h30m`, or `codex spark 100% ↻ 2h30m`. Set `codexStatusPercentage` to `"used"` to show consumed percentages, or set `codexStatusResetCountdown` to `false` for static labels such as `codex 5h:59% · wk:61%`.
 
 The statusline selects a returned bucket that matches the current Codex model when one is available.
 The percentage preference affects only this compact status and defaults to remaining quota; it does not change the detailed report or returned usage data.
@@ -101,7 +101,7 @@ Opaque credit and account IDs are never shown or persisted by the extension.
 - Source: `GET https://api.kimi.com/coding/v1/usages` using Pi's freshly resolved runtime Bearer credential
 - Displayed plan data: count-based weekly summaries and returned sub-windows, plus reported ratio-based five-hour, weekly, or monthly quotas and valid reset times
 - Displayed wallet data: balance, monthly spend, and monthly charge limit when the wallet supplies consistent currency and amounts
-- Statusline examples: `kimi 99% 5h 96% wk`, `kimi 56% 5h 21% mo`, or `kimi 95% 1d`
+- Statusline examples: `kimi 77% ↻ 2h52m · 87% ↻ 29d20h`, `kimi 77% ↻ 2h52m · mo:87%`, or static fallback `kimi 1d:95%`
 
 Both Pi API-key credentials and Pi OAuth credentials are accepted because current Pi resolves each form as Bearer authorization for the same official Kimi inference origin.
 The extension queries the fixed usage endpoint only when both the selected model origin and the effective resolved-auth origin are `https://api.kimi.com`.
@@ -148,7 +148,7 @@ The contracts were verified on 2026-08-30 against the official [Global balance r
 - Token Plan source: `GET {region-api-root}/v1/token_plan/remains`
 - Pay-as-you-go source: `GET {region-api-root}/account/query_balance`
 - Region API roots: `https://api.minimax.io` and `https://api.minimaxi.com`
-- Statusline examples: `minimax 15% 5h 80% wk` or `minimax USD 98.00001`
+- Statusline examples: `minimax 15% ↻ 2h30m · 80% ↻ 6d`, static fallback `minimax 5h:15% · wk:80%`, unlimited `minimax cn 5h:unlimited · wk:unlimited`, or pay-as-you-go `minimax USD 98.00001`
 
 Pi's resolved MiniMax API key selects exactly one endpoint before network access.
 Keys with the first-party `sk-api-` prefix query pay-as-you-go balance; other MiniMax API keys query Token Plan quota.
@@ -166,7 +166,7 @@ The contract was verified on 2026-08-30 against MiniMax's [Token Plan FAQ](https
 - Allowance labels: AI credits for usage-based billing, premium requests for legacy annual billing, or chat requests for Copilot Free
 - Source: GitHub's undocumented `GET /copilot_internal/user` endpoint
 - Displayed data: entitlement, remaining allowance, percentage, reset time, plan, and any additional usage beyond the included allowance
-- Statusline examples: `copilot credits 1200/1500 80%`, `copilot 245/300 82%`, or `copilot chat 40/50 80%`
+- Statusline examples: `copilot credits 1200/1500 80% ↻ 6d`, `copilot 245/300 82% ↻ 6d`, or static fallback `copilot chat 40/50 80%`
 
 GitHub's quota endpoint requires the original GitHub OAuth token rather than the short-lived Copilot inference token exposed by runtime auth.
 `pi-usage` supports Copilot accounts created through Pi's `/login` flow and named accounts offered by a compatible `oauth:credential-source:v1` owner.
@@ -260,7 +260,7 @@ The contract was verified on 2026-08-30 against Baseten's [Billing and usage](ht
 - Source: `GET https://opencode.ai/zen/go/v1/usage` using Pi's resolved inference API key
 - Displayed data: used percentage and reset time for each window
 - Status handling: `rate-limited` windows remain visible, while unknown statuses become unavailable notes
-- Statusline examples: `zen 0% r 4% w 2% m`
+- Statusline examples: `zen 0% ↻ 2h30m · 4% ↻ 6d · m:2%` or static fallback `zen r:0% · w:4% · m:2%`
 
 The fixed endpoint is queried only when the OpenCode Go model uses the official `https://opencode.ai` origin.
 When resolved provider auth includes a base URL, that URL must use the same origin.
@@ -275,7 +275,7 @@ Other origins fail before the credential is sent.
 - Plan route: `GET https://api.commandcode.ai/alpha/billing/subscriptions`
 - Period route: `GET https://api.commandcode.ai/alpha/usage/summary`
 - Displayed data: five-hour and weekly spend caps in USD with reset times, the billing-period credit pool and remaining balance, plan name and status, request and token totals, and purchased or free credits when present
-- Statusline examples: `cmd 99% 5h 92% wk 96% mo`
+- Statusline examples: `cmd 99% ↻ 2h30m · 92% ↻ 6d · 96% ↻ 20d` or static fallback `cmd 5h:99% · wk:92% · mo:96%`
 
 The official `@commandcode/pi-commandcode-provider` extension registers this provider through `pi.registerProvider()`, so `command-code` is not a Pi built-in provider.
 Pi still resolves its stored `/login` API key through the normal provider registry, and the extension sends it as Bearer authorization only when the selected model and resolved auth share the official `https://api.commandcode.ai` origin.
@@ -329,7 +329,7 @@ xAI identity and billing requests occur only after an explicit current, configur
 - Allowed origins: the model base URL must resolve to `https://api.z.ai` or `https://open.bigmodel.cn`
 - Displayed data: explicit used and remaining values, reset times, provider-reported per-tool MCP details, and the plan name with its renewal date
 - Percentage-only windows remain percent-based
-- Statusline: publishes remaining plan percentages such as `zai 87% 5h 76% wk`; monthly MCP details remain available through `/usage`
+- Statusline: publishes remaining plan percentages such as `zai 87% ↻ 2h30m · 76% ↻ 6d`, with static fallback `zai 5h:87% · wk:76%`; monthly MCP details remain available through `/usage`
 
 The monitor endpoint is not a published API contract and may return legacy `TOKENS_LIMIT` or newer `CREDIT_LIMIT` window names.
 The extension classifies both forms by the provider's window unit and does not label provider-reported counts as tokens or calls.

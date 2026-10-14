@@ -111,7 +111,7 @@ export function createCodexCompactMenu(
                 options.hasCheckpoint?.()
                   ? state.settings.checkpointRecovery === "cancel" || options.canReplayCheckpoint?.() === false
                     ? "Recovery: cancel compaction; preserve checkpoint history."
-                    : "Recovery: checkpoint-aware summary; cancel if unsafe or unsuccessful."
+                    : "Recovery: checkpoint-aware summary; on failure, Pi native may lose older context. Integrity failures cancel."
                   : "Recovery: Pi native compaction.",
               ]
             : []),
@@ -161,7 +161,7 @@ export function createCodexCompactMenu(
             id: "checkpointRecovery",
             label: "Checkpoint recovery",
             description:
-              "On remote failure: Summarize uses inference quota; failure always cancels. Cancel preserves history without a summary request.",
+              "Summarize uses inference quota; on failure, Pi native may lose older context. Integrity failures cancel. Cancel preserves history without a summary request.",
             currentValue: state.settings.checkpointRecovery === "cancel" ? "Cancel" : "Summarize",
             values: ["Summarize", "Cancel"],
             action: "set-recovery",
