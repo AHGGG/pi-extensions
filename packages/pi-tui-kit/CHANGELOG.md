@@ -1,5 +1,11 @@
 # @narumitw/pi-tui-kit
 
+## 0.65.6
+
+### Patch Changes
+
+- 8b5e7bb: Rebuild task-loader cancellation hint colors after theme invalidation and bound loader output at narrow or unusable widths. Preserve cancellation bindings and task cleanup behavior.
+
 ## 0.65.5
 
 ### Patch Changes
