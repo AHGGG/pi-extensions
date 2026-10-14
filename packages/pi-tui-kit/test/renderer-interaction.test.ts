@@ -6,10 +6,53 @@ import { test } from "vitest";
 import { runCustomInteraction } from "../src/custom-interaction.js";
 import { runDocumentReview } from "../src/document-review.js";
 import { runThinkingSelector } from "../src/pi-selectors.js";
+import { runTask } from "../src/task.js";
 import { createRendererHost } from "./fixtures/renderer-host.js";
 import { rendererTheme } from "./fixtures/renderer-theme.js";
 
 for (const mode of ["regular", "fullscreen"] as const) {
+  test(`${mode} task loader updates theme, bounds resize and restores drafts after hard cancel`, async (t) => {
+    let currentTheme = rendererTheme("dark");
+    const theme = rendererTheme("dark");
+    theme.fg = (role, text) => currentTheme.fg(role, text);
+    const fixture = createRendererHost(mode, theme, { bindings: { "tui.select.cancel": "ctrl+q" } });
+    t.onTestFinished(() => fixture.stop());
+    let signal: AbortSignal | undefined;
+    let settled = false;
+    const running = runTask(fixture.ctx, {
+      label: "Loading 你🙂",
+      task: async (context) => {
+        signal = context.signal;
+        await new Promise<void>((resolve) => {
+          if (context.signal.aborted) resolve();
+          else context.signal.addEventListener("abort", () => resolve(), { once: true });
+        });
+        settled = true;
+      },
+    });
+    await fixture.waitForOpen();
+    const before = fixture.frame().join("\n");
+    assert.match(stripVTControlCharacters(before), /ctrl\+q\/ctrl\+c cancel/u);
+    currentTheme = rendererTheme("light");
+    fixture.host.invalidate();
+    const after = fixture.frame().join("\n");
+    assert.equal(stripVTControlCharacters(after), stripVTControlCharacters(before));
+    assert.ok(after.includes(currentTheme.fg("dim", "ctrl+q/ctrl+c")));
+    for (const width of [1, 2, 12, 35, 100]) {
+      fixture.resize(width, 18);
+      assert.ok(fixture.frame().every((line) => visibleWidth(line) <= width));
+    }
+    fixture.send("\x03");
+    assert.deepEqual(await running, { kind: "cancelled" });
+    assert.equal(signal?.aborted, true);
+    assert.equal(settled, true);
+    assert.equal(fixture.host.getFocusedComponent(), fixture.editor);
+    assert.equal(fixture.editor.getValue(), "main draft");
+    fixture.send("\x1b[F");
+    fixture.send("!");
+    assert.equal(fixture.editor.getValue(), "main draft!");
+  });
+
   test(`${mode} routes selector input through Pi and restores the main editor`, async (t) => {
     const fixture = createRendererHost(mode, rendererTheme());
     t.onTestFinished(() => fixture.stop());
