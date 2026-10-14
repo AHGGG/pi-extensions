@@ -152,7 +152,10 @@ async function exercise(protocol: RemoteCompactionProtocolSetting, scenario: Sce
       | undefined;
     if (scenario === "settlement" && expectedProtocol === "context-management") {
       assert.equal(continuation?.continue, true);
-      assert.deepEqual(continuation?.entries.map((entry) => entry.customType), ["codex-compact:continue-v1"]);
+      assert.deepEqual(
+        continuation?.entries.map((entry) => entry.customType),
+        ["codex-compact:continue-v1"],
+      );
     } else {
       assert.equal(continuation, undefined);
     }
