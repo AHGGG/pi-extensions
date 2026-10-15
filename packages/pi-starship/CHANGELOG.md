@@ -1,5 +1,11 @@
 # @narumitw/pi-starship
 
+## 0.59.0
+
+### Minor Changes
+
+- 6d645f9: Add unlisted GitHub Gist sharing and reviewed settings import to the Configuration menu through GitHub CLI. Import validates and previews TOML before confirmed replacement, with cancellation, bounded requests, and stale-settings protection.
+
 ## 0.58.0
 
 ### Minor Changes
