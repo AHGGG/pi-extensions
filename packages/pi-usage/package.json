@@ -1,7 +1,7 @@
 {
   "name": "@narumitw/pi-usage",
   "version": "0.66.0",
-  "description": "Pi extension that shows current-account usage and DeepSeek API balance for supported providers.",
+  "description": "Pi extension for provider usage, limits, reset times, API balances, and Codex Fast mode.",
   "type": "module",
   "license": "MIT",
   "private": false,

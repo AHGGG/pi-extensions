@@ -1,4 +1,4 @@
-# Usage queries and reset redemption
+# Usage queries, Fast mode, and reset redemption
 
 [Back to README](../README.md#-commands)
 
@@ -19,6 +19,27 @@ Fireworks accounts are the first implementation of this provider-neutral flow.
 
 For credentials, endpoints, and provider-specific meanings, see the [provider reference](./providers.md).
 For selection storage and migration, see [Settings](../README.md#-settings).
+
+## Codex Fast mode
+
+Run `/fast` without arguments to toggle Fast for the active supported Codex model, or use **Turn Fast mode on/off** in `/usage`.
+Fast is about 1.5× faster and uses more of your plan allowance.
+The `codexFastMode` preference defaults to Off.
+
+Fast applies to official `openai-codex-responses` requests at `https://chatgpt.com` when the current account's Codex model directory advertises a `priority` service tier or the legacy `fast` speed tier.
+Discovery validates the active OAuth account and caches its model capabilities for five minutes, with background refresh on session and model changes.
+`/fast` and `/usage` can refresh capability information before enabling Fast or displaying its controls, while provider request hooks use the account-validated cache and leave directory refresh in the background.
+
+The `fast` label indicates requested priority routing, not a measured speedup; actual availability and speed depend on the service.
+It sends `service_tier: "priority"` while enabled and supported, and explicit `service_tier: "default"` otherwise.
+The statusline adds `fast` only while the preference is effective, for example `codex fast 59% ↻ 2h30m` with the default reset countdown.
+A missing model, incomplete capability information, or first directory failure displays **Unknown** and uses standard routing, with `codex (Fast unknown)` shown when the preference remains enabled.
+Temporary network failures reuse successful discovery for the same account, while authentication rejection or malformed directory data invalidates that account's capability information.
+The preference can still be turned off while capability information is unknown.
+Other providers, APIs, and custom or proxy origins retain their own request payloads.
+
+A toggle affects provider requests whose payload hook starts after the save; a request already sent is unchanged.
+Repair or remove an invalid file, then run `/reload` before trying the toggle again.
 
 ## Redeem a Codex usage reset
 
