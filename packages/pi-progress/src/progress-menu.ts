@@ -59,7 +59,7 @@ export async function showProgressMenu(ctx: ExtensionCommandContext, options: Pr
           "/progress opens this menu.",
           "Settings edits user display preferences in TUI mode; RPC reports the file path.",
           "Successful settings saves apply immediately. Manual edits require /reload.",
-          "Clear widget keeps saved progress unchanged. Updates, branch navigation, or reload can show it again.",
+          "Clear widget keeps saved progress unchanged. Updates, branch navigation, or reload can show incomplete progress again.",
           "/progress settings opens the same settings screen directly.",
           "/progress clear hides the widget directly.",
           "The model updates steps through update_progress; there is no manual progress editor.",
