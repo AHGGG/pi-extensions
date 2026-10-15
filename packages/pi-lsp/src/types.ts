@@ -4,6 +4,7 @@ export interface ServerCommand {
 }
 
 export interface StatusContext {
+  cwd: string;
   ui: { setStatus: (key: string, value: string | undefined) => void };
 }
 
