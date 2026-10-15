@@ -16,7 +16,7 @@ const currentOwner = {
   isCurrent: () => true,
 };
 
-test("Configuration exposes four focused screens under seven top-level goals", async () => {
+test("Configuration exposes six focused actions under seven top-level goals", async () => {
   const root = mkdtempSync(join(tmpdir(), "pi-starship-configuration-menu-"));
   const path = join(root, "pi-starship.toml");
   const raw = "# retained comment\nformat = '$model'\nfuture = true\n";
@@ -52,6 +52,8 @@ test("Configuration exposes four focused screens under seven top-level goals", a
     assert.match(configuration, /Effective configuration/u);
     assert.match(configuration, /Settings document/u);
     assert.match(configuration, /Reload from disk…/u);
+    assert.match(configuration, /Share settings as Gist…/u);
+    assert.match(configuration, /Import settings from Gist…/u);
 
     tui.press("tui.select.down");
     tui.press("tui.select.confirm");
