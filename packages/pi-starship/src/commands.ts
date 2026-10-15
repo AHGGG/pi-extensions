@@ -11,6 +11,7 @@ import {
   type WorkflowOwner,
 } from "./command-configuration.js";
 import { completeStarshipArguments, STARSHIP_SUBCOMMANDS } from "./command-contract.js";
+import { importSettingsGist, shareSettingsGist } from "./command-gist.js";
 import { formatFooterExplanation } from "./command-inspector.js";
 import { showPresetPicker } from "./command-preset-picker.js";
 import { type PreviewMenuResult, showPreviewActionMenu } from "./command-preview.js";
@@ -22,6 +23,7 @@ import {
   removeConfigDocumentIfMatches,
   validateConfigDocument,
 } from "./config.js";
+import type { GhApi } from "./gist.js";
 import { inspectUnavailableModules, type StatuslineInspection } from "./modules/inspection.js";
 import { getStarshipPreset, presetForDocument, STARSHIP_PRESETS, type StarshipPreset } from "./presets/catalog.js";
 
@@ -48,9 +50,14 @@ export interface StarshipCommandOptions extends ConfigurationCommandOptions {
   restore?: (settingsPath: string, rawDocument: string) => void;
   validate?: (settingsPath: string, rawDocument: string) => LoadedStarshipConfig;
   getMenuOwner?(): WorkflowOwner;
+  gistApi?: GhApi;
 }
 
-type ReviewIntent = { kind: "customize" } | { kind: "restore" } | { kind: "preset"; preset: StarshipPreset };
+type ReviewIntent =
+  | { kind: "customize" }
+  | { kind: "restore" }
+  | { kind: "import" }
+  | { kind: "preset"; preset: StarshipPreset };
 
 export function registerStarshipCommand(pi: ExtensionAPI, options: StarshipCommandOptions) {
   pi.registerCommand("starship", {
@@ -112,7 +119,7 @@ async function showMainMenu(ctx: ExtensionCommandContext, options: StarshipComma
     | "configuration-effective"
     | "configuration-document"
     | "help";
-  type Action = "customize" | "presets" | "configuration-reload" | "restore";
+  type Action = "customize" | "presets" | "configuration-reload" | "restore" | "gist-share" | "gist-import";
   const menu = defineMenu<undefined, Screen, Action, ExtensionCommandContext>({
     start: "main",
     screens: {
@@ -218,7 +225,7 @@ async function showMainMenu(ctx: ExtensionCommandContext, options: StarshipComma
           "Presets live-previews the cursor in the footer; Enter confirms apply and e customizes first.",
           "Explain footer breaks down the modules currently showing from the existing snapshot.",
           "Modules searches every supported module and explains its current read-only state.",
-          "Configuration separates overview, effective TOML, loaded settings text, and safe disk reload.",
+          "Configuration includes disk reload plus unlisted Gist sharing and reviewed Gist import through gh.",
           `Settings: ${safeText(options.settingsPath)}`,
           "Docs: https://github.com/narumiruna/pi-extensions/tree/main/packages/pi-starship",
         ],
@@ -232,6 +239,23 @@ async function showMainMenu(ctx: ExtensionCommandContext, options: StarshipComma
       },
       presets: async () => {
         const result = await choosePreset(ctx, options, owner);
+        return result === "applied" || result === "close" ? { kind: "close" } : { kind: "stay" };
+      },
+      "gist-share": async () => {
+        const result = await shareSettingsGist(ctx, options, owner, options.gistApi);
+        return result === "close" ? { kind: "close" } : { kind: "stay" };
+      },
+      "gist-import": async () => {
+        const result = await importSettingsGist(
+          ctx,
+          options,
+          owner,
+          async (loaded, guardedOptions, guardedOwner) => {
+            const applied = await reviewAndApply(ctx, guardedOptions, loaded, { kind: "import" }, guardedOwner);
+            return applied === "edit" ? "cancel" : applied;
+          },
+          options.gistApi,
+        );
         return result === "applied" || result === "close" ? { kind: "close" } : { kind: "stay" };
       },
       "configuration-reload": async () => {
@@ -421,7 +445,7 @@ async function reviewAndApply(
         (width) => reviewPreviewBody(ctx, options, validated, width, intent),
         [
           { value: PREVIEW_ACTIONS.continue, label: continueLabel(intent) },
-          ...(intent.kind === "restore"
+          ...(intent.kind === "restore" || intent.kind === "import"
             ? []
             : [
                 {
@@ -453,6 +477,7 @@ async function reviewAndApply(
     const confirmed = await ctx.ui.confirm(
       confirmationTitle(intent),
       confirmationMessage(options.settingsPath, intent),
+      { signal: owner.signal },
     );
     if (!isCurrentOwner(owner)) return "cancel";
     if (!confirmed) {
@@ -503,6 +528,8 @@ function reviewTitle(intent: ReviewIntent): string {
       return "Footer preview";
     case "restore":
       return "Restore preview";
+    case "import":
+      return "Gist footer preview";
     case "preset":
       return `${intent.preset.label} preset preview`;
   }
@@ -514,6 +541,8 @@ function continueLabel(intent: ReviewIntent): string {
       return "Apply changes…";
     case "restore":
       return "Replace with built-in…";
+    case "import":
+      return "Replace with Gist settings…";
     case "preset":
       return `Apply ${intent.preset.label} preset…`;
   }
@@ -525,6 +554,8 @@ function confirmationTitle(intent: ReviewIntent): string {
       return "Apply footer changes?";
     case "restore":
       return "Restore built-in footer?";
+    case "import":
+      return "Replace settings with Gist?";
     case "preset":
       return `Apply ${intent.preset.label} preset?`;
   }
@@ -532,7 +563,12 @@ function confirmationTitle(intent: ReviewIntent): string {
 
 function confirmationMessage(settingsPath: string, intent: ReviewIntent): string {
   if (intent.kind === "customize") return "Save this configuration and apply it immediately?";
-  const replacement = intent.kind === "restore" ? "the built-in configuration" : `the ${intent.preset.label} preset`;
+  const replacement =
+    intent.kind === "restore"
+      ? "the built-in configuration"
+      : intent.kind === "import"
+        ? "the reviewed Gist settings"
+        : `the ${intent.preset.label} preset`;
   return `Replace ${safeText(settingsPath)} entirely with ${replacement}? All custom settings, unknown fields, and comments will be removed. No backup is kept after success.`;
 }
 
@@ -542,6 +578,8 @@ function successMessage(intent: ReviewIntent): string {
       return "Footer settings saved and applied";
     case "restore":
       return "Built-in footer restored and applied";
+    case "import":
+      return "Gist settings saved and applied";
     case "preset":
       return `${intent.preset.label} preset saved and applied`;
   }
@@ -591,7 +629,7 @@ function reviewPreviewBody(
   intent: ReviewIntent,
 ): string[] {
   if (intent.kind === "restore") return restorePreviewBody(ctx, options, loaded, width);
-  if (intent.kind === "customize") return previewBody(ctx, options, loaded, width);
+  if (intent.kind === "customize" || intent.kind === "import") return previewBody(ctx, options, loaded, width);
   const current = configurationPresentation(options.getLoaded());
   return [
     `Preset: ${intent.preset.label}`,

@@ -43,7 +43,10 @@ Its textual states distinguish **Showing**, **Empty**, **Disabled**, **Not in fo
 Module detail shows the current preview when available, description, root reference and reachability, format variables, style fields, supported style-rule selectors, configured rule count, display rules, and the known reason for absent output.
 Both views are read-only and do not create or update the settings document.
 
-Configuration contains **Overview**, **Effective configuration**, **Settings document**, and **Reload from disk** on one nested level.
+Configuration contains **Overview**, **Effective configuration**, **Settings document**, **Reload from disk**, **Share settings as Gist…**, and **Import settings from Gist…** on one nested level.
+Gist actions use `gh` authentication for github.com and transfer only `pi-starship.toml`, limited to 64 KiB; sharing includes comments and unknown fields and requires review and confirmation before creating an unlisted Gist.
+Unlisted Gists are readable by anyone with the link; remove sensitive data before sharing, and check GitHub before retrying a cancelled or failed upload because a remote Gist may already exist.
+Import accepts a Gist ID or URL, validates the complete document, requires raw TOML review, footer preview, and full-replacement confirmation, and applies immediately without a post-success backup; review untrusted settings for command execution and network access before accepting.
 Overview combines state, source, path, health, and bounded diagnostics.
 Effective configuration shows deterministic catalog-ordered public TOML from the normalized state currently in use; comments, unknown fields, parser ASTs, and private runtime selectors are excluded.
 Settings document shows the exact loaded UTF-8 text through a terminal-safe, cell-aware read-only review without changing the raw payload.
