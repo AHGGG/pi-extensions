@@ -2,10 +2,8 @@
 
 [![npm](https://img.shields.io/npm/v/@narumitw/pi-usage)](https://www.npmjs.com/package/@narumitw/pi-usage) [![Pi extension](https://img.shields.io/badge/Pi-extension-blue)](https://pi.dev) [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](./LICENSE)
 
-Inspect usage and DeepSeek API balance for Pi's active provider account, query other configured providers, and toggle Fast mode for supported OpenAI Codex models.
-The extension keeps each provider's native quota, allowance, and spending semantics instead of treating unlike values as equivalent.
-Native `openai` ChatGPT OAuth automatically reports plan usage through a valid same-account Codex companion login; without that login it shows authentication status and a usage-settings link.
-xAI OAuth subscription reporting follows the reviewed Grok Build contract and runs only after an explicit `/usage` action.
+Check provider usage, limits, reset times, and API balances from Pi.
+The extension keeps each provider's quota, allowance, balance, and spending semantics separate.
 
 ## ✨ Features
 
@@ -105,51 +103,6 @@ Missing fields keep the current defaults. Invalid templates produce a warning in
 There is no interactive template editor.
 See the [display template reference](./docs/statusline-display.md) for defaults, placeholders, validation, and unchanged provider behavior.
 
-### ChatGPT companion usage
-
-**Experimental source:** this read-only feature uses undocumented ChatGPT backend endpoints that may change without notice.
-A user observed the plan weekly remaining percentage and reset time matching the ChatGPT overview; app percentages and broader account/window agreement remain unverified.
-
-Keep `/login openai` for native inference, then run `/login openai-codex` with the **same ChatGPT account and workspace**.
-After native OAuth validation, companion usage is automatic on queries and scheduled refreshes; there is no enablement setting or confirmation.
-This intentionally replaces the former default-off experimental opt-in.
-Existing `openaiCompanionUsage` values, including `false`, are ignored and preserved as unrelated JSON during other settings saves; reads do not rewrite the file.
-Remove the companion login if you do not want this automatic companion query path.
-
-The extension sends only the independently validated companion bearer and account ID to ChatGPT, never the native token.
-It requires exactly one app registration matching the native grant's client ID, but that match is **not independent proof of shared identity**.
-
-The statusline shows only shared **plan limits**, with percentages and reset times/window labels.
-Detailed reports also show **app limits** with reset times/window labels only.
-App used/remaining percentages are hidden, but their backend data remains validated.
-**App allowance** is a separately labeled cap on shared plan usage, not remaining quota or a reserved pool.
-Codex percentage/countdown preferences do not change this native report.
-No reset tickets are listed or redeemed, and no allowance is changed.
-
-Missing companion login preserves web-only setup guidance; invalid credentials, missing/duplicate registrations, unsupported pagination, malformed responses, and endpoint failures report unavailable data instead of guessed or stale quota.
-Removing the companion login restores web-only reporting without changing native inference.
-
-### Codex Fast mode
-
-Run `/fast` without arguments to toggle Fast for the active supported Codex model, or use **Turn Fast mode on/off** in `/usage`.
-Fast is about 1.5× faster and uses more of your plan allowance.
-The `codexFastMode` preference defaults to Off.
-
-Fast applies to official `openai-codex-responses` requests at `https://chatgpt.com` when the current account's Codex model directory advertises a `priority` service tier or the legacy `fast` speed tier.
-Discovery validates the active OAuth account and caches its model capabilities for five minutes, with background refresh on session and model changes.
-`/fast` and `/usage` can refresh capability information before enabling Fast or displaying its controls, while provider request hooks use the account-validated cache and leave directory refresh in the background.
-
-The `fast` label indicates requested priority routing, not a measured speedup; actual availability and speed depend on the service.
-It sends `service_tier: "priority"` while enabled and supported, and explicit `service_tier: "default"` otherwise.
-The statusline adds `fast` only while the preference is effective, for example `codex fast 59% ↻ 2h30m` with the default reset countdown.
-A missing model, incomplete capability information, or first directory failure displays **Unknown** and uses standard routing, with `codex (Fast unknown)` shown when the preference remains enabled.
-Temporary network failures reuse successful discovery for the same account, while authentication rejection or malformed directory data invalidates that account's capability information.
-The preference can still be turned off while capability information is unknown.
-Other providers, APIs, and custom or proxy origins retain their own request payloads.
-
-A toggle affects provider requests whose payload hook starts after the save; a request already sent is unchanged.
-Repair or remove an invalid file, then run `/reload` before trying the toggle again.
-
 ### Codex statusline percentage
 
 The `codexStatusPercentage` preference accepts `"remaining"` or `"used"` and defaults to `"remaining"` to preserve existing output.
@@ -174,6 +127,40 @@ Turn **Codex reset countdown** Off in the TUI Settings screen, or set it to `fal
   "codexStatusResetCountdown": false
 }
 ```
+
+## ChatGPT companion usage
+
+**Experimental source:** this read-only feature uses undocumented ChatGPT backend endpoints that may change without notice.
+A user observed the plan weekly remaining percentage and reset time matching the ChatGPT overview; app percentages and broader account/window agreement remain unverified.
+
+Keep `/login openai` for native inference, then run `/login openai-codex` with the **same ChatGPT account and workspace**.
+After native OAuth validation, companion usage is automatic on queries and scheduled refreshes; there is no enablement setting or confirmation.
+This intentionally replaces the former default-off experimental opt-in.
+Existing `openaiCompanionUsage` values, including `false`, are ignored and preserved as unrelated JSON during other settings saves; reads do not rewrite the file.
+Remove the companion login if you do not want this automatic companion query path.
+
+The extension sends only the independently validated companion bearer and account ID to ChatGPT, never the native token.
+It requires exactly one app registration matching the native grant's client ID, but that match is **not independent proof of shared identity**.
+
+The statusline shows only shared **plan limits**, with percentages and reset times/window labels.
+Detailed reports also show **app limits** with reset times/window labels only.
+App used/remaining percentages are hidden, but their backend data remains validated.
+**App allowance** is a separately labeled cap on shared plan usage, not remaining quota or a reserved pool.
+Codex percentage/countdown preferences do not change this native report.
+No reset tickets are listed or redeemed, and no allowance is changed.
+
+Missing companion login preserves web-only setup guidance; invalid credentials, missing/duplicate registrations, unsupported pagination, malformed responses, and endpoint failures report unavailable data instead of guessed or stale quota.
+Removing the companion login restores web-only reporting without changing native inference.
+
+## Codex Fast mode
+
+Run `/fast` or use **Turn Fast mode on/off** in `/usage` for a supported active Codex model.
+The `codexFastMode` preference defaults to Off and uses more plan allowance when enabled.
+Fast requests priority routing; actual availability and speed depend on the service and the active account's advertised model capabilities.
+A saved toggle applies to requests whose payload hook starts afterward, not requests already sent.
+Other providers and custom or proxy origins are unchanged.
+
+See the [Fast mode guide](./docs/operations.md#codex-fast-mode) for capability discovery, status labels, fallback behavior, and invalid-settings recovery.
 
 ## 📋 Provider semantics
 
@@ -207,7 +194,6 @@ Codex reset redemption requires a freshly matched current OAuth account and expl
 `Configured` identifies runtime auth for another supported provider, not an active provider.
 
 The extension selects one provider target for one query and never flattens targets into provider rows or aggregates every visible target.
-Provider adapters own target discovery and validation; core owns one-target selection, persistence, cache identity, cancellation, and UI.
 A compatible credential owner may offer the verified active named account through the versioned process-local protocol without exposing its account label or storage.
 When that owner is still activating the requested provider in the current session, `/usage` waits through the extension-neutral `oauth:credential-readiness:v1` protocol before collecting the synchronous credential offer.
 Without such an owner, `pi-usage` retains its standalone Pi `auth.json` behavior.
@@ -227,7 +213,7 @@ These providers fall back to their existing static output when reset times are m
 Their countdowns are not controlled by the Codex-only settings. Codex and ChatGPT companion retain their existing reset behavior, including `↻ 0m` for expired returned resets.
 Countdowns repaint locally every minute while a displayed eligible reset remains in the future, without additional provider requests; hidden windows and unselected model groups do not activate this repaint for the newly supported providers.
 
-It refreshes every five minutes while the session remains on such a provider and is cleared when the model changes to an unsupported or menu-only provider.
+The status item refreshes every five minutes while the session remains on a provider that publishes usage and is cleared when the model changes to an unsupported or menu-only provider.
 DeepSeek publishes each returned currency as a separate exact balance segment and reports when the API is unavailable.
 Fireworks publishes exact per-currency rated spend totals and reports when no rated usage exists.
 Moonshot AI publishes the available balance with its region-native currency.
@@ -272,12 +258,7 @@ Model-level Authorization overrides cannot inherit subscription status from a st
 Native tokens are never forwarded to ChatGPT backend endpoints.
 The automatic companion path sends only its validated Codex bearer and matching account ID to fixed `GET /backend-api/wham/usage/chatpass/apps` and `GET /backend-api/wham/usage` routes on `https://chatgpt.com`, rejects redirects, and bounds response sizes and request time.
 Both credential identities and native registration metadata bind cache identity and request-boundary revalidation.
-DeepSeek balance requests require Bearer authentication, send only that resolved credential from Pi's runtime auth to `https://api.deepseek.com/user/balance`, and refuse redirects.
-Fireworks spend requests send only that resolved credential to the official `https://api.fireworks.ai` account-listing and billing-summary endpoints and refuse redirects.
-Moonshot balance requests send only the resolved Bearer credential to the matching official Global or China balance origin and refuse redirects.
-Vercel AI Gateway credit requests send only the resolved Bearer credential to `https://ai-gateway.vercel.sh/v1/credits` and refuse redirects.
-MiniMax usage requests send only the resolved API key to one deterministic endpoint on the matching official Global or China API root and refuse redirects.
-Baseten billing requests send only the resolved Bearer credential to `https://api.baseten.co/v1/billing/usage_summary` for an official Baseten model and refuse redirects.
+Provider-specific endpoints and credential requirements are documented in the [provider reference](./docs/providers.md).
 Pi extensions run with the user's process privileges, so the shared event bus is not a security boundary between installed extensions.
 Install only trusted extensions because they can read user files and process memory.
 Protocol v1 interoperability is characterized for the repository's supported Pi runtime.
@@ -324,7 +305,7 @@ The generated runtime is built from `src/index.ts` and does not import back into
 
 ## 🔎 Keywords
 
-Pi extension, Pi coding agent, usage, quota, DeepSeek API balance, DeepSeek balance, Fireworks API spend, Fireworks rated spend, Vercel AI Gateway credits, Vercel AI Gateway usage, Baseten Model APIs spend, Baseten usage, OpenAI Codex usage, ChatGPT subscription limits, Kimi For Coding, Kimi Coding Plan usage, Moonshot AI balance, Moonshot API balance, MiniMax Token Plan, MiniMax API balance, GitHub Copilot AI credits, GitHub Copilot premium requests, OpenRouter credits, Command Code plan credits, xAI OAuth usage, Grok subscription allowance, API-key spend limits, TypeScript Pi package, npm Pi extension.
+Pi extension, provider usage, Codex usage, subscription limits, reset times, API balances, spending, Codex Fast mode.
 
 ## 📄 License
 
