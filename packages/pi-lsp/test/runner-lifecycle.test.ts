@@ -94,6 +94,7 @@ for (const kind of ["diagnostics", "fix"] as const) {
             context:
               failure === "initial-status"
                 ? {
+                    cwd: f.root,
                     ui: {
                       setStatus() {
                         throw new Error("initial status failed");
@@ -130,6 +131,7 @@ for (const kind of ["diagnostics", "fix"] as const) {
           return result;
         });
         const context = {
+          cwd: f.root,
           get ui() {
             if (stale && uiFailure === "getter") throw new Error("stale context");
             return {

@@ -33,11 +33,12 @@ export const SUPPORTED_SERVER_DESCRIPTION =
   "Supported LSP servers are defined by pi-lsp config and selected by file extension.";
 
 export function selectDiagnosticRoutes(
+  cwd: string,
   adapters: LspServerAdapter[],
   params: DiagnosticRouteParams,
   defaultLimit: number,
 ) {
-  const root = resolveRoot(params.root);
+  const root = resolveRoot(cwd, params.root);
   const candidates = filterAdapters(adapters, params.server);
   const skipped: DiagnosticRoute[] = [];
   const runnableCandidates = params.server
@@ -71,8 +72,8 @@ export function selectDiagnosticRoutes(
   return { root, routes, skipped };
 }
 
-export function selectFixRoute(adapters: LspServerAdapter[], params: SingleFileRouteParams) {
-  const root = resolveRoot(params.root);
+export function selectFixRoute(cwd: string, adapters: LspServerAdapter[], params: SingleFileRouteParams) {
+  const root = resolveRoot(cwd, params.root);
   const file = path.resolve(root, params.path);
   const candidates = filterAdapters(adapters, params.server).filter((adapter) => adapter.isSupportedFile(file));
   if (candidates.length === 0) throw unsupportedFileError("fix", params.path, params.server);

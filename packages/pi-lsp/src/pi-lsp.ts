@@ -53,11 +53,12 @@ const lspDiagnosticsTool = defineTool({
   ],
   parameters: DiagnosticsParameters,
   async execute(_toolCallId, params, signal, _onUpdate, ctx) {
-    const requestedRoot = resolveRoot(params.root);
+    const requestedRoot = resolveRoot(ctx.cwd, params.root);
     const { adapters, timeoutMs } = loadRuntime(ctx.cwd, {
       projectTrusted: ctx.isProjectTrusted(),
     });
     const { root, routes, skipped } = selectDiagnosticRoutes(
+      ctx.cwd,
       adapters,
       { ...params, root: requestedRoot },
       DEFAULT_FILE_LIMIT,
@@ -119,11 +120,11 @@ const lspFixTool = defineTool({
     ),
   }),
   async execute(_toolCallId, params, signal, _onUpdate, ctx) {
-    const requestedRoot = resolveRoot(params.root);
+    const requestedRoot = resolveRoot(ctx.cwd, params.root);
     const { adapters, timeoutMs } = loadRuntime(ctx.cwd, {
       projectTrusted: ctx.isProjectTrusted(),
     });
-    const { root, route } = selectFixRoute(adapters, { ...params, root: requestedRoot });
+    const { root, route } = selectFixRoute(ctx.cwd, adapters, { ...params, root: requestedRoot });
     return runFix(
       route.adapter,
       { root, path: params.path, kind: params.kind, write: params.write },

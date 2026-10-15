@@ -101,12 +101,15 @@ Use project formatters or shell commands for formatting workflows.
 
 Run diagnostics through configured servers.
 
+For both tools, `root` defaults to the active session working directory, including after a session switch.
+Relative roots resolve against that directory; absolute roots remain unchanged.
+
 Parameters:
 
 - `paths?`: files or directories to check.
   Defaults to the workspace root.
 - `root?`: workspace root.
-  Defaults to cwd.
+  Defaults to the active session working directory.
 - `limit?`: maximum files to open per selected server.
 - `server?`: configured server name, or an array of names.
   Defaults to all matching servers.
@@ -120,7 +123,7 @@ Parameters:
 
 - `path`: file to fix.
 - `root?`: workspace root.
-  Defaults to cwd.
+  Defaults to the active session working directory.
 - `kind?`: source action kind.
   Defaults to `source.fixAll`.
 - `write?`: write fixed text back to the file.
