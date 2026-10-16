@@ -10,7 +10,7 @@ export type SettingsMergeResult =
   | { kind: "merged"; content: Buffer }
   | { kind: "review"; reason: "unsupported-format" | "field-conflict"; fields: string[] };
 
-const COUPLED_FIELDS = [
+export const COUPLED_FIELDS = [
   ["defaultProvider", "defaultModel"],
   ["queueMode", "steeringMode"],
   ["websockets", "transport"],
@@ -19,7 +19,12 @@ const COUPLED_FIELDS = [
 ] as const;
 
 /** Only global settings.json; objects/arrays are atomic units until their invariants are proven. */
-export function mergeSettingsJson(ancestor: Buffer, local: Buffer, remote: Buffer): SettingsMergeResult {
+export function mergeSettingsJson(
+  ancestor: Buffer,
+  local: Buffer,
+  remote: Buffer,
+  selections: ReadonlyMap<string, "local" | "remote"> = new Map(),
+): SettingsMergeResult {
   let documents: JsonDocument[];
   try {
     documents = [ancestor, local, remote].map(parseSettingsDocument);
@@ -38,7 +43,18 @@ export function mergeSettingsJson(ancestor: Buffer, local: Buffer, remote: Buffe
       unit.every((field) =>
         jsonEqual(first.root.members.get(field)?.node.value, second.root.members.get(field)?.node.value),
       );
-    const source = equal(left, right) ? left : equal(left, base) ? right : equal(right, base) ? left : undefined;
+    const choice = selections.get(unit[0] ?? "");
+    const source = equal(left, right)
+      ? left
+      : equal(left, base)
+        ? right
+        : equal(right, base)
+          ? left
+          : choice === "local"
+            ? left
+            : choice === "remote"
+              ? right
+              : undefined;
     if (!source) {
       conflicts.push(...unit.filter((field) => fields.has(field)));
       continue;

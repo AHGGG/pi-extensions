@@ -6,6 +6,7 @@
 - [Required backend shapes](#required-backend-shapes)
 - [Status display](#status-display)
 - [Secret scanning](#secret-scanning)
+- [Experimental Agent mode](#experimental-agent-mode)
 - [Included content](#included-content)
 - [Unsupported old settings and recovery](#unsupported-old-settings-and-recovery)
 
@@ -254,6 +255,32 @@ A baseline established by a directional push/pull may therefore need one full au
 Across startup inspection and transfer, an eligible unchanged setup makes two fresh head reads, with no snapshot download; a normal full no-transfer merge makes three head reads and one snapshot download in addition to inspection.
 
 Turning **Startup transfer** off does not revert transfers or remove backups/journals. For interrupted operations, follow [merge recovery](merge-implementation-audit.md). Unknown fields remain preserved and malformed/invalid files block saves, just as for the existing policy.
+
+### Experimental Agent mode
+
+`sync.agentMode` is an optional per-setup boolean, default `false`, in settings versions 3, 4, and 5. Open **Settings → Sync behavior → Agent mode (experimental)** and review the setup, destination, selected paths, model disclosure, costs, and autonomous writes before enabling. RPC users can explicitly set the same field in the private settings file. Setting it to `true` is authorization, not just a display preference.
+
+Agent mode authorizes one eligible merged sync at the next session start and the same autonomous flow from **Sync now** or `/sync sync`. It can publish and replace/delete selected content without another transfer confirmation. It is independent of `sync.automatic` and `sync.automaticTransfer`; neither existing preference is changed. Disabling Startup transfer alone does not disable Agent mode. Saving never starts a transfer from Settings. TUI/RPC are supported; print/JSON and shutdown do not start a resolver. There is no polling, daemon, or work after all owning Pi processes exit.
+
+An accepted baseline, matching included-content/local-field policies, and conditional or lease-protected publication remain required. First-source selection, policy migrations, explicit push/pull, and rollback keep their existing reviewed flows. `--yes` does not enable Agent mode or authorize model disclosure. Completed transfers never reload resources automatically.
+
+The resolver uses the initiating session's selected model through Pi's public provider/authentication registry. It has an independent in-memory SDK conversation, no tools, no parent conversation, and no discovered extensions, skills, project instructions, or MCP servers. Only conflict units are disclosed. Settings units contain only the conflicting root fields, with coupled fields kept together; the model selects a complete local or remote unit. Other fields are assembled by deterministic code. For text, the model can replace only overlapping edit hunks; code preserves the other bytes and independent edits. Parent model prompts and tools are not changed. This is configuration isolation, not an OS sandbox or proof of semantic correctness.
+
+Eligible text is global `AGENTS.md` and `.md`/`.txt` files under `prompts/` or `skills/`. Global `settings.json` uses the existing strict JSON, atomic-value, numeric, coupled-field, unknown-field, and machine-local-field policies. Code/scripts, keybindings, binaries, unknown formats, session histories, deletion/modification conflicts, path collisions, and session-root transitions are not model-resolved. Existing deterministic merges still follow their own explicit settings. Unsupported or refused groups remain unresolved; only an explicitly enabled `partialSync` policy permits progress around them. Preserving versions does not mean a conflict is resolved.
+
+A verified accepted ancestor is required. Enabling Agent mode cannot recover historical ancestor bytes that were never retained. If the original accepted bytes are still available on both sides, a conflict-free sync can seed the text ancestors for future runs; otherwise use the existing reviewed recovery flow rather than inventing a base from current edits.
+
+Bounds are 8 KiB per input file, 16 conflict paths/units, 24 KiB of serialized model evidence, 16 KiB of candidate output, 8,192 maximum output tokens, and one provider request per candidate. Each resolver has a 20-second deadline; the existing overall startup deadline is 30 seconds. At most two candidate requests are made during one triggered flow when remote commit competition changes the plan. Provider retries are disabled. Invalid output, detected stale evidence, missing model/auth, or recovery uncertainty pauses the flow rather than forcing acceptance. These limits are not an exact currency spending cap; in-flight disclosure or charges cannot be undone by cancellation.
+
+The existing possible-secret scanner always checks model evidence, even when `skipSecretScan` permits uploads without scanning. It is a heuristic, not a guarantee that all secrets are detected. Do not enable Agent mode for content you cannot disclose to the selected provider. Provider errors and model reasoning are not copied into status or persistent records.
+
+Pi sessions sharing one agent directory use one local resolver claim. Other sessions can report deferred without another model request. Inference does not hold the normal sync operation lock; commit rechecks settings, claim ownership, model identity, local bytes, baseline and remote revision. Foreground work, replacement, reload and shutdown cancel/drain the owning task. Another process rechecks authorization before requests and commit; disabling in that process cannot recall an already submitted request. A dead owner's claim can be replaced on a later trigger; unreadable ownership is retained for review. No live claim is removed just because it is old.
+
+Private claim and content-keyed candidate records reside under `<state-root>/agent-resolver/`, outside snapshots, with private permissions. Candidates can be reused only for matching evidence, policies and model identity, and are validated again. They can contain merged text; retain them as private data. Different candidates are retained without automatic retention pruning. Duplicate provider billing remains possible at crash boundaries. Corrupt or unsafe records block reuse rather than being overwritten blindly.
+
+Pi-sync's cross-process operation lock excludes other pi-sync transfers, not arbitrary writers. Pi file mutation queues coordinate participating writers only within one process. Checks near rename reduce stale writes but do not provide an atomic compare-and-swap against another Pi process or editor. Session JSONL is not rewritten by the model; other active session writers remain subject to the existing protection limitations. Do not use Agent mode as a guarantee of lossless live editing.
+
+Turn Agent mode Off to prevent subsequent requests and invalidate pending authorization. Keep backups, snapshots, conflicts and pending journals; disabling does not undo completed work or erase history. Unknown publication outcomes use the existing journal reconciliation and never authorize blind republishing. If recovery is blocked, retain evidence and use the existing reviewed recovery routes. Finish/reconcile pending merge journals before a downgrade. No Pi core changes or other extension are required.
 
 ### Settings field merge and machine-local fields
 

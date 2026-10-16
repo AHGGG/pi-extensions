@@ -32,6 +32,7 @@ import {
 } from "../ui/sync-format.js";
 import { setSyncStatus } from "../ui/sync-status.js";
 import { confirmTransferReview } from "../ui/transfer-review.js";
+import { startupTransferEnabled } from "./agent-policy.js";
 import { inspectCaseCleanup, revalidateCaseCleanup } from "./apply-review.js";
 import { confirmFieldMigration } from "./field-migration.js";
 import { overlayLocalFields, portableSnapshot, sameLocalFields, validatePortableSnapshot } from "./local-fields.js";
@@ -429,7 +430,8 @@ export async function syncBoth(
   const validateMutation = captureMutationOwner(ctx, options.signal);
   const config = await loadConfig(options.setup);
   throwIfAborted(options.signal);
-  if (config.include.length > 0 && options.auto && config.automaticTransfer) return mergeSync(ctx, options, factory);
+  if (config.include.length > 0 && options.auto && startupTransferEnabled(config))
+    return mergeSync(ctx, options, factory);
   if (!options.auto && config.include.length > 0 && (await readMergeJournal(config)))
     return mergeSync(ctx, options, factory);
   const state = await readStateForConfig(config);

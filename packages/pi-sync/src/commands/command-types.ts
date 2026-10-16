@@ -1,3 +1,4 @@
+import type { AgentAcceptance } from "../sync/agent-request.js";
 import type { StartupTimings } from "../sync/startup-timings.js";
 
 export interface CommandOptions {
@@ -12,6 +13,8 @@ export interface CommandOptions {
   onCommit?: () => void;
   /** In-memory startup diagnostics only; never persisted or sent to a backend. */
   startupTimings?: StartupTimings;
+  /** Internal validated resolver result; never parsed from command arguments. */
+  agentAcceptance?: AgentAcceptance;
   args: string[];
 }
 

@@ -12,6 +12,7 @@ import {
   setupSwitchActionLabel,
 } from "../sync/setup-switch.js";
 import { captureMutationOwner } from "../sync/sync-local.js";
+import { AGENT_MODE_DESCRIPTION, saveAgentMode } from "./agent-mode-setting.js";
 import type { RunRoute } from "./cancellable-operation.js";
 import { dispatchManagerResult } from "./manager-result-dispatcher.js";
 import { boundedSettingsUI } from "./settings-frame.js";
@@ -71,6 +72,7 @@ export async function showSyncSettings(
   type Action =
     | "automatic"
     | "automatic-transfer"
+    | "agent-mode"
     | "merge-settings"
     | "local-fields"
     | "content-policy"
@@ -87,7 +89,7 @@ export async function showSyncSettings(
   type Screen = "categories" | Group;
   const groups: Record<Group, { label: string; ids: readonly string[] }> = {
     content: { label: "Sync content", ids: ["include", "remoteInclude", "localFields"] },
-    behavior: { label: "Sync behavior", ids: ["automatic", "automaticTransfer", "onSwitch"] },
+    behavior: { label: "Sync behavior", ids: ["automatic", "automaticTransfer", "agentMode", "onSwitch"] },
     storage: { label: "Storage & setups", ids: ["storageLocation", "setups", "connections"] },
     advanced: { label: "Advanced", ids: ["mergeSettings", "contentPolicy", "skipSecretScan", "showStatus", "debug"] },
     all: { label: "All settings (search)", ids: [] },
@@ -173,6 +175,14 @@ export async function showSyncSettings(
             currentValue: state.automaticTransfer ? "On" : "Off",
             values: ["On", "Off"],
             action: "automatic-transfer",
+          },
+          {
+            id: "agentMode",
+            label: "Agent mode (experimental)",
+            description: AGENT_MODE_DESCRIPTION,
+            currentValue: state.agentMode ? "On" : "Off",
+            values: ["On", "Off"],
+            action: "agent-mode",
           },
           {
             id: "onSwitch",
@@ -405,6 +415,21 @@ export async function showSyncSettings(
           if (mutationSignal.aborted) return { kind: "rejected" };
           ctx.ui.notify(
             `Automatic sync ${automatic ? "enabled" : "disabled"} for “${safeTerminalText(setupName)}”.`,
+            "info",
+          );
+          return { kind: "stay" };
+        } catch (error) {
+          if (!mutationSignal.aborted) notifySaveFailure(ctx, error);
+          return { kind: "rejected" };
+        }
+      },
+      "agent-mode": async ({ value, signal: actionSignal }) => {
+        const mutationSignal = signal ? AbortSignal.any([signal, actionSignal]) : actionSignal;
+        try {
+          const saved = await saveAgentMode(ctx, setupName, value === "On", mutationSignal);
+          if (!saved || mutationSignal.aborted) return { kind: "rejected" };
+          ctx.ui.notify(
+            "Agent mode saved. Applies to subsequent sync and the next session start; no transfer started.",
             "info",
           );
           return { kind: "stay" };
