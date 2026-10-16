@@ -6,13 +6,15 @@ Use `/notify` for setup or edit the canonical user JSON file. Settings load on s
 
 | Field | Accepted values | Default | Scope |
 | --- | --- | --- | --- |
-| `enabled` | Boolean | `false` | User or trusted Project |
+| `enabled` | Boolean | `true` | User or trusted Project |
 | `mode` | `immediate`, `after-inactivity` | `immediate` | User or trusted Project |
 | `inactivitySeconds` | Whole number from 1 to 86400 | `30` | User or trusted Project |
 | `targetIds` | Array of unique existing destination IDs, at most 32 | Empty | User or trusted Project |
 | `destinations` | Object keyed by stable IDs, at most 32 | Empty | User only |
 
 Destination IDs contain 1–64 ASCII letters, digits, underscores, or hyphens, starting with a letter or digit; `constructor`, `prototype`, and `__proto__` are reserved. The menu creates IDs automatically.
+
+New destinations require only a bot token and chat ID before review. The menu generates the label as `Telegram <chatId>` and leaves the forum topic unset. The review screen lets you change the label, chat ID, token, or optional topic before saving. Editing an existing destination opens that review with its current values; changing the chat ID preserves its label. Destination changes take effect only after confirmation. For a new chat, Save and use adds it to User `targetIds` in the same atomic save; Save only stores it without selecting it. Editing an existing destination preserves its selection state. Explicit Project selections and saved `enabled: false` values are unchanged. Automatic notifications default to On; Off pauses automatic delivery but still allows manual tests. No delivery occurs without a selected destination.
 
 Each Telegram destination has `provider: "telegram"`, a nonempty `label` of at most 128 characters, `botToken`, a numeric string `chatId`, and optional positive safe-integer `messageThreadId`. A group or supergroup ID can be negative. Store IDs as strings, not JSON numbers. Forum topic IDs use Telegram's `message_thread_id` field. Other Telegram chat products with additional required fields are not supported.
 

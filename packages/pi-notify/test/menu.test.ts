@@ -108,6 +108,7 @@ it("frames main/settings/detail screens, bounds sizes, and uses callback theme",
   await running;
 });
 it("saves settings immediately without losing cursor; restores values after failure", async () => {
+  await savePolicy(store, "user", "enabled", false, owner.signal);
   const h = harness(true);
   const running = h.run();
   await h.tui.waitForOpen();
@@ -115,12 +116,12 @@ it("saves settings immediately without losing cursor; restores values after fail
   h.down();
   await h.transition(() => h.tui.press("tui.select.confirm"));
   expect(store.snapshot.effective.enabled).toBe(true);
-  expect(h.tui.render().join("\n")).toMatch(/Notifications.*true/);
+  expect(h.tui.render().join("\n")).toMatch(/Automatic notifications.*On/);
   vi.spyOn(fs, "rename").mockRejectedValueOnce(new Error(token));
   h.tui.press("tui.select.confirm");
   await h.tui.waitForPending();
   expect(store.snapshot.effective.enabled).toBe(true);
-  expect(h.tui.render().join("\n")).toMatch(/Notifications.*true/);
+  expect(h.tui.render().join("\n")).toMatch(/Automatic notifications.*On/);
   expect(JSON.stringify(h.notify.mock.calls)).not.toContain(token);
   h.tui.press("ctrl+c");
   await running;
@@ -164,32 +165,114 @@ it("keeps setup transactional, masked, and cancellable with remapped keys", asyn
   await running;
   expect(await fs.readdir(directory)).toEqual([]);
 });
-it("configures Telegram with paste/editing and saves only on confirmation", async () => {
+it.each(["use", "save only"])(
+  "configures Telegram with paste/editing and confirms selection: %s",
+  async (selection) => {
+    const h = harness();
+    const running = h.run();
+    await h.tui.waitForOpen();
+    await h.choose(0);
+    await h.choose(0);
+    h.tui.send(`\x1b[200~${token}\x1b[201~`);
+    await h.transition(() => h.tui.press("tui.input.submit"));
+    expect(h.tui.render().join("\n")).toContain("Telegram chat ID");
+    h.tui.send("\x1b[200~-10012X\x1b[201~");
+    h.tui.send("\x7f");
+    h.tui.type("3");
+    await h.transition(() => h.tui.press("tui.input.submit"));
+    expect(h.tui.render().join("\n")).toContain("Review Telegram destination");
+    expect(h.tui.render().join("\n")).toContain("Telegram -100123");
+    expect(h.tui.render().join("\n")).not.toContain(token);
+    expect(await fs.readdir(directory)).toEqual([]);
+    expect(h.tui.render().join("\n")).toContain("Use this chat for notifications?");
+    await h.choose(selection === "use" ? 0 : 5);
+    expect(Object.values(store.snapshot.effective.destinations)[0]).toMatchObject({
+      provider: "telegram",
+      label: "Telegram -100123",
+      chatId: "-100123",
+    });
+    expect(Object.values(store.snapshot.effective.destinations)[0].messageThreadId).toBeUndefined();
+    expect(store.snapshot.effective.targetIds).toEqual(
+      selection === "use" ? Object.keys(store.snapshot.effective.destinations) : [],
+    );
+    expect(store.snapshot.effective.enabled).toBe(true);
+    h.tui.press("ctrl+c");
+    await running;
+  },
+);
+it("edits optional fields from review without changing saved settings before confirmation", async () => {
+  const original = {
+    provider: "telegram" as const,
+    label: "Personal",
+    botToken: token,
+    chatId: "123",
+    messageThreadId: 42,
+  };
+  await saveDestination(store, "one", original, owner.signal);
+  const h = harness(true);
+  const running = h.run();
+  await h.tui.waitForOpen();
+  await h.choose(0);
+  await h.choose(0);
+  await h.choose(0);
+  expect(h.tui.render().join("\n")).toContain("Review Telegram destination");
+  expect(h.tui.render().join("\n")).toContain("Topic: 42");
+  await h.choose(2);
+  h.tui.send("\x15");
+  h.tui.type("456");
+  await h.transition(() => h.tui.press("tui.input.submit"));
+  expect(h.tui.render().join("\n")).toContain("Personal");
+  await h.choose(3);
+  h.tui.send("\x15");
+  h.tui.send("\x1b[200~WorkX\x1b[201~");
+  h.tui.send("\x7f");
+  await h.transition(() => h.tui.press("tui.input.submit"));
+  await h.choose(4);
+  h.tui.send("\x15");
+  h.tui.type("0");
+  h.tui.press("tui.input.submit");
+  await h.tui.waitForPending();
+  expect(store.snapshot.effective.destinations.one).toEqual(original);
+  h.tui.send("\x15");
+  h.tui.type("99");
+  await h.transition(() => h.tui.press("tui.input.submit"));
+  expect(h.tui.render().join("\n")).toContain("Topic: 99");
+  expect(h.tui.render().join("\n")).not.toContain(token);
+  expect(store.snapshot.effective.destinations.one).toEqual(original);
+  await h.choose(0);
+  expect(store.snapshot.effective.destinations.one).toEqual({
+    ...original,
+    label: "Work",
+    chatId: "456",
+    messageThreadId: 99,
+  });
+  h.tui.press("ctrl+c");
+  await running;
+});
+it.each(["cancel", "save"])("clears an optional topic only on save: %s", async (completion) => {
+  const original = {
+    provider: "telegram" as const,
+    label: "Personal",
+    botToken: token,
+    chatId: "123",
+    messageThreadId: 42,
+  };
+  await saveDestination(store, "one", original, owner.signal);
   const h = harness();
   const running = h.run();
   await h.tui.waitForOpen();
   await h.choose(0);
   await h.choose(0);
-  h.tui.send(`\x1b[200~${token}\x1b[201~`);
-  await h.transition(() => h.tui.press("tui.input.submit"));
-  h.tui.type("PersonaX");
-  h.tui.send("\x7f");
-  h.tui.type("l");
-  await h.transition(() => h.tui.press("tui.input.submit"));
-  h.tui.send("\x1b[200~-100123\x1b[201~");
-  await h.transition(() => h.tui.press("tui.input.submit"));
-  await h.transition(() => h.tui.press("tui.input.submit"));
-  expect(h.tui.render().join("\n")).toContain("Personal");
-  expect(h.tui.render().join("\n")).not.toContain(token);
-  expect(await fs.readdir(directory)).toEqual([]);
   await h.choose(0);
-  expect(Object.values(store.snapshot.effective.destinations)[0]).toMatchObject({
-    provider: "telegram",
-    label: "Personal",
-    chatId: "-100123",
-  });
+  await h.choose(4);
+  h.tui.send("\x15");
+  await h.transition(() => h.tui.press("tui.input.submit"));
+  expect(h.tui.render().join("\n")).toContain("Topic: none");
+  expect(store.snapshot.effective.destinations.one).toEqual(original);
+  if (completion === "save") await h.choose(0);
   h.tui.press("ctrl+c");
   await running;
+  expect(store.snapshot.effective.destinations.one.messageThreadId).toBe(completion === "save" ? undefined : 42);
 });
 it("selects destinations immediately and restores project inheritance", async () => {
   await saveDestination(
