@@ -55,13 +55,19 @@ Ordinary requests preserve their prefix after each compaction and append the con
 
 ## OAuth rejection state
 
+This fork retains upstream's maintenance handoff and single bounded continuation implementation instead of the previous fork-only developer replay boundary. The stored checkpoint format is unchanged. No additional replay clarification is inserted, and normal provider dispatch consumes pending continuation before settlement can schedule another request.
+
+Configured protocol and dispatched protocol have separate roles. Ownership and preference changes are checked using the configured route key; rejection dispatches use the authenticated protocol and endpoint. Successful checkpoint metadata, not the configured preference, determines whether Context Management continuation can be armed. This preserves continuation when Auto or V2 is adapted to Context Management.
+
+For the official `openai`/`openai-responses` route, a fresh public `getProviderAuth` OAuth result must match the resolved request credential before protocol adaptation. Base URL and authorization-header overrides are excluded. Adapters without public provenance retain the original routing. The menu stores only the last resolved protocol keyed by the configured route; it never stores credentials or refreshes OAuth to render status.
+
 Later compactions skip the rejected operation while compatible checkpoint replay remains enabled, even with fallback notifications off. Rejections are isolated by session manager and provider/model/API/profile/protocol plus the configured and dispatched endpoint origin/path (and Azure's `api-version`). Pi/provider authentication and request preparation still run to resolve the effective backend; rejected dispatches stop before network work. Changing the resolved compaction protocol (including selecting Context Management) or the backend permits a new attempt. Switching back remains paused.
 
 Session start, `/reload`, resume, fork, replacement, and shutdown clear rejection state. The first 128 rejected identities are retained until reset; further identities follow ordinary failure handling without evicting earlier ones. The menu reports the last observed dispatch identity, which is rechecked at the next compaction. URL credentials and query secrets are excluded; non-Azure query routing changes, header-/body-only backend changes, and credentials on an otherwise unchanged route require `/reload` to retry. State is temporary, not a settings write or an entitlement cache.
 
 ## Codex CLI routing comparison
 
-The examined Codex CLI source uses Remote V2 on its resolved Responses route: ChatGPT/Codex OAuth defaults to the Codex backend, while API keys default to the OpenAI API. This extension already uses V2 for Codex-profile `auto` routes; OpenAI/Azure `auto` remains unary Compact API. Select Remote V2 explicitly to use that request form on a compatible API-key backend. Pi's newer OpenAI ChatGPT token-sharing OAuth is a different grant: neither an API label nor Codex CLI source establishes its compaction permission. No authentication-dependent automatic routing is added.
+The examined Codex CLI source uses Remote V2 on its resolved Responses route: ChatGPT/Codex OAuth defaults to the Codex backend, while API keys default to the OpenAI API. This fork uses V2 for Codex-profile `auto` routes; OpenAI API-key and Azure `auto` routes use unary Compact API, while verified official OpenAI ChatGPT OAuth uses Context Management. Select Remote V2 explicitly to use that request form on a compatible API-key backend. Pi's newer OpenAI ChatGPT token-sharing OAuth is a different grant: neither an API label nor Codex CLI source establishes its compaction permission. The pre-dispatch adaptation is described above; it does not grant server permission or change authentication.
 
 ## Menu compatibility
 

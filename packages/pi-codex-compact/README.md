@@ -9,22 +9,37 @@ The extension replays that checkpoint in later compatible requests. Pi still con
 
 - Supports built-in Codex, OpenAI, and Azure OpenAI Responses APIs, plus explicitly configured custom APIs.
 - Offers Remote Compaction V2, unary `responses/compact`, and experimental streaming Context Management.
+- Adapts verified official OpenAI ChatGPT OAuth requests to Context Management before dispatch, including Auto and V2 preferences.
 - Handles manual, threshold, and overflow compaction through Pi's normal lifecycle.
 - Preserves compatible checkpoints across repeated compaction, protocol changes, reloads, resumes, and forks.
 - Uses Pi-native fallback before the first checkpoint; afterward, tries checkpoint-aware recovery with lossy native fallback on recovery failure.
 - Pauses an operation rejected by OAuth without disabling compatible checkpoint replay.
 
-**Context Management is experimental and requires explicit opt-in.** It consumes the active route's quota or API usage; support depends on the backend, model, and account. Default routing is unchanged.
+**Context Management is experimental.** This fork selects it for verified official OpenAI ChatGPT OAuth requests; other authentication routes require explicit selection. It consumes the active route's quota or API usage; support depends on the backend, model, and account.
 
 ## 📦 Install
 
-Install persistently from npm:
+To use this fork, replace the upstream compact entry in Pi's `settings.json` packages array with:
+
+```json
+{
+  "source": "git:github.com/AHGGG/pi-extensions@main",
+  "extensions": ["packages/pi-codex-compact/src/index.ts"],
+  "skills": [],
+  "prompts": [],
+  "themes": []
+}
+```
+
+Restart Pi after resolving the Git package. This filter loads only the compaction extension. Remove `npm:@narumitw/pi-codex-compact` from the same installation scope to avoid loading two copies. The upstream npm package does not contain this fork's OAuth routing or 15-minute timeout changes.
+
+The upstream npm package is available separately:
 
 ```bash
 pi install npm:@narumitw/pi-codex-compact
 ```
 
-Try the published package without installing:
+Try the upstream published package without installing:
 
 ```bash
 pi -e npm:@narumitw/pi-codex-compact
@@ -72,7 +87,7 @@ For example, select Remote V2 explicitly on a compatible backend:
 }
 ```
 
-The default `auto` protocol uses Remote V2 for Codex Responses and unary `responses/compact` for OpenAI and Azure OpenAI Responses. Other APIs remain Pi-native unless explicitly configured.
+With `auto`, verified official OpenAI ChatGPT OAuth uses Context Management; API-key OpenAI and Azure use unary `responses/compact`, and legacy Codex uses Remote V2. The OAuth adaptation also applies to explicit V2 and Compact preferences. Other APIs remain Pi-native unless explicitly configured. The menu reports the last resolved protocol after a compaction attempt without refreshing OAuth merely to display it.
 Menu changes apply immediately. Manual file edits take effect on `/reload` or the next session start. Invalid settings files remain unchanged and make the menu read-only until repaired and reloaded.
 
 See the [settings reference](./docs/settings.md) for all fields, defaults, accepted values, custom API configuration, and save/reload behavior. This extension does not read `~/.codex/config.toml`.
@@ -86,7 +101,7 @@ The provider adapter must honor Pi's public `onPayload` and injected `fetch` opt
 | Model API | `auto` route | Other selectable route |
 | --- | --- | --- |
 | `openai-codex-responses` | Responses Remote V2 | Responses Compact API, experimental Context Management |
-| `openai-responses` | Responses Compact API | Responses Remote V2, experimental Context Management |
+| `openai-responses` | Context Management for verified official ChatGPT OAuth; Responses Compact API otherwise | API-key routes honor the selected protocol; verified ChatGPT OAuth always uses Context Management |
 | `azure-openai-responses` | Responses Compact API | Responses Remote V2, experimental Context Management |
 
 For a custom API, map its exact non-built-in label to `"codex-responses-v1"` in `apiProfiles`. This profile uses Remote V2 in `auto` mode and requires Codex-compatible request fields and replay; it declares compatibility rather than probing the backend. With unary compaction selected, it retains Codex-supported tools and reasoning.
@@ -112,11 +127,13 @@ Compaction makes a separate inference request that asks for a concise work hando
 
 After successful automatic compaction during a user run, work continues without another user message. Existing Pi retries and queued work are reused; otherwise, the extension can start one extra work request per user run, even if that request compacts again. Normal tools remain available, so the extra request can consume quota and execute actions. It asks the model not to repeat completed work, but cannot guarantee model compliance or task completion.
 
-Manual compaction, native fallback, plaintext recovery, other protocols, and restored checkpoints do not start this extra request. Failure, cancellation, terminal errors, session changes, or incompatible model/settings suppress pending continuation. Other extensions using Pi's continuation API can override it.
+Continuation follows the successful checkpoint protocol, so it also applies when an Auto or V2 preference resolves to Context Management. Manual compaction, native fallback, plaintext recovery, checkpoints produced by other protocols, and restored checkpoints do not start this extra request. Failure, cancellation, terminal errors, session changes, or incompatible model/settings suppress pending continuation. Other extensions using Pi's continuation API can override it.
 
-To stop new Context Management attempts, select `auto` or another protocol while leaving the extension enabled for replay. Existing checkpoints are not rewritten and can contain older maintenance instructions or `OK` output. Older package versions do not understand Context Management checkpoints; retain a supporting version for these sessions.
+For other authentication routes, select `auto` or another protocol to stop new Context Management attempts while leaving the extension enabled for replay. Verified official ChatGPT OAuth still resolves to Context Management for every preference. Existing checkpoints are not rewritten and can contain older maintenance instructions or `OK` output. Older package versions do not understand Context Management checkpoints; retain a supporting version for these sessions.
 
 ### ChatGPT OAuth rejection
+
+Before dispatch, this fork matches Pi's fresh public provider-auth result (`source: "OAuth"`) to the actual resolved request credential. The adaptation requires provider `openai`, API `openai-responses`, and the official `https://api.openai.com/v1` base URL (an optional trailing slash is accepted). Proxy base URLs and `Authorization` or `cf-aig-authorization` overrides are excluded. Missing provenance does not establish OAuth: the configured route is retained. Token contents and credential files are not inspected, and credentials or saved preferences are not rewritten.
 
 Pi's **OpenAI → Sign in with ChatGPT** route at `api.openai.com` is distinct from the legacy **OpenAI Codex** route at `chatgpt.com/backend-api/codex`. Permission on one does not establish permission on the other. General compaction API documentation also does not establish OAuth permission.
 
@@ -128,7 +145,7 @@ type=rejected_by_hardened_oauth_boundary
 message=This ChatPass credential is not authorized for the requested operation.
 ```
 
-The extension reports the rejection and pauses that operation for the session route. Without a checkpoint, it falls back to Pi-native compaction; with one, it uses [checkpoint recovery](#checkpoint-recovery). It does not switch credentials, providers, or protocols automatically. The menu's selected route is not an entitlement check, and forcing Remote V2 is not a verified workaround.
+The extension reports the rejection and pauses that operation for the session route. Without a checkpoint, it falls back to Pi-native compaction; with one, it uses [checkpoint recovery](#checkpoint-recovery). The OAuth adaptation happens before the first dispatch; a failed request is not retried with different credentials, providers, or protocols. The menu's selected or resolved route is not an entitlement check.
 
 Changing the protocol or backend can permit a new attempt; switching back to the rejected route remains paused. `/reload` or a new session clears the pause. Re-login or upgrading Pi is not a guaranteed remedy. See OpenAI's [inference](https://developers.openai.com/siwc/token-sharing-open-source/models-and-inference) and [errors and recovery](https://developers.openai.com/siwc/token-sharing-open-source/errors-and-recovery) guidance, plus the [route-pause details](./docs/implementation.md#oauth-rejection-state).
 
@@ -174,7 +191,7 @@ The session stores the provider ID, encrypted checkpoint, and bounded retained u
 | Retained user text or Context Management output suffix | 64K approximate tokens by default; configurable from 8K to 128K |
 | Settings file | 64 KiB |
 | Transport retries | At most 2 |
-| Request timeout | At most 10 minutes |
+| Request timeout | At most 15 minutes; default 5 minutes |
 
 An individually oversized media item is dropped. The oldest fitting retained text item may be partially truncated to preserve newer context.
 Context Management does not retain the original plaintext alongside its checkpoint and fails rather than truncating oversized post-checkpoint output. Hard byte ceilings are not configurable.

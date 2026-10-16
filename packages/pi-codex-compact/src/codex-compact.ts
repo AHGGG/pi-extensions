@@ -31,7 +31,13 @@ import {
 } from "./compaction-failure.js";
 import { captureCompactionBranch } from "./compaction-ownership.js";
 import { validateContextManagementHistory } from "./context-management.js";
-import { type CompactionRoute, resolveCompactionRoute } from "./model-api.js";
+import {
+  type CompactionRoute,
+  isChatGPTCompactionCandidate,
+  type RemoteCompactionProtocol,
+  resolveAuthenticatedCompactionRoute,
+  resolveCompactionRoute,
+} from "./model-api.js";
 import { hasCheckpointMarker, rewriteCheckpointMarker } from "./protocol.js";
 import { RejectedRoutes, rejectionRouteKey } from "./rejection-state.js";
 import { requestRemoteCompaction } from "./remote.js";
@@ -155,15 +161,18 @@ async function compactRemotely(
   rejected: RejectedRoutes,
   isCurrent: () => boolean,
   ownsStatus: () => boolean,
+  onRouteResolved: (protocol: RemoteCompactionProtocol) => void,
   fetch?: typeof globalThis.fetch,
 ) {
   const model = ctx.model;
-  const route = resolveCompactionRoute(model, settings);
+  const configuredRoute = resolveCompactionRoute(model, settings);
   const signal = AbortSignal.any([event.signal, ownerSignal]);
   if (signal.aborted) return { cancel: true };
-  if (route.kind === "native" || !model)
+  if (configuredRoute.kind === "native" || !model)
     return settings.enabled && hasActiveCheckpointClaim(ctx.sessionManager.getBranch()) ? { cancel: true } : undefined;
-  const publicRouteKey = rejectionRouteKey(model, route);
+  let route = configuredRoute;
+  // Keep the preference identity stable; the dispatch identity uses resolved auth.
+  const publicRouteKey = rejectionRouteKey(model, configuredRoute);
   let routeKey = publicRouteKey;
   let endpointObserved = false;
   let paused = false;
@@ -193,14 +202,7 @@ async function compactRemotely(
     // unwinds to avoid reentrant stream teardown. This controller owns only this task.
     queueMicrotask(() => remoteController.abort());
   };
-  ctx.ui.setStatus(
-    STATUS_KEY,
-    route.protocol === "context-management"
-      ? "Responses Context Management…"
-      : route.protocol === "remote-v2"
-        ? "Responses Remote V2…"
-        : "Responses Compact API…",
-  );
+  ctx.ui.setStatus(STATUS_KEY, "Preparing Responses compaction…");
   try {
     if (checkpointPresent && !checkpoint)
       throw new Error("The active opaque checkpoint is invalid or unsupported; history preserved");
@@ -210,6 +212,22 @@ async function compactRemotely(
     // Keep resolved request values local and redact them if the provider echoes them in an error.
     requestValues = [auth.apiKey, ...Object.values(auth.headers ?? {}), ...Object.values(auth.env ?? {})].filter(
       (value): value is string => typeof value === "string" && value.length > 0,
+    );
+    if (route.protocol !== "context-management" && isChatGPTCompactionCandidate(model, auth)) {
+      // Missing provenance is not evidence of OAuth. Older adapters keep their route.
+      const providerAuth = await ctx.modelRegistry.getProviderAuth?.(model.provider);
+      if (!stillCurrent()) return { cancel: true };
+      const authenticatedRoute = resolveAuthenticatedCompactionRoute(model, settings, auth, providerAuth);
+      if (authenticatedRoute.kind === "remote") route = authenticatedRoute;
+    }
+    onRouteResolved(route.protocol);
+    ctx.ui.setStatus(
+      STATUS_KEY,
+      route.protocol === "context-management"
+        ? "Responses Context Management (experimental)…"
+        : route.protocol === "remote-v2"
+          ? "Responses Remote V2…"
+          : "Responses Compact API…",
     );
     const provider = ctx.modelRegistry.getProvider(model.provider);
     if (!provider) throw new Error("The active Responses provider is unavailable");
@@ -415,6 +433,7 @@ export function createCodexCompactExtension(
       sessionId: string;
       operation?: AbortController;
       run?: ContinuationRun;
+      lastRoute?: { key: string; protocol: RemoteCompactionProtocol };
     };
     const owners = new WeakMap<object, Owner>();
     const ownerFor = (ctx: ExtensionContext): Owner => {
@@ -460,6 +479,12 @@ export function createCodexCompactExtension(
             return (
               !!ctx.model && route.kind === "remote" && owner.rejected.hasObserved(rejectionRouteKey(ctx.model, route))
             );
+          },
+          lastProtocol: () => {
+            const route = resolveCompactionRoute(ctx.model, settingsRuntime.get().settings);
+            return ctx.model && route.kind === "remote" && owner.lastRoute?.key === rejectionRouteKey(ctx.model, route)
+              ? owner.lastRoute.protocol
+              : undefined;
           },
           hasCheckpoint: () => hasActiveCheckpointClaim(ctx.sessionManager.getBranch()),
           canReplayCheckpoint: () => {
@@ -554,6 +579,9 @@ export function createCodexCompactExtension(
         owner.rejected,
         isCurrent,
         () => owners.get(ctx.sessionManager) === owner && owner.operation === operation,
+        (protocol) => {
+          if (isCurrent() && key) owner.lastRoute = { key, protocol };
+        },
         options.fetch,
       )
         .then((result) => {
@@ -568,8 +596,9 @@ export function createCodexCompactExtension(
             event.reason !== "manual" &&
             !event.willRetry &&
             route.kind === "remote" &&
-            route.protocol === "context-management" &&
             key &&
+            // Auto/V2 preferences can resolve to Context Management for ChatGPT OAuth.
+            // Arm continuation from the successful checkpoint, not the preference.
             details?.protocol === "context-management"
           ) {
             // A returned result is not yet a committed checkpoint. Only the matching
@@ -623,7 +652,7 @@ export function createCodexCompactExtension(
         owner.sessionId !== ctx.sessionManager.getSessionId() ||
         event.outcome !== "completed" ||
         route.kind !== "remote" ||
-        route.protocol !== "context-management" ||
+        checkpoint?.details.protocol !== "context-management" ||
         !ctx.model ||
         rejectionRouteKey(ctx.model, route) !== pending.routeKey ||
         JSON.stringify(settings) !== pending.settingsKey ||

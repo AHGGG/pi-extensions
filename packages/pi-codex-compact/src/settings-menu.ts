@@ -1,7 +1,7 @@
 import type { Api } from "@earendil-works/pi-ai";
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { type MenuDefinition, runMenu } from "@narumitw/pi-tui-kit";
-import { resolveCompactionRouteForApi } from "./model-api.js";
+import { type RemoteCompactionProtocol, resolveCompactionRouteForApi } from "./model-api.js";
 import type { CodexCompactSettings, CodexCompactSettingsRuntime, CodexCompactSettingsState } from "./settings.js";
 import { terminalText as safeText } from "./terminal.js";
 
@@ -22,6 +22,7 @@ export interface SettingsMenuOwner {
   isPaused?(): boolean;
   hasCheckpoint?(): boolean;
   canReplayCheckpoint?(): boolean;
+  lastProtocol?(): RemoteCompactionProtocol | undefined;
 }
 
 interface CompactMenuStatus {
@@ -48,6 +49,10 @@ function protocolLabel(protocol: CodexCompactSettings["protocol"]): string {
     case "context-management":
       return "Context Management (experimental)";
   }
+}
+
+function lastProtocolLines(protocol: RemoteCompactionProtocol | undefined): string[] {
+  return protocol ? [`Last resolved protocol: ${protocolLabel(protocol)}`] : [];
 }
 
 async function update(
@@ -79,6 +84,7 @@ export function createCodexCompactMenu(
     isPaused?: () => boolean;
     hasCheckpoint?: () => boolean;
     canReplayCheckpoint?: () => boolean;
+    lastProtocol?: () => RemoteCompactionProtocol | undefined;
   } = {},
 ): MenuDefinition<CodexCompactSettingsState, Screen, Action, ExtensionCommandContext> {
   return {
@@ -91,7 +97,11 @@ export function createCodexCompactMenu(
           `Remote compaction: ${state.settings.enabled ? "On" : "Off"}`,
           `Protocol setting: ${protocolLabel(state.settings.protocol)}`,
           `Active model: ${safeText(options.status?.model ?? "none")}`,
-          `Compact route: ${safeText(compactRoute(state, options.status))}`,
+          `Preferred route: ${safeText(compactRoute(state, options.status))}`,
+          ...(state.settings.enabled && options.status?.api === "openai-responses"
+            ? ["On the official OpenAI endpoint, ChatGPT OAuth uses Context Management (experimental)."]
+            : []),
+          ...lastProtocolLines(options.lastProtocol?.()),
           ...(state.settings.enabled && options.hasCheckpoint?.() && options.canReplayCheckpoint?.() === false
             ? ["Compaction cancels: the active checkpoint cannot replay on this model/route."]
             : []),
@@ -141,7 +151,8 @@ export function createCodexCompactMenu(
           {
             id: "protocol",
             label: "Protocol",
-            description: "Choose a protocol. Experimental Context Management makes a normal inference request.",
+            description:
+              "Choose a preferred protocol. OpenAI ChatGPT OAuth uses experimental Context Management through normal inference.",
             currentValue: protocolLabel(state.settings.protocol),
             values: ["Auto", "Remote V2", "Responses Compact", "Context Management (experimental)"],
             action: "set-protocol",
@@ -160,7 +171,7 @@ export function createCodexCompactMenu(
             label: "Request timeout",
             description: "Maximum time for the extension-owned remote compaction request.",
             currentValue: timeoutLabel(state.settings.requestTimeoutMs),
-            values: ["2 min", "5 min", "10 min"],
+            values: ["2 min", "5 min", "10 min", "15 min"],
             action: "set-timeout",
           },
           {
@@ -266,6 +277,7 @@ export async function showCodexCompactMenu(
       isPaused: owner.isPaused,
       hasCheckpoint: owner.hasCheckpoint,
       canReplayCheckpoint: owner.canReplayCheckpoint,
+      lastProtocol: owner.lastProtocol,
     }),
     {
       getState: () => runtime.get(),
