@@ -179,10 +179,15 @@ function fixture(overrides = {}) {
     for (const hook of mock.events.get(name) ?? []) result = await hook(event, ctx);
     return result;
   };
-  const compact = (reason: SessionBeforeCompactEvent["reason"] = "threshold", signal = new AbortController().signal) =>
+  const compact = (
+    reason: SessionBeforeCompactEvent["reason"] = "threshold",
+    signal = new AbortController().signal,
+    customInstructions?: string,
+  ) =>
     emit("session_before_compact", {
       type: "session_before_compact",
       reason,
+      customInstructions,
       willRetry: false,
       signal,
       branchEntries: manager.getBranch(),
@@ -274,38 +279,40 @@ test("pending warmup does not block turns or publish; adoption preserves every n
   await h.emit("session_shutdown", {});
 });
 
-for (const change of ["auth", "settings", "prompt", "model", "tools", "edit"] as const)
-  test(`stale ${change} candidate uses ordinary foreground history`, async () => {
-    const h = fixture();
-    await h.emit("session_start", {});
-    await h.start();
-    await h.started;
-    h.release();
-    switch (change) {
-      case "auth":
-        h.setKey("changed-key");
-        break;
-      case "settings":
-        await h.runtime.update({ replacementTokenBudget: 32_000 });
-        break;
-      case "prompt":
-        h.setPrompt("changed prompt");
-        break;
-      case "model":
-        h.ctx.model = { ...model, name: "Changed" };
-        break;
-      case "tools":
-        h.rawPi.setActiveTools(["read"]);
-        break;
-      case "edit":
-        h.manager.appendContextEdit(h.first, { content: "changed snapshot" });
-        break;
-    }
-    const result = await h.compact();
-    assert.ok(result && typeof result === "object" && "compaction" in result);
-    assert.equal(h.fetches, 2);
-    await h.emit("session_shutdown", {});
-  });
+for (const reason of ["threshold", "manual"] as const)
+  for (const change of ["auth", "settings", "prompt", "model", "tools", "edit"] as const)
+    test(`stale ${change} candidate uses ordinary ${reason} foreground history`, async () => {
+      const h = fixture();
+      await h.emit("session_start", {});
+      await h.start();
+      await h.started;
+      h.release();
+      if (reason === "manual") await new Promise<void>((resolve) => setImmediate(resolve));
+      switch (change) {
+        case "auth":
+          h.setKey("changed-key");
+          break;
+        case "settings":
+          await h.runtime.update({ replacementTokenBudget: 32_000 });
+          break;
+        case "prompt":
+          h.setPrompt("changed prompt");
+          break;
+        case "model":
+          h.ctx.model = { ...model, name: "Changed" };
+          break;
+        case "tools":
+          h.rawPi.setActiveTools(["read"]);
+          break;
+        case "edit":
+          h.manager.appendContextEdit(h.first, { content: "changed snapshot" });
+          break;
+      }
+      const result = await h.compact(reason);
+      assert.ok(result && typeof result === "object" && "compaction" in result);
+      assert.equal(h.fetches, 2);
+      await h.emit("session_shutdown", {});
+    });
 
 for (const event of [
   "session_shutdown",
@@ -480,45 +487,48 @@ test("successful settlement retains a ready candidate without publishing", async
   await h.emit("session_shutdown", {});
 });
 
-test("snapshot is immutable and later tool call/result pairs are retained together", async () => {
-  const h = fixture();
-  await h.emit("session_start", {});
-  await h.start();
-  await h.started;
-  const call = {
-    ...assistant(""),
-    content: [{ type: "toolCall", id: "read-1", name: "read", arguments: { path: "file" } }],
-    stopReason: "toolUse",
-  } as AssistantMessage;
-  const callId = h.manager.appendMessage(call);
-  const tool: AgentMessage = {
-    role: "toolResult",
-    toolCallId: "read-1",
-    toolName: "read",
-    content: [{ type: "text", text: "output" }],
-    isError: false,
-    timestamp: 4,
-  };
-  h.manager.appendMessage(tool);
-  h.manager.appendMessage(assistant("finished"));
-  h.release();
-  const result = (await h.compact()) as {
-    compaction: { summary: string; firstKeptEntryId: string; tokensBefore: number; details: unknown };
-  };
-  assert.equal(result.compaction.firstKeptEntryId, callId);
-  assert.equal(JSON.stringify(h.captured[0]).includes("read-1"), false);
-  h.manager.appendCompaction(
-    result.compaction.summary,
-    result.compaction.firstKeptEntryId,
-    result.compaction.tokensBefore,
-    result.compaction.details,
-  );
-  const projected = (await h.emit("context", { messages: buildSessionContext(h.manager.getBranch()).messages })) as {
-    messages: AgentMessage[];
-  };
-  assert.deepEqual(projected.messages.slice(1), [call, tool, assistant("finished")]);
-  await h.emit("session_shutdown", {});
-});
+for (const reason of ["threshold", "manual"] as const)
+  test(`${reason} adoption preserves snapshot and later tool call/result pairs`, async () => {
+    const h = fixture();
+    await h.emit("session_start", {});
+    await h.start();
+    await h.started;
+    const call = {
+      ...assistant(""),
+      content: [{ type: "toolCall", id: "read-1", name: "read", arguments: { path: "file" } }],
+      stopReason: "toolUse",
+    } as AssistantMessage;
+    const callId = h.manager.appendMessage(call);
+    const tool: AgentMessage = {
+      role: "toolResult",
+      toolCallId: "read-1",
+      toolName: "read",
+      content: [{ type: "text", text: "output" }],
+      isError: false,
+      timestamp: 4,
+    };
+    h.manager.appendMessage(tool);
+    h.manager.appendMessage(assistant("finished"));
+    h.release();
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    const result = (await h.compact(reason)) as {
+      compaction: { summary: string; firstKeptEntryId: string; tokensBefore: number; details: unknown };
+    };
+    assert.equal(h.fetches, 1);
+    assert.equal(result.compaction.firstKeptEntryId, callId);
+    assert.equal(JSON.stringify(h.captured[0]).includes("read-1"), false);
+    h.manager.appendCompaction(
+      result.compaction.summary,
+      result.compaction.firstKeptEntryId,
+      result.compaction.tokensBefore,
+      result.compaction.details,
+    );
+    const projected = (await h.emit("context", { messages: buildSessionContext(h.manager.getBranch()).messages })) as {
+      messages: AgentMessage[];
+    };
+    assert.deepEqual(projected.messages.slice(1), [call, tool, assistant("finished")]);
+    await h.emit("session_shutdown", {});
+  });
 
 test("never starts a snapshot with an unresolved tool call", async () => {
   const h = fixture();
@@ -785,7 +795,10 @@ test("lifecycle logs default off and stay silent without UI", async () => {
     h.release();
     await h.compact();
     await h.emit("session_compact", {});
-    assert.deepEqual(lifecycleLogs(h), []);
+    assert.deepEqual(
+      lifecycleLogs(h).filter((line) => !line.includes("Async compaction ready:")),
+      [],
+    );
     await h.emit("session_shutdown", {});
   }
 });
@@ -813,23 +826,24 @@ test("opt-in logs distinguish async preparation, waiting, reuse, and committed c
   await h.emit("session_shutdown", {});
 });
 
-for (const event of ["session_start", "session_shutdown", "session_before_switch", "session_before_tree"])
-  test(`logging suppresses late async notices after ${event}`, async () => {
-    const h = fixture({ logCompaction: true });
-    await h.emit("session_start", {});
-    await h.start();
-    await h.started;
-    await h.emit(event, {});
-    const before = lifecycleLogs(h);
-    h.release();
-    await new Promise<void>((resolve) => setImmediate(resolve));
-    assert.deepEqual(lifecycleLogs(h), before);
-    assert.equal(
-      before.some((line) => line.includes("ready:")),
-      false,
-    );
-    await h.emit("session_shutdown", {});
-  });
+for (const logCompaction of [false, true])
+  for (const event of ["session_start", "session_shutdown", "session_before_switch", "session_before_tree"])
+    test(`logging ${logCompaction} suppresses late async notices after ${event}`, async () => {
+      const h = fixture({ logCompaction });
+      await h.emit("session_start", {});
+      await h.start();
+      await h.started;
+      await h.emit(event, {});
+      const before = lifecycleLogs(h);
+      h.release();
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      assert.deepEqual(lifecycleLogs(h), before);
+      assert.equal(
+        before.some((line) => line.includes("ready:")),
+        false,
+      );
+      await h.emit("session_shutdown", {});
+    });
 
 test("logging identifies manual cancellation and fresh foreground work", async () => {
   const h = fixture({ logCompaction: true });
@@ -897,5 +911,89 @@ test("enabling logs preserves a pending async job and ready adoption skips waiti
     lifecycleLogs(h).some((line) => line.includes("waiting")),
     false,
   );
+  await h.emit("session_shutdown", {});
+});
+
+for (const mode of ["tui", "rpc", "print", "json"] as const)
+  for (const logCompaction of [false, true])
+    test(`ready notice is actionable once in ${mode}, logging ${logCompaction}`, async () => {
+      const h = fixture({ logCompaction });
+      h.ctx.mode = mode;
+      h.ctx.hasUI = mode === "tui" || mode === "rpc";
+      await h.emit("session_start", {});
+      await h.start();
+      await h.started;
+      assert.equal(lifecycleLogs(h).filter((line) => line.includes("ready:")).length, 0);
+      const before = h.manager.getBranch();
+      h.release();
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      await h.start();
+      const notices = lifecycleLogs(h).filter((line) => line.includes("ready:"));
+      assert.equal(notices.length, h.ctx.hasUI ? 1 : 0);
+      if (h.ctx.hasUI) {
+        assert.match(notices[0], /run \/compact/);
+        assert.match(notices[0], /History is unchanged/);
+      }
+      assert.deepEqual(h.manager.getBranch(), before);
+      assert.equal(h.fetches, 1);
+      assert.equal(h.sentMessages.length, 0);
+      assert.equal(h.sentUserMessages.length, 0);
+      await h.emit("session_shutdown", {});
+    });
+
+for (const customInstructions of ["Keep task details", "  Keep task details  "])
+  test(`manual custom instructions bypass a ready checkpoint: ${JSON.stringify(customInstructions)}`, async () => {
+    const h = fixture();
+    await h.emit("session_start", {});
+    await h.start();
+    await h.started;
+    h.release();
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    h.manager.appendMessage({ role: "user", content: "fresh foreground tail", timestamp: 3 });
+    const result = await h.compact("manual", undefined, customInstructions);
+    assert.ok(result && typeof result === "object" && "compaction" in result);
+    assert.equal(h.fetches, 2);
+    assert.match(JSON.stringify(h.captured[1]), /fresh foreground tail/);
+    await h.emit("session_shutdown", {});
+  });
+
+test("plain manual compaction adopts ready Context Management once without continuation", async () => {
+  const h = fixture({ protocol: "context-management" });
+  await h.emit("session_start", {});
+  await h.emit("before_agent_start", {});
+  await h.start();
+  await h.started;
+  h.release();
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  const result = (await h.compact("manual", undefined, "  ")) as {
+    compaction: { summary: string; firstKeptEntryId: string; tokensBefore: number; details: unknown };
+  };
+  assert.equal(h.fetches, 1);
+  assert.equal(latestCheckpoint(h.manager.getBranch()), undefined);
+  const id = h.manager.appendCompaction(
+    result.compaction.summary,
+    result.compaction.firstKeptEntryId,
+    result.compaction.tokensBefore,
+    result.compaction.details,
+  );
+  await h.emit("session_compact", {
+    fromExtension: true,
+    reason: "manual",
+    willRetry: false,
+    compactionEntry: h.manager.getEntry(id),
+  });
+  assert.equal(
+    await h.emit("agent_before_settle", {
+      outcome: "completed",
+      entries: [],
+      continue: false,
+      context: { canContinue: false, contextMessages: h.manager.buildSessionContext().messages },
+    }),
+    undefined,
+  );
+  await h.compact("manual");
+  assert.equal(h.fetches, 2, "a consumed ready checkpoint cannot be reused again");
+  assert.equal(h.sentMessages.length, 0);
+  assert.equal(h.sentUserMessages.length, 0);
   await h.emit("session_shutdown", {});
 });

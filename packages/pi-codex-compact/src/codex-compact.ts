@@ -246,16 +246,20 @@ export function createCodexCompactExtension(
       if (warm) {
         logCompaction(ctx, "Async compaction triggered: preparing a checkpoint in the background.");
         const job = warm;
-        const report = (message: string) => {
-          if (owners.get(ctx.sessionManager) === owner && owner.warm === job && job.isCurrent())
-            logCompaction(ctx, message);
+        const report = (message: string, ready = false) => {
+          if (owners.get(ctx.sessionManager) !== owner || owner.warm !== job || !job.isCurrent()) return;
+          // Readiness is actionable even with optional lifecycle logging disabled.
+          if (ready) {
+            if (ctx.hasUI) ctx.ui.notify(`[codex-compact] ${message}`, "info");
+          } else logCompaction(ctx, message);
         };
         void job.promise.then(
           () =>
             report(
               job.state === "Ready"
-                ? "Async compaction ready: checkpoint prepared; history is unchanged until actual compaction."
+                ? "Async compaction ready: run /compact to apply the prepared checkpoint. History is unchanged until compaction."
                 : "Async compaction failed: actual compaction will use the foreground recovery path.",
+              job.state === "Ready",
             ),
           () => report("Async compaction failed: actual compaction will use the foreground path."),
         );
@@ -270,7 +274,10 @@ export function createCodexCompactExtension(
       if (run) run.pending = undefined;
       cancelOperation(ctx);
       owner.compactionPending = true;
-      if (event.reason === "manual") cancelWarm(ctx);
+      // Only plain manual compaction can reuse a finished snapshot. Pending work
+      // and custom-instruction requests retain the existing foreground path.
+      if (event.customInstructions?.trim() || (event.reason === "manual" && owner.warm?.state !== "Ready"))
+        cancelWarm(ctx);
       const warm = owner.warm;
       const operation = new AbortController();
       owner.operation = operation;
