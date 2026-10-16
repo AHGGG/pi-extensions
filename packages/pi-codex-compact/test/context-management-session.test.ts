@@ -7,6 +7,7 @@ import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { test, vi } from "vitest";
 import { createMockContext, createMockPi } from "../../../test/support.js";
 import { createCheckpointDetails, fallbackSummary, latestCheckpoint } from "../src/checkpoint.js";
+import { COMPACTION_WORK_REPLAY_MESSAGE } from "../src/checkpoint-replay.js";
 import type { RemoteCompactionProtocol } from "../src/model-api.js";
 import { DEFAULT_CODEX_COMPACT_SETTINGS } from "../src/settings.js";
 
@@ -114,7 +115,19 @@ test("persisted server checkpoints replay after reload/resume/fork and stop befo
         { type: "before_provider_request", payload },
         ctx,
       )) as typeof payload;
-      assert.deepEqual(replayed.input, [...history, payload.input[1]]);
+      const boundary = {
+        role: "developer",
+        content: [{ type: "input_text", text: COMPACTION_WORK_REPLAY_MESSAGE }],
+      };
+      assert.deepEqual(replayed.input, [...history, boundary, payload.input[1]]);
+      assert.equal(
+        await mock.events.get("before_provider_request")?.[0]?.(
+          { type: "before_provider_request", payload: replayed },
+          ctx,
+        ),
+        undefined,
+        "already rewritten requests must not gain a second boundary",
+      );
       assert.equal(replayed.instructions, payload.instructions);
       assert.deepEqual(replayed.tools, payload.tools);
       assert.doesNotMatch(JSON.stringify(replayed), /old user history|old assistant-only fact|PI_CONTEXT_COMPACTION/);
