@@ -25,7 +25,7 @@ async function configured(run: () => Promise<void>) {
   });
 }
 
-test("ordinary main has six direct actions and advisory status/help without writes or routing", async () => {
+test("ordinary main exposes transfers, inspection and management actions and advisory status/help without writes or routing", async () => {
   await configured(async () => {
     const before = readFileSync(localConfigPath());
     const manager = await describeManagerState();
@@ -57,6 +57,8 @@ for (const [label, expected] of [
   ["Sync now", "sync"],
   ["Pull from remote…", "pull"],
   ["Push to remote…", "push"],
+  ["View differences", "diff"],
+  ["Check remote status", "status"],
   ["History", "history"],
   ["Diagnostics", "doctor"],
 ]) {
@@ -77,6 +79,43 @@ for (const [label, expected] of [
       );
       assert.deepEqual(routes, [expected]);
       assert.ok(signals[0] instanceof AbortSignal);
+    });
+  });
+}
+
+for (const outcome of ["cancel", "setup-change", "shutdown"] as const) {
+  test(`Diagnostics review ${outcome} does not run backend probes`, async () => {
+    await configured(async () => {
+      const owner = new AbortController();
+      const choices = ["Diagnostics", undefined];
+      let review = "";
+      const context = createMockContext({
+        mode: "rpc",
+        select: async () => choices.shift(),
+        confirm: async (_title: string, body: string) => {
+          review = body;
+          if (outcome === "setup-change")
+            await updateLocalConfig((settings) => ({ ...settings, skipSecretScan: true }));
+          if (outcome === "shutdown") owner.abort();
+          return outcome !== "cancel";
+        },
+      });
+      const routes: string[] = [];
+      await showSyncManager(
+        context.ctx,
+        async (route) => {
+          routes.push(route);
+        },
+        owner.signal,
+      );
+      assert.deepEqual(routes, []);
+      assert.match(review, /Setup: home/);
+      assert.match(review, /WebDAV probes conditional writes/);
+      if (outcome === "setup-change")
+        assert.ok(
+          context.notifications.some((entry) => /Setup changed during diagnostics review/u.test(entry.message)),
+        );
+      else assert.deepEqual(context.notifications, []);
     });
   });
 }
@@ -136,7 +175,7 @@ for (const row of ["Storage location", "Manage sync setups", "Manage storage con
   test(`Settings ${row} returns to the setup-bound screen on cancellation`, async () => {
     await configured(async () => {
       const before = readFileSync(localConfigPath());
-      const choices = [row, undefined, undefined];
+      const choices = ["All settings (search)", row, undefined, undefined, undefined];
       const titles: string[] = [];
       const context = createMockContext({
         mode: "tui",
@@ -148,7 +187,7 @@ for (const row of ["Storage location", "Manage sync setups", "Manage storage con
         input: async () => undefined,
       });
       await showSyncSettings(context.ctx, async () => undefined);
-      assert.equal(titles.filter((title) => title.includes("Pi Sync Settings")).length, 2);
+      assert.equal(titles.filter((title) => title.includes("Pi Sync Settings ·")).length, 2);
       assert.deepEqual(readFileSync(localConfigPath()), before);
       assert.deepEqual(context.notifications, []);
     });
@@ -172,6 +211,7 @@ for (const mode of ["tui", "rpc"] as const) {
         }));
         const choices = [
           "Settings",
+          ...(mode === "tui" ? ["All settings (search)"] : []),
           "Manage sync setups",
           "work",
           "Make current…",
@@ -209,7 +249,7 @@ for (const mode of ["tui", "rpc"] as const) {
                 const choice = choices.shift();
                 if (!choice) tui.press("ctrl+c");
                 else {
-                  if (title === "Pi Sync Settings") tui.send(`\u001b[200~${choice}\u001b[201~`);
+                  if (title.startsWith("Pi Sync Settings ·")) tui.send(`\u001b[200~${choice}\u001b[201~`);
                   else {
                     for (let index = 0; index < 20; index++) {
                       if (tui.render().some((line) => line.includes(`→ ${choice}`))) break;
@@ -259,7 +299,7 @@ for (const mode of ["tui", "rpc"] as const) {
         );
         assert.equal(
           titles.length,
-          outcome === "applied" ? 4 : 5,
+          (outcome === "applied" ? 4 : 5) + (mode === "tui" ? 1 : 0),
           JSON.stringify({ titles, notifications: context.notifications }),
         );
         assert.equal((await loadConfig()).setupName, "work");
@@ -273,6 +313,7 @@ for (const row of ["Storage location", "Manage sync setups", "Manage storage con
     await configured(async () => {
       const frames: string[] = [];
       let visits = 0;
+      let entered = false;
       let inputs = 0;
       const context = createMockContext({
         mode: "tui",
@@ -301,18 +342,34 @@ for (const row of ["Storage location", "Manage sync setups", "Manage storage con
           rows: 28,
           keybindings: {
             matches: (data, action) =>
-              data === ({ "tui.select.confirm": "x", "tui.select.cancel": "q" } as Record<string, string>)[action],
+              data ===
+              (
+                { "tui.select.confirm": "x", "tui.select.cancel": "q", "tui.select.down": "j" } as Record<
+                  string,
+                  string
+                >
+              )[action],
             getKeys: (action) =>
-              ((({ "tui.select.confirm": ["x"], "tui.select.cancel": ["q"] }) as Record<string, readonly string[]>)[
-                action
-              ] as never) ?? [],
+              ((
+                ({ "tui.select.confirm": ["x"], "tui.select.cancel": ["q"], "tui.select.down": ["j"] }) as Record<
+                  string,
+                  readonly string[]
+                >
+              )[action] as never) ?? [],
           },
         });
         try {
           const result = tui.custom(factory);
           await tui.waitForOpen();
           const frame = tui.render().join("\n");
-          if (frame.includes("Pi Sync Settings")) {
+          if (frame.split("\n").includes("Pi Sync Settings")) {
+            if (entered) tui.send("q");
+            else {
+              entered = true;
+              for (let index = 0; index < 4; index++) tui.send("j");
+              tui.send("x");
+            }
+          } else if (frame.includes("Pi Sync Settings")) {
             visits++;
             if (visits === 1) tui.send(`\u001b[200~${row}\u001b[201~`);
             frames.push(tui.render().join("\n"));
@@ -356,7 +413,8 @@ test("Settings closes after management switches the active setup instead of edit
       mode: "tui",
       hasUI: true,
       select: async (title: string) => {
-        if (title.includes("Pi Sync Settings")) {
+        if (title.split("\n").includes("Pi Sync Settings")) return "All settings (search)";
+        if (title.includes("Pi Sync Settings ·")) {
           screens++;
           return "Manage sync setups";
         }
@@ -392,7 +450,11 @@ for (const reason of ["Session replaced", "Shutdown", "Disposal"]) {
       };
       const running = showSyncSettings(context.ctx, async () => undefined, owner.signal);
       await tui.waitForOpen();
-      tui.send("Storage");
+      tui.press("tui.select.down");
+      tui.press("tui.select.down");
+      tui.press("tui.select.confirm");
+      await tui.waitForPending();
+      await tui.waitForOpen();
       tui.press("tui.select.confirm");
       await inputStarted;
       if (reason === "Disposal") tui.dispose();
@@ -406,7 +468,7 @@ for (const reason of ["Session replaced", "Shutdown", "Disposal"]) {
   });
 }
 
-test("flat Settings preserves a searched row and new value after save with remapped keys", async () => {
+test("All settings preserves a searched row and new value after save with remapped keys", async () => {
   await configured(async () => {
     const tui = createTuiHarness({
       width: 48,
@@ -436,14 +498,21 @@ test("flat Settings preserves a searched row and new value after save with remap
     const context = createMockContext({ mode: "tui", hasUI: true, custom: tui.custom });
     const running = showSyncSettings(context.ctx, async () => undefined);
     await tui.waitForOpen();
-    tui.send("\u001b[200~Show status\u001b[201~");
+    for (let index = 0; index < 4; index++) tui.send("j");
+    tui.send("x");
+    await tui.waitForPending();
+    await tui.waitForOpen();
+    tui.send("\u001b[200~Show sync status\u001b[201~");
     tui.send("x");
     await tui.waitForPending();
     await tui.waitForOpen();
     const frame = tui.render().join("\n");
-    assert.match(frame, /Show status.*Off/u);
+    assert.match(frame, /Show sync status.*Off/u);
     assert.doesNotMatch(frame, /Included content|Automatic sync/u);
     assert.equal((await loadConfig()).showStatus, false);
+    tui.send("q");
+    await tui.waitForPending();
+    await tui.waitForOpen();
     tui.send("q");
     await running;
     tui.dispose();
@@ -457,7 +526,8 @@ test("Settings closes when management removes its owning setup", async () => {
       mode: "tui",
       hasUI: true,
       select: async (title: string) => {
-        if (title.includes("Pi Sync Settings")) {
+        if (title.split("\n").includes("Pi Sync Settings")) return "All settings (search)";
+        if (title.includes("Pi Sync Settings ·")) {
           screens++;
           return "Manage sync setups";
         }
@@ -494,7 +564,7 @@ test("History cancellation cannot interrupt a rollback after its commit boundary
     });
     try {
       await tui.waitForOpen();
-      for (let index = 0; index < 4; index++) tui.press("tui.select.down");
+      for (let index = 0; index < 6; index++) tui.press("tui.select.down");
       tui.press("tui.select.confirm");
       await committed;
       await tui.waitForOpen();

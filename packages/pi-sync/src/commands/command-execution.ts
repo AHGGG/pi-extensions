@@ -13,6 +13,7 @@ import { RemoteSelectionMismatchError } from "../sync/sync-policy.js";
 import { automaticSyncSummary } from "../ui/automatic-sync-summary.js";
 import type { RunRouteResult } from "../ui/cancellable-operation.js";
 import { trackOperationDialogs } from "../ui/operation-dialogs.js";
+import { startupTransferSummary } from "../ui/sync-behavior.js";
 import { setSyncStatus } from "../ui/sync-status.js";
 import { safeTerminalText } from "../ui/terminal-text.js";
 import { parseOptions, resolveSyncCommand, splitArgs, usage, validateCommandOptions } from "./command.js";
@@ -256,7 +257,7 @@ async function showConfig(ctx: ExtensionCommandContext, options: CommandOptions)
       `automatic sync: ${automaticSyncSummary(config.automatic)}`,
       `settings field merge: ${config.mergeSettings ? "On (experimental)" : "Off"}`,
       `machine-local settings.json fields: ${(config.localFields ?? []).map(safeTerminalText).join(", ") || "none"}`,
-      `automatic transfer at startup: ${config.automaticTransfer ? "On — selected-file upload/replace/delete; no reload" : "Off"}`,
+      `startup transfer: ${startupTransferSummary(config)}`,
       `included content: ${config.include.join(", ") || "none"}`,
       `sessions: ${config.include.includes("sessions") ? "included" : "not included"}`,
       `settings file: ${localConfigPath()}`,

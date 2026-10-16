@@ -60,9 +60,9 @@ export async function confirmMergeReview(
           })
         : await runMenu(ctx, menu, { getState: () => undefined, signal, isCurrent, onError: () => {} });
     if (!isCurrent() || signal?.aborted) return false;
-    if (result.kind === "error") throw new Error("Merge review failed; no transfer was performed.");
+    if (result.kind === "error") throw new Error("Sync review failed; no transfer was performed.");
     if (result.kind === "unsupported")
-      throw new Error("Merge review requires observable TUI or RPC; review the plan before using --yes.");
+      throw new Error("Sync review requires observable TUI or RPC; review the plan before using --yes.");
     if (result.kind === "completed") choice.value = result.value;
     else if (result.kind !== "closed") return false;
     // Keep authorization separate from UI termination in both adapters.
@@ -79,7 +79,7 @@ export async function confirmMergeReview(
       onError: () => {},
     });
     if (!isCurrent() || signal?.aborted) return false;
-    if (detail.kind === "error") throw new Error("Merge review failed; no transfer was performed.");
+    if (detail.kind === "error") throw new Error("Sync review failed; no transfer was performed.");
     if (detail.kind !== "cancelled" || detail.reason !== "back") return false;
     // A fresh menu discards remembered selection: returning from details always selects No.
     // Unlike Pi's native Yes-first dialog, approval requires moving off the safe default.

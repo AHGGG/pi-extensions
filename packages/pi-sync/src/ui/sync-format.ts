@@ -5,12 +5,17 @@ import type { Snapshot } from "../snapshot/snapshot-types.js";
 import { inspectRemoteSelection } from "../sync/sync-policy.js";
 import { fileHashMap } from "../sync/sync-state.js";
 import { safeTerminalText, snapshotPathLabel } from "./terminal-text.js";
+import { transferChanges, transferCounts } from "./transfer-changes.js";
 
 export function formatDiff(local: Snapshot, remote: Snapshot) {
   const localMap = fileHashMap(local);
   const remoteMap = fileHashMap(remote);
   const allPaths = [...new Set([...Object.keys(localMap), ...Object.keys(remoteMap)])].sort();
-  const lines = [`local: ${local.files.length} files`, `remote: ${remote.id} (${remote.files.length} files)`, ""];
+  const lines = [
+    `local: ${local.files.length} files`,
+    `remote: ${safeTerminalText(remote.id)} (${remote.files.length} files)`,
+    "",
+  ];
   let changed = 0;
   for (const filePath of allPaths) {
     if (!Object.hasOwn(localMap, filePath)) {
@@ -29,9 +34,10 @@ export function formatDiff(local: Snapshot, remote: Snapshot) {
 }
 
 export function formatSnapshotOnlyDiff(title: string, snapshot: Snapshot) {
-  return [`${title}: ${snapshot.id}`, ...snapshot.files.map((file) => `Add: ${snapshotPathLabel(file.path)}`)].join(
-    "\n",
-  );
+  return [
+    `${safeTerminalText(title)}: ${safeTerminalText(snapshot.id)}`,
+    ...snapshot.files.map((file) => `Add: ${snapshotPathLabel(file.path)}`),
+  ].join("\n");
 }
 
 export function formatPushSummary(
@@ -45,26 +51,40 @@ export function formatPushSummary(
   return [
     `Sync setup: ${safeTerminalText(config.setupName)}`,
     `Storage location: ${safeTerminalText(destination)}`,
-    `Upload ${upload.files.length} files from ${safeTerminalText(agentDir())}.`,
+    `Direction: Local → Remote. Source: ${safeTerminalText(agentDir())}.`,
+    `Publish a snapshot containing ${upload.files.length} files; unchanged and preserved files are not counted as changes.`,
     `Sessions: ${upload.syncSessions ? "included — may contain private conversations" : "not included"}`,
-    head ? `Remote latest: ${head.snapshotId}` : "Remote latest: empty",
-    "Publication effect: the backend's active head will reference the new immutable snapshot.",
+    head ? `Remote latest: ${safeTerminalText(head.snapshotId)}` : "Remote latest: empty",
+    "Publication effect: the backend's active head will reference the new immutable snapshot. Removed paths leave the active snapshot; retained history is not erased.",
     ...(remote && inspectRemoteSelection(config.include, remote).kind === "different"
       ? ["Included-content policy effect: replace the differing remote selection with this setup's local selection."]
       : []),
     formatPublicationPreview(remote, upload),
-    preservedRemoteFileCount > 0
-      ? `Possible secrets in locally managed files were scanned before this prompt; ${preservedRemoteFileCount} preserved remote file(s) were not rescanned.`
-      : "Possible secrets were scanned before this prompt.",
+    config.skipSecretScan
+      ? "Warning: possible-secret scanning is disabled for this push."
+      : preservedRemoteFileCount > 0
+        ? `Possible secrets in locally managed files were scanned before this prompt; ${preservedRemoteFileCount} preserved remote file(s) were not rescanned.`
+        : "Possible secrets were scanned before this prompt.",
   ].join("\n");
 }
 
-export function formatApplyPreview(local: Snapshot, remote: Snapshot) {
-  return formatDirectionalChanges(local, remote, {
-    add: "Add locally",
-    update: "Update locally",
-    remove: "Remove locally",
-  });
+export function formatApplyPreview(
+  local: Snapshot,
+  remote: Snapshot,
+  protectedPaths: ReadonlySet<string> = new Set(),
+  additionalRemovals: readonly string[] = [],
+) {
+  return formatDirectionalChanges(
+    local,
+    remote,
+    {
+      add: "Add locally",
+      update: "Update locally",
+      remove: "Remove locally",
+    },
+    protectedPaths,
+    additionalRemovals,
+  );
 }
 
 export function formatPullSummary(
@@ -72,15 +92,20 @@ export function formatPullSummary(
   destination: string,
   local: Snapshot,
   remote: Snapshot,
-  protectedSessionCount: number,
+  protectedPaths: ReadonlySet<string>,
+  additionalRemovals: readonly string[] = [],
 ) {
   return [
     `Sync setup: ${safeTerminalText(config.setupName)}`,
     `Storage location: ${safeTerminalText(destination)}`,
+    "Direction: Remote → Local.",
     `Snapshot: ${safeTerminalText(remote.id)}`,
     `Sessions: ${remote.syncSessions ? "included — may contain private conversations" : "not included"}`,
-    `Protected live sessions: ${protectedSessionCount || "none"}`,
-    formatApplyPreview(local, remote),
+    `Protected live sessions: ${protectedPaths.size || "none"}`,
+    formatApplyPreview(local, remote, protectedPaths, additionalRemovals),
+    ...(additionalRemovals.length
+      ? ["Case-variant aliases listed above are removed before writing canonical paths."]
+      : []),
     "A local backup is created before these writes/deletes. The remote active snapshot is unchanged.",
   ].join("\n");
 }
@@ -91,25 +116,25 @@ export function formatRollbackSummary(
   local: Snapshot,
   remote: Snapshot,
   requestedSnapshot: string,
-  protectedSessionCount: number,
+  protectedPaths: ReadonlySet<string>,
+  additionalRemovals: readonly string[] = [],
 ) {
   return [
     `Sync setup: ${safeTerminalText(config.setupName)}`,
     `Storage location: ${safeTerminalText(destination)}`,
+    "Direction: Historical snapshot → Local and remote active head.",
     `Snapshot: ${safeTerminalText(requestedSnapshot)}`,
     `Sessions: ${remote.syncSessions ? "included — may contain private conversations" : "not included"}`,
-    `Protected live sessions: ${protectedSessionCount || "none"}`,
-    formatApplyPreview(local, remote),
+    `Protected live sessions: ${protectedPaths.size || "none"}`,
+    formatApplyPreview(local, remote, protectedPaths, additionalRemovals),
+    ...(additionalRemovals.length
+      ? ["Case-variant aliases listed above are removed before writing canonical paths."]
+      : []),
     "A local backup is created before applying; the backend's active head will change.",
   ].join("\n");
 }
 
 export function formatPublicationPreview(remote: Snapshot | undefined, upload: Snapshot) {
-  if (!remote) {
-    return ["Remote is empty.", ...upload.files.map((file) => `Add remotely: ${snapshotPathLabel(file.path)}`)].join(
-      "\n",
-    );
-  }
   return formatDirectionalChanges(remote, upload, {
     add: "Add remotely",
     update: "Update remotely",
@@ -118,21 +143,27 @@ export function formatPublicationPreview(remote: Snapshot | undefined, upload: S
 }
 
 function formatDirectionalChanges(
-  before: Snapshot,
+  before: Snapshot | undefined,
   after: Snapshot,
   labels: { add: string; update: string; remove: string },
+  protectedPaths: ReadonlySet<string> = new Set(),
+  additionalRemovals: readonly string[] = [],
 ) {
-  const beforeMap = fileHashMap(before);
-  const afterMap = fileHashMap(after);
-  const paths = [...new Set([...Object.keys(beforeMap), ...Object.keys(afterMap)])].sort();
-  const lines: string[] = [];
-  for (const filePath of paths) {
-    if (!Object.hasOwn(beforeMap, filePath)) lines.push(`${labels.add}: ${snapshotPathLabel(filePath)}`);
-    else if (!Object.hasOwn(afterMap, filePath)) lines.push(`${labels.remove}: ${snapshotPathLabel(filePath)}`);
-    else if (beforeMap[filePath] !== afterMap[filePath]) lines.push(`${labels.update}: ${snapshotPathLabel(filePath)}`);
+  const changes = transferChanges(before, after, protectedPaths);
+  const known = new Set(changes.map((change) => change.path));
+  for (const filePath of additionalRemovals) {
+    if (!known.has(filePath) && !protectedPaths.has(filePath)) {
+      changes.push({ path: filePath, action: "Delete" });
+      known.add(filePath);
+    }
   }
-  if (lines.length === 0) lines.push("No file changes.");
-  return lines.join("\n");
+  const counts = transferCounts(changes);
+  const label = { Add: labels.add, Update: labels.update, Delete: labels.remove };
+  return [
+    `Changes: ${counts.add} add · ${counts.update} update · ${counts.remove} remove`,
+    ...changes.map((change) => `${label[change.action]}: ${snapshotPathLabel(change.path)}`),
+    ...(changes.length ? [] : ["No file changes."]),
+  ].join("\n");
 }
 
 export function countPreservedRemoteFiles(local: Snapshot, upload: Snapshot) {

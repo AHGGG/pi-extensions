@@ -1,4 +1,5 @@
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
+import { AUTOMATIC_SYNC_DESCRIPTION, STARTUP_TRANSFER_DESCRIPTION } from "../ui/sync-behavior.js";
 import type { CommandArgumentCompletion, CommandOptions } from "./command-types.js";
 
 const YES_FLAG_COMPLETIONS: readonly CommandArgumentCompletion[] = [
@@ -232,7 +233,8 @@ export function usage() {
   return [
     "Usage: /sync <command>",
     `Commands: ${commands}`,
-    "Automatic sync: background startup checks only; use /sync to review and transfer. At shutdown, selected content is pushed automatically only when sessions are included. Startup checks run in TUI/RPC, not print/JSON.",
+    `Automatic sync: ${AUTOMATIC_SYNC_DESCRIPTION}`,
+    `Startup transfer: ${STARTUP_TRANSFER_DESCRIPTION}`,
     "Automatic transfer at startup is a separate opt-in: one conflict-free established-baseline transfer at idle in TUI/RPC, with conditional/lease publication and no resource reload.",
     "Settings: use /sync init or edit storage connections and sync setups in ~/.pi/agent/pi-sync.json (or the configured Pi agent directory). Version 1 and version 2 settings are unsupported and are never rewritten.",
   ].join("\n");

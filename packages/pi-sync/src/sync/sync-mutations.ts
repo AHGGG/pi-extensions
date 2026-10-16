@@ -23,7 +23,7 @@ import { applySnapshot } from "../snapshot/snapshot-apply.js";
 import type { Snapshot } from "../snapshot/snapshot-types.js";
 import { pruneMergeBaselines } from "../state/merge-baseline-store.js";
 import type { SyncState } from "../state/state-types.js";
-import { readStateForConfig, writeStateForConfig } from "../state/sync-state-store.js";
+import { readStateForConfig, syncStateFingerprint, writeStateForConfig } from "../state/sync-state-store.js";
 import {
   countPreservedRemoteFiles,
   formatPullSummary,
@@ -31,6 +31,8 @@ import {
   formatRollbackSummary,
 } from "../ui/sync-format.js";
 import { setSyncStatus } from "../ui/sync-status.js";
+import { confirmTransferReview } from "../ui/transfer-review.js";
+import { inspectCaseCleanup, revalidateCaseCleanup } from "./apply-review.js";
 import { confirmFieldMigration } from "./field-migration.js";
 import { overlayLocalFields, portableSnapshot, sameLocalFields, validatePortableSnapshot } from "./local-fields.js";
 import { readMergeJournal, requireNoMergeJournal, retireMergeJournal } from "./merge-journal.js";
@@ -155,7 +157,7 @@ export async function push(
     }
   }
 
-  if (!remoteForUpload && head && config.localFields !== undefined)
+  if (!remoteForUpload && head && (config.localFields !== undefined || !options.yes))
     remoteForUpload = await readSnapshotForHead(backend, head, options.signal);
   if (!(await confirmFieldMigration(ctx, config, state, remoteForUpload, options.force, options.signal))) {
     setSyncStatus(ctx, undefined);
@@ -208,12 +210,15 @@ export async function push(
   if (configIdentity !== syncCheckConfigFingerprint(await loadConfig(options.setup)))
     throw new Error("Settings changed during push review.");
   validateMutation();
-  if (config.localFields !== undefined || (await readMergeJournal(config))) {
+  if (!options.yes || config.localFields !== undefined || (await readMergeJournal(config))) {
     const current = await createSnapshot(config.snapshotIdentity, snapshotOptionsForContext(ctx, config));
     if (!sameHashes(fileHashMap(current), fileHashMap(localRaw)))
-      throw new Error("Local content changed during recovery review; retry from current bytes.");
+      throw new Error("Local content changed during push review; retry from current bytes.");
   }
-  requireResolvedDirectionalProgress(await readStateForConfig(config), options);
+  const currentState = await readStateForConfig(config);
+  if (!options.yes && syncStateFingerprint(currentState) !== syncStateFingerprint(state))
+    throw new Error("Baseline changed during push review.");
+  requireResolvedDirectionalProgress(currentState, options);
   validateMutation();
   const result = await backend.publishSnapshot(upload, expectedRemoteHead(head), {
     signal: options.signal,
@@ -316,11 +321,23 @@ export async function pull(
     });
   }
 
+  const caseCleanup = options.yes ? [] : await inspectCaseCleanup(physical, options.signal);
+  validateMutation();
   if (
     !options.yes &&
-    !(await ctx.ui.confirm(
+    !(await confirmTransferReview(
+      ctx,
       snapshotIncludesSessions(remote) ? "Pull pi settings and sessions?" : "Pull pi settings?",
-      formatPullSummary(config, backend.destination, local, physical, protectedSessionPaths(ctx).size),
+      formatPullSummary(
+        config,
+        backend.destination,
+        local,
+        physical,
+        protectedSessionPaths(ctx),
+        caseCleanup.map((item) => item.path),
+      ),
+      options.signal,
+      validateMutation,
     ))
   ) {
     setSyncStatus(ctx, undefined);
@@ -353,7 +370,11 @@ export async function pull(
   const backup = await backupLocal(config.snapshotIdentity, snapshotOptionsForContext(ctx, config), options.signal);
   const applySessionDir = await sessionDirForApply(ctx, physical);
   if (recoveringMerge) await requireFreshRecovery();
-  requireResolvedDirectionalProgress(await readStateForConfig(config), options);
+  const currentState = await readStateForConfig(config);
+  if (!options.yes && syncStateFingerprint(currentState) !== syncStateFingerprint(state))
+    throw new Error("Baseline changed during pull review.");
+  requireResolvedDirectionalProgress(currentState, options);
+  if (!options.yes) await revalidateCaseCleanup(caseCleanup, physical, options.signal);
   validateMutation();
   options.onCommit?.();
   const lastFileHashes = await applySnapshot(physical, protectedSessionPaths(ctx), {
@@ -573,11 +594,21 @@ export async function rollback(
   if (!(await confirmFieldMigration(ctx, config, state, currentRemote, true, options.signal))) return;
   validateMutation();
   const physical = overlayLocalFields(remote, local, config.localFields);
+  const caseCleanup = options.yes ? [] : await inspectCaseCleanup(physical, options.signal);
+  validateMutation();
 
   if (!options.yes) {
     const confirmed = await ctx.ui.confirm(
       snapshotIncludesSessions(remote) ? "Rollback pi settings and sessions?" : "Rollback pi settings?",
-      formatRollbackSummary(config, backend.destination, local, physical, target, protectedSessionPaths(ctx).size),
+      formatRollbackSummary(
+        config,
+        backend.destination,
+        local,
+        physical,
+        target,
+        protectedSessionPaths(ctx),
+        caseCleanup.map((item) => item.path),
+      ),
       { signal: options.signal },
     );
     validateMutation();
@@ -599,7 +630,11 @@ export async function rollback(
   throwIfAborted(options.signal);
   const backup = await backupLocal(config.snapshotIdentity, snapshotOptionsForContext(ctx, config), options.signal);
   const applySessionDir = await sessionDirForApply(ctx, remote);
-  requireResolvedDirectionalProgress(await readStateForConfig(config), options, false);
+  const currentState = await readStateForConfig(config);
+  if (!options.yes && syncStateFingerprint(currentState) !== syncStateFingerprint(state))
+    throw new Error("Baseline changed during rollback review.");
+  requireResolvedDirectionalProgress(currentState, options, false);
+  if (!options.yes) await revalidateCaseCleanup(caseCleanup, physical, options.signal);
   validateMutation();
   options.onCommit?.();
   const lastFileHashes = await applySnapshot(physical, protectedSessionPaths(ctx), {
@@ -724,9 +759,12 @@ async function confirmPush(
 ) {
   throwIfAborted(options.signal);
   if (options.yes) return true;
-  const confirmed = await ctx.ui.confirm(
+  const confirmed = await confirmTransferReview(
+    ctx,
     title,
     formatPushSummary(config, backend.destination, upload, head, countPreservedRemoteFiles(local, upload), remote),
+    options.signal,
+    captureMutationOwner(ctx, options.signal),
   );
   throwIfAborted(options.signal);
   if (confirmed) return true;

@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { gzipSync } from "node:zlib";
+import { createTuiHarness } from "@narumitw/pi-tui-kit/testing";
 import { test } from "vitest";
 import { createMockContext, createMockPi } from "../../../test/support.js";
 import { expectedRemoteHead } from "../src/backends/sync-backend.js";
@@ -129,9 +130,22 @@ test("reviewed force push keeps local selection and preserves remote unmanaged f
     const { ctx } = createMockContext({
       hasUI: true,
       mode: "tui",
-      confirm: async (_title: string, message: string) => {
-        reviews.push(message);
-        return true;
+      custom: async (factory: unknown) => {
+        const harness = createTuiHarness({ width: 120, rows: 40 });
+        try {
+          const running = harness.custom(factory as Parameters<typeof harness.custom>[0]);
+          await harness.waitForOpen();
+          for (let index = 0; index < 200; index++) {
+            const frame = harness.render().join("\n");
+            reviews.push(frame);
+            if (frame.includes("→ Yes,")) break;
+            harness.press("tui.select.down");
+          }
+          harness.press("tui.select.confirm");
+          return await running;
+        } finally {
+          harness.dispose();
+        }
       },
     });
 
@@ -448,9 +462,17 @@ for (const legacy of [false, true]) {
       let confirmations = 0;
       const { ctx } = createMockContext({
         mode: "tui",
-        confirm: async () => {
+        custom: async (factory: unknown) => {
           confirmations++;
-          return false;
+          const harness = createTuiHarness({ width: 100 });
+          try {
+            const running = harness.custom(factory as Parameters<typeof harness.custom>[0]);
+            await harness.waitForOpen();
+            harness.press("ctrl+c");
+            return await running;
+          } finally {
+            harness.dispose();
+          }
         },
       });
       assert.equal(await pull(ctx, { ...options, yes: false }, () => backend), "cancelled");
