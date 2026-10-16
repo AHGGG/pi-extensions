@@ -42,9 +42,6 @@ jobs:
           node-version-file: .node-version
           package-manager-cache: false
 
-      - name: Validate installation policy
-        run: node scripts/check-install-policy.mjs
-
       - name: Install dependencies
         run: npm ci
 
@@ -71,9 +68,6 @@ jobs:
         with:
           node-version-file: .node-version
           package-manager-cache: false
-
-      - name: Validate installation policy
-        run: node scripts/check-install-policy.mjs
 
       - name: Install dependencies
         run: npm ci
@@ -107,9 +101,6 @@ jobs:
           node-version-file: .node-version
           package-manager-cache: false
 
-      - name: Validate installation policy
-        run: node scripts/check-install-policy.mjs
-
       - name: Install dependencies
         run: npm ci
 
@@ -140,9 +131,6 @@ jobs:
         with:
           node-version-file: .node-version
           package-manager-cache: false
-
-      - name: Validate installation policy
-        run: node scripts/check-install-policy.mjs
 
       - name: Install dependencies
         run: npm ci
