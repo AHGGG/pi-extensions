@@ -76,6 +76,7 @@ export async function showSyncSettings(
     | "content-policy"
     | "skip-secret-scan"
     | "show-status"
+    | "debug"
     | "on-switch"
     | "include"
     | "remote-include"
@@ -88,7 +89,7 @@ export async function showSyncSettings(
     content: { label: "Sync content", ids: ["include", "remoteInclude", "localFields"] },
     behavior: { label: "Sync behavior", ids: ["automatic", "automaticTransfer", "onSwitch"] },
     storage: { label: "Storage & setups", ids: ["storageLocation", "setups", "connections"] },
-    advanced: { label: "Advanced", ids: ["mergeSettings", "contentPolicy", "skipSecretScan", "showStatus"] },
+    advanced: { label: "Advanced", ids: ["mergeSettings", "contentPolicy", "skipSecretScan", "showStatus", "debug"] },
     all: { label: "All settings (search)", ids: [] },
   };
   let saveStatus = "Simple choices save immediately. Back does not undo saved changes.";
@@ -223,6 +224,15 @@ export async function showSyncSettings(
             currentValue: state.showStatus ? "On" : "Off",
             values: ["On", "Off"],
             action: "show-status",
+          },
+          {
+            id: "debug",
+            label: "Debug startup timings",
+            description:
+              "All setups on this device: show startup durations in TUI/RPC notifications. Applies next session start; no credentials or file contents.",
+            currentValue: state.debug ? "On" : "Off",
+            values: ["On", "Off"],
+            action: "debug",
           },
         ] satisfies MenuSettingItem<Action>[]
       ).filter((item) => group === "all" || groups[group].ids.includes(item.id)),
@@ -454,6 +464,18 @@ export async function showSyncSettings(
           return { kind: "rejected" };
         }
       },
+      debug: async ({ value, signal: actionSignal }) => {
+        const debug = value === "On";
+        const mutationSignal = signal ? AbortSignal.any([signal, actionSignal]) : actionSignal;
+        try {
+          await updateLocalConfig((settings) => ({ ...settings, debug }), mutationSignal);
+          if (mutationSignal.aborted) return { kind: "rejected" };
+          return { kind: "stay" };
+        } catch (error) {
+          if (!mutationSignal.aborted) notifySaveFailure(ctx, error);
+          return { kind: "rejected" };
+        }
+      },
       "on-switch": async ({ value, signal: actionSignal }) => {
         const action = value ? setupSwitchActionFromLabel(value) : undefined;
         if (!action) return { kind: "rejected" };
@@ -499,6 +521,7 @@ export async function showSyncSettings(
     "merge-settings",
     "skip-secret-scan",
     "show-status",
+    "debug",
     "on-switch",
   ] as const) {
     const save = menu.actions[id];
@@ -512,7 +535,7 @@ export async function showSyncSettings(
       saveStatus =
         result?.kind === "rejected"
           ? "Save failed or rejected. Previous value retained; retry is available."
-          : id === "automatic-transfer" || id === "automatic"
+          : id === "automatic-transfer" || id === "automatic" || id === "debug"
             ? "Saved. Enabling startup work applies next session start; completed transfers are not undone."
             : "Saved. Applies to subsequent operations; status visibility applies immediately.";
       ctx.ui.notify(saveStatus, result?.kind === "rejected" ? "warning" : "info");

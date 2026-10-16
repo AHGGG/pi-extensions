@@ -159,6 +159,26 @@ Set it through **/sync → Settings → Advanced → Show sync status**; changes
 When `false`, pi-sync clears and suppresses status text for background checks, manual and automatic transfers, and review attention.
 TUI review widgets and TUI/RPC notifications remain available, and lifecycle cleanup still clears any stale status owned by pi-sync.
 
+### Debug startup timings
+
+The top-level user setting `debug` accepts only `true` or `false` and defaults to `false`.
+Edit `<getAgentDir()>/pi-sync.json` (normally `~/.pi/agent/pi-sync.json`) or use **/sync → Settings → Advanced → Debug startup timings**.
+UI changes save immediately through the existing ordered, atomic settings writer; both manual and UI changes take effect on the next session start, including `/reload`, new, resume, and fork.
+There is no project or environment override.
+
+With `debug: true`, TUI/RPC notifications report local initialization after recovery and settings resolution, then background work when it ends.
+Stages include transaction recovery, settings reads, inspection import, backend initialization, local snapshot, sync state read, remote head, operations import, and automatic transfer when those stages run.
+The inspection-and-guards duration includes its nested stages and lock access; durations overlap and must not be summed.
+Totals use a monotonic clock and include waits within each flow, not Pi's complete startup, the initial extension import/factory, or time queued for idle startup transfer.
+Recovery failures before valid settings can be read cannot enable a timing report.
+
+Interrupted stages are marked `interrupted`; cancelled or failed background work is marked `stopped`.
+Session replacement and shutdown suppress late reports from the old session.
+Labels and durations contain no credentials, paths, file contents, remote addresses, or error text.
+No log file or model message is created. Print/JSON produce no timing notifications.
+The setting does not enable automatic sync or transfer, change safety checks, or measure manual/shutdown operations.
+Set `debug` to `false` or remove it, then start a new session to disable reports.
+
 ### Secret scanning
 
 The global `skipSecretScan` setting accepts a boolean and defaults to `false`, including when omitted from an existing version 3 document.

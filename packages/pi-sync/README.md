@@ -162,6 +162,12 @@ Run `/sync` → **Set up sync** to create the canonical private user file at `<g
 Use **Settings** to manage an existing setup.
 Missing settings stay unconfigured without creating files or locks.
 
+### Debug startup timings
+
+Set the top-level `"debug": true` in `pi-sync.json`, or enable **Settings → Advanced → Debug startup timings**, then restart Pi or use `/reload`.
+The default is `false`. Timing reports appear in TUI/RPC notifications, not the model context or a log file.
+See [Debug startup timings](./docs/settings.md#debug-startup-timings) for measured stages and limits.
+
 ### Background startup checks
 
 With **Automatic sync** enabled, session startup schedules a background check instead of waiting for a transfer. Pi remains usable while Git, WebDAV, R2, or S3 checks local hashes and remote metadata. Results follow the [status and review classifications](#resolve-conflicts-in-the-manager); check failures provide `/sync` guidance without opening a dialog. Use **Sync now** to start a reviewed transfer, or `/sync status` to retry a check. Foreground `/sync` cancels and drains the background check before starting.

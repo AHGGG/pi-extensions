@@ -52,15 +52,18 @@ function configFromSettings(settings: PiSyncSettingsV3, setupName?: string): Any
       `Invalid pi-sync settings: sync setup “${selectedName}” references missing storage connection “${connectionName}”.`,
     );
   }
-  return resolveSyncConfig(
-    selectedName,
-    setup,
-    connectionName,
-    connection,
-    settings.onSwitch,
-    settings.skipSecretScan ?? false,
-    settings.showStatus ?? true,
-  );
+  return {
+    ...resolveSyncConfig(
+      selectedName,
+      setup,
+      connectionName,
+      connection,
+      settings.onSwitch,
+      settings.skipSecretScan ?? false,
+      settings.showStatus ?? true,
+    ),
+    debug: settings.debug ?? false,
+  };
 }
 
 export type SyncSetupStorageReview = Pick<
@@ -126,7 +129,7 @@ export function syncConfigReviewFingerprint(config: AnySyncConfig) {
 /** Internal freshness token, including credentials; never display or persist it. */
 export function syncCheckConfigFingerprint(config: AnySyncConfig) {
   return createHash("sha256")
-    .update(JSON.stringify({ ...config, showStatus: undefined }))
+    .update(JSON.stringify({ ...config, showStatus: undefined, debug: undefined }))
     .digest("hex");
 }
 

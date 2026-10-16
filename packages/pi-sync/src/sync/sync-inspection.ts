@@ -4,6 +4,7 @@ import { createSnapshot } from "../snapshot/snapshot.js";
 import type { SnapshotOptions } from "../snapshot/snapshot-types.js";
 import { readStateForConfig, syncStateFingerprint } from "../state/sync-state-store.js";
 import { throwIfAborted } from "./signals.js";
+import { createStartupTimings, type StartupTimings } from "./startup-timings.js";
 import { inspectRemoteSelection } from "./sync-policy.js";
 import { hasLocalChanges, remoteChangedSinceState } from "./sync-state.js";
 
@@ -13,15 +14,18 @@ export async function inspectSync(
   options: SnapshotOptions,
   signal?: AbortSignal,
   factory: SyncBackendFactory = createSyncBackend,
+  timings: StartupTimings = createStartupTimings(),
 ) {
   throwIfAborted(signal);
-  const backend = await factory(config);
+  const backend = await timings.measure("backend initialization", () => factory(config));
   throwIfAborted(signal);
-  const local = await createSnapshot(config.snapshotIdentity, { ...options, signal });
+  const local = await timings.measure("local snapshot", () =>
+    createSnapshot(config.snapshotIdentity, { ...options, signal }),
+  );
   throwIfAborted(signal);
-  const state = await readStateForConfig(config);
+  const state = await timings.measure("sync state read", () => readStateForConfig(config));
   throwIfAborted(signal);
-  const head = await backend.readHead(signal);
+  const head = await timings.measure("remote head", () => backend.readHead(signal));
   throwIfAborted(signal);
   return {
     head,

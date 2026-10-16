@@ -10,6 +10,7 @@ import type { SyncAttentionController } from "../ui/sync-attention.js";
 import { setSyncStatus } from "../ui/sync-status.js";
 import { safeTerminalText } from "../ui/terminal-text.js";
 import { combineSignals, throwIfAborted } from "./signals.js";
+import { createStartupTimings } from "./startup-timings.js";
 import { errorMessage } from "./sync-errors.js";
 import type { SyncLoaders } from "./sync-loaders.js";
 
@@ -46,6 +47,7 @@ export function createStartupCheck(loaders: SyncLoaders, attention: SyncAttentio
         return;
       }
       if (active) throw new Error("Previous startup check has not been drained.");
+      const timings = createStartupTimings();
       const controller = new AbortController();
       const signal = combineSignals(sessionSignal, controller.signal);
       const task = {
@@ -62,6 +64,7 @@ export function createStartupCheck(loaders: SyncLoaders, attention: SyncAttentio
       );
       let config: AnySyncConfig | undefined;
       let checking = false;
+      let stopped = false;
       // Handle every detached rejection here; Pi's awaited event runner cannot catch it.
       task.promise = Promise.resolve()
         .then(async () => {
@@ -75,20 +78,22 @@ export function createStartupCheck(loaders: SyncLoaders, attention: SyncAttentio
             const identity = syncCheckConfigFingerprint(captured);
             checking = true;
             setSyncStatus(ctx, "sync ...");
-            const { inspectSync } = await loaders.inspection();
+            const { inspectSync } = await timings.measure("inspection import", () => loaders.inspection());
             throwIfAborted(signal);
             const currentConfig = await loadConfigForCheck();
             throwIfAborted(signal);
             if (syncCheckConfigFingerprint(currentConfig) !== identity) return;
             // Lock order: state migration guard → sync operation → backend cache.
             // Read heads may write only private cache data. Never call doctor/syncBoth.
-            const inspection = await withStateDirectoryAccess(() => {
-              throwIfAborted(signal);
-              return withLock("startup-check", () => {
+            const inspection = await timings.measure("inspection and guards", () =>
+              withStateDirectoryAccess(() => {
                 throwIfAborted(signal);
-                return inspectSync(captured, snapshotOptionsForContext(ctx, captured), signal);
-              });
-            });
+                return withLock("startup-check", () => {
+                  throwIfAborted(signal);
+                  return inspectSync(captured, snapshotOptionsForContext(ctx, captured), signal, undefined, timings);
+                });
+              }),
+            );
             throwIfAborted(signal);
             const latest = await loadConfigForCheck();
             throwIfAborted(signal);
@@ -109,26 +114,28 @@ export function createStartupCheck(loaders: SyncLoaders, attention: SyncAttentio
               inspection.head &&
               inspection.selectionState?.kind === "same"
             ) {
-              const operations = await loaders.operations();
+              const operations = await timings.measure("operations import", () => loaders.operations());
               throwIfAborted(signal);
               if (!isCurrent()) return;
               if (!ctx.isIdle()) {
                 pending = { ctx, signal: sessionSignal, config: captured };
                 return;
               }
-              await withStateDirectoryAccess(() =>
-                withLock("startup-transfer", () =>
-                  operations.syncBoth(ctx, {
-                    args: [],
-                    yes: true,
-                    force: false,
-                    stale: false,
-                    silent: true,
-                    reload: false,
-                    auto: true,
-                    signal,
-                    onCommit: () => attention.clearObservation(),
-                  }),
+              await timings.measure("automatic transfer", () =>
+                withStateDirectoryAccess(() =>
+                  withLock("startup-transfer", () =>
+                    operations.syncBoth(ctx, {
+                      args: [],
+                      yes: true,
+                      force: false,
+                      stale: false,
+                      silent: true,
+                      reload: false,
+                      auto: true,
+                      signal,
+                      onCommit: () => attention.clearObservation(),
+                    }),
+                  ),
                 ),
               );
               throwIfAborted(signal);
@@ -145,6 +152,7 @@ export function createStartupCheck(loaders: SyncLoaders, attention: SyncAttentio
             });
             if (ctx.mode === "rpc") attention.notifyObservation(ctx);
           } catch (error) {
+            stopped = true;
             if (!isCurrent() || sessionSignal.aborted || isMissingConfigError(error)) return;
             if (signal.aborted && controller.signal.reason?.name !== "TimeoutError") return;
             // A settings edit invalidates failures as well as successful observations.
@@ -176,6 +184,15 @@ export function createStartupCheck(loaders: SyncLoaders, attention: SyncAttentio
                   else attention.reset(ctx);
                 }
               } else setSyncStatus(ctx, undefined);
+            }
+            if (isCurrent()) {
+              timings.publish(
+                ctx,
+                config?.debug ?? false,
+                sessionSignal,
+                "background startup",
+                signal.aborted || stopped ? "stopped" : "completed",
+              );
             }
             if (active === task) active = undefined;
           }

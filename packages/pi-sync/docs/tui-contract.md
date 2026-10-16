@@ -21,6 +21,7 @@ All settings are private to this device. There are no project overrides. Default
 | Content merge / partial progress | `sync.mergeContent`, `sync.partialSync`, false/false | Current setup | Explicit compatibility review and atomic save; Off, Merge only, Merge + partial, Partial only preserve all combinations |
 | Skip secret scan | `skipSecretScan`, false | All setups | Immediate save; subsequent manual/automatic pushes; Diagnostics still scans |
 | Show sync status | `showStatus`, true | All setups | Immediate save and immediate status visibility change; notifications/widgets remain |
+| Debug startup timings | `debug`, false | All setups | Immediate save; fixed-label duration notifications from the next session start; TUI/RPC only |
 
 Opening foreground Settings cancels and drains startup work. Back does not undo successful saves; cancelling a draft or compatibility review leaves that change unsaved. A failed save retains the previous document and effective/displayed value. Completed transfers are never undone by changing a preference.
 
