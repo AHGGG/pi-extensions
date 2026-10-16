@@ -38,7 +38,7 @@ Restart Pi or run `/reload` after persistent installation. The extension uses Pi
 
 Create a bot with Telegram's [BotFather](https://t.me/BotFather), then start a private conversation with it. Obtain that conversation's numeric chat ID through the [Bot API](https://core.telegram.org/bots/api#getupdates) after sending a message; keep the bot token private. For a group, add the bot and permit it to send messages. Stop any other update consumer before manually using `getUpdates`; an active webhook also prevents that method from working.
 
-Run `/notify`, add a Telegram destination, and confirm its settings. Use Send test to preview the disclosed metadata and explicitly send a test. In Settings, select the destination and enable notifications. The next eligible settled work period sends a reminder. Setup alone does not enable automatic notifications.
+Run `/notify`, add a Telegram destination with its bot token and chat ID, and confirm its settings. The name is generated automatically; the review screen lets you change it or set an optional forum topic ID. Use Send test to preview the disclosed metadata and explicitly send a test. Choose Save and use to save the chat and select it for User notifications, or Save only to store it without selecting it. Automatic notifications are on by default, so the next eligible settled work period sends a reminder. Settings lets you pause automatic notifications or change the selected destinations. Existing Off settings and explicit Project selections are preserved.
 
 ## 💬 Commands
 
@@ -50,7 +50,7 @@ RPC receives manual configuration instructions instead of a custom terminal scre
 
 User settings are stored at `<getAgentDir()>/pi-notify.json`, normally `~/.pi/agent/pi-notify.json`. Trusted project overrides use `<workspace>/.pi/pi-notify.json`. Choose User or Project scope in `/notify` Settings. Destinations and credentials are always User-scoped.
 
-Notifications default to disabled, with immediate mode and a stored inactivity duration of 30 seconds. Loading defaults does not create a file. Successful menu saves apply immediately; manual edits take effect on session start or `/reload`.
+Notifications default to enabled, with immediate mode and a stored inactivity duration of 30 seconds. Loading defaults does not create a file. Successful menu saves apply immediately; manual edits take effect on session start or `/reload`.
 
 ```json
 {

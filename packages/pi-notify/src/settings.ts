@@ -23,7 +23,7 @@ export const MAX_INACTIVITY_SECONDS = 86_400;
 export const MAX_DESTINATIONS = 32;
 export const policyKeys = ["enabled", "mode", "inactivitySeconds", "targetIds"] as const;
 export const defaults = (): Settings => ({
-  enabled: false,
+  enabled: true,
   mode: "immediate",
   inactivitySeconds: 30,
   targetIds: [],
@@ -219,6 +219,7 @@ export function saveDestination(
   id: string,
   destination: Destination | undefined,
   signal: AbortSignal,
+  selectNew = true,
 ) {
   if (!validId(id)) throw new Error("Invalid destination ID.");
   const normalized = destination ? store.validate(destination) : undefined;
@@ -230,6 +231,16 @@ export function saveDestination(
         throw new Error("Invalid destinations setting. Repair the file before changing destinations.");
       const destinations = isObject(document.destinations) ? { ...document.destinations } : {};
       if (normalized) {
+        if (selectNew && !Object.hasOwn(destinations, id)) {
+          const diagnostics: string[] = [];
+          const selection = policy(
+            Object.hasOwn(document, "targetIds") ? { targetIds: document.targetIds } : {},
+            diagnostics,
+          );
+          if (diagnostics.length)
+            throw new Error("Invalid selected destinations. Repair targetIds before adding a destination.");
+          document.targetIds = [...new Set([...(selection.targetIds ?? []), id])];
+        }
         if (Object.hasOwn(destinations, id) && !isObject(destinations[id]))
           throw new Error("Invalid stored destination. Repair the file before replacing this entry.");
         // Validators return owned optional keys as undefined so JSON publication removes them.

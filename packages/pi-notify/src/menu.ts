@@ -48,6 +48,7 @@ type Action =
   | "chat"
   | "topic"
   | "save"
+  | "saveOnly"
   | "remove"
   | "prepareTest"
   | "sendTest";
@@ -65,6 +66,7 @@ export interface MenuOptions {
 export const helpLines = [
   "Create a bot with @BotFather in Telegram, then start a private conversation or add it to your group with permission to send messages.",
   "Obtain the numeric chat ID from Telegram Bot API getUpdates after sending a message. Do not share or paste the token into Pi chat. Stop other update consumers before using getUpdates; this extension does not poll.",
+  "Setup needs only a bot token and chat ID. Labels are generated automatically. Edit the label or optional forum topic ID from the destination review.",
   "Use a negative group/supergroup chat ID when applicable. Forum topic IDs are optional positive integers.",
   "Destinations are User settings only. Project settings require trust and may select existing destinations but cannot change credentials or addresses.",
   "Notifications disclose hostname, session name/ID, workspace and Git metadata, elapsed time and timestamp. No conversation or code is sent.",
@@ -108,6 +110,13 @@ export async function showNotifyMenu(ctx: ExtensionCommandContext, options: Menu
   const assertDraft = () => {
     if (!draft) throw new Error("Destination draft is unavailable.");
     return draft;
+  };
+  const saveDraft = async (actionSignal: AbortSignal, selectNew: boolean) => {
+    const destination = providers.get("telegram")?.validate(assertDraft());
+    if (!destination) throw new Error("Invalid Telegram destination. Check the bot token and chat ID.");
+    await apply(saveDestination(store, selectedId, destination, actionSignal, selectNew));
+    draft = undefined;
+    return { kind: "to", screen: "main" } as const;
   };
   const draftLines = () =>
     draft
@@ -185,11 +194,11 @@ export async function showNotifyMenu(ctx: ExtensionCommandContext, options: Menu
             },
             {
               id: "enabled",
-              label: "Notifications",
-              currentValue: inherited("enabled") ? "Inherit" : String(own.enabled ?? false),
-              values: scope === "project" ? ["Inherit", "true", "false"] : ["false", "true"],
+              label: "Automatic notifications",
+              currentValue: inherited("enabled") ? "Inherit" : (own.enabled ?? true) ? "On" : "Off",
+              values: scope === "project" ? ["Inherit", "On", "Off"] : ["Off", "On"],
               action: "policy",
-              description: `Effective: ${state.snapshot.effective.enabled}. Source: ${Object.hasOwn(state.snapshot.project, "enabled") ? "Project" : Object.hasOwn(state.snapshot.user, "enabled") ? "User" : "default"}.`,
+              description: `Send to selected destinations when Pi stops automatic work. Off still allows manual tests. Effective: ${state.snapshot.effective.enabled ? "On" : "Off"}. Source: ${Object.hasOwn(state.snapshot.project, "enabled") ? "Project" : Object.hasOwn(state.snapshot.user, "enabled") ? "User" : "default"}.`,
             },
             {
               id: "mode",
@@ -211,17 +220,17 @@ export async function showNotifyMenu(ctx: ExtensionCommandContext, options: Menu
             },
             {
               id: "targetIds",
-              label: "Selected destinations",
+              label: "Send notifications to",
               currentValue: `${state.editing.targetIds.length}${inherited("targetIds") ? " (inherited)" : ""}`,
               action: "target",
-              description: "Select existing User destinations for this scope.",
+              description: "Choose which saved Telegram chats receive notifications.",
             },
           ],
         };
       },
       targets: ({ state }) => ({
         kind: "multiSelect",
-        title: `Selected destinations · ${scope}`,
+        title: `Send notifications to · ${scope}`,
         items: Object.entries(state.snapshot.effective.destinations).map(([id, value]) => ({
           id,
           label: safeText(value.label),
@@ -277,10 +286,30 @@ export async function showNotifyMenu(ctx: ExtensionCommandContext, options: Menu
       review: () => ({
         kind: "actions",
         title: "Review Telegram destination · User",
-        lines: draftLines(),
+        lines: [
+          ...draftLines(),
+          ...(store.snapshot.effective.destinations[selectedId]
+            ? ["Save keeps your current notification selection."]
+            : [
+                "Use this chat for notifications?",
+                "Save and use: save this chat and select it for User notifications.",
+                "Save only: save this chat without selecting it.",
+              ]),
+          "Automatic notifications default to On. Saved Off settings and Project choices are unchanged.",
+        ],
         items: [
-          { id: "save", label: "Save destination", action: "save" },
+          {
+            id: "save",
+            label: store.snapshot.effective.destinations[selectedId] ? "Save changes" : "Save and use",
+            action: "save",
+          },
           { id: "token", label: "Replace bot token…", action: "token" },
+          { id: "chat", label: "Change chat ID…", to: "chat" },
+          { id: "label", label: "Change label…", to: "label" },
+          { id: "topic", label: "Set forum topic ID…", to: "topic" },
+          ...(!store.snapshot.effective.destinations[selectedId]
+            ? [{ id: "saveOnly", label: "Save only", action: "saveOnly" as const }]
+            : []),
         ],
       }),
       remove: () => ({
@@ -343,7 +372,7 @@ export async function showNotifyMenu(ctx: ExtensionCommandContext, options: Menu
             store,
             scope,
             itemId,
-            value === "Inherit" ? undefined : itemId === "enabled" ? value === "true" : value,
+            value === "Inherit" ? undefined : itemId === "enabled" ? value === "On" : value,
             actionSignal,
           ),
         );
@@ -402,11 +431,11 @@ export async function showNotifyMenu(ctx: ExtensionCommandContext, options: Menu
         if (result.kind !== "submitted") return { kind: "stay" };
         selectedId = randomUUID();
         draft = { provider: "telegram", label: "", botToken: result.value.trim(), chatId: "" };
-        return { kind: "to", screen: "label" };
+        return { kind: "to", screen: "chat" };
       },
       edit: () => {
         draft = { ...knownDestination() };
-        return { kind: "to", screen: "label" };
+        return { kind: "to", screen: "review" };
       },
       token: async ({ signal: actionSignal }) => {
         const result = await runSecretInput(menuCtx, {
@@ -423,12 +452,14 @@ export async function showNotifyMenu(ctx: ExtensionCommandContext, options: Menu
       label: ({ value }) => {
         if (!value?.trim() || value.length > 128) throw new Error("Use a label from 1 to 128 characters.");
         assertDraft().label = value.trim();
-        return { kind: "to", screen: "chat" };
+        return { kind: "to", screen: "review" };
       },
       chat: ({ value }) => {
         if (!value || !/^-?[1-9]\d{0,30}$/.test(value.trim())) throw new Error("Use a numeric Telegram chat ID.");
-        assertDraft().chatId = value.trim();
-        return { kind: "to", screen: "topic" };
+        const destination = assertDraft();
+        destination.chatId = value.trim();
+        if (!destination.label) destination.label = `Telegram ${destination.chatId}`;
+        return { kind: "to", screen: "review" };
       },
       topic: ({ value }) => {
         const topic = value?.trim();
@@ -438,13 +469,8 @@ export async function showNotifyMenu(ctx: ExtensionCommandContext, options: Menu
         else delete assertDraft().messageThreadId;
         return { kind: "to", screen: "review" };
       },
-      save: async ({ signal: actionSignal }) => {
-        const destination = providers.get("telegram")?.validate(assertDraft());
-        if (!destination) throw new Error("Invalid Telegram destination. Check the bot token and chat ID.");
-        await apply(saveDestination(store, selectedId, destination, actionSignal));
-        draft = undefined;
-        return { kind: "to", screen: "main" };
-      },
+      save: ({ signal: actionSignal }) => saveDraft(actionSignal, true),
+      saveOnly: ({ signal: actionSignal }) => saveDraft(actionSignal, false),
       remove: async ({ signal: actionSignal }) => {
         await apply(saveDestination(store, selectedId, undefined, actionSignal));
         return { kind: "to", screen: "main" };

@@ -27,13 +27,43 @@ afterEach(async () => {
   await fs.rm(directory, { recursive: true, force: true });
 });
 it("loads defaults without creating directories and creates private files only on save", async () => {
-  expect((await store.load()).effective.enabled).toBe(false);
+  expect((await store.load()).effective.enabled).toBe(true);
   expect(await fs.readdir(directory)).toEqual([]);
   await saveDestination(store, "personal", destination, signal());
   if (process.platform !== "win32") expect((await fs.stat(store.userPath)).mode & 0o777).toBe(0o600);
   const names = await fs.readdir(join(directory, "agent"));
   expect(names).toEqual(["pi-notify.json"]);
 });
+it("selects new destinations atomically while preserving existing selections and explicit Off", async () => {
+  await savePolicy(store, "user", "enabled", false, signal());
+  await saveDestination(store, "personal", destination, signal());
+  await saveDestination(store, "work", destination, signal());
+  expect(store.snapshot.effective.targetIds).toEqual(["personal", "work"]);
+  expect(store.snapshot.effective.enabled).toBe(false);
+  await savePolicy(store, "user", "targetIds", ["work"], signal());
+  await saveDestination(store, "personal", { ...destination, label: "Renamed" }, signal());
+  expect(store.snapshot.effective.targetIds).toEqual(["work"]);
+  await savePolicy(store, "project", "targetIds", [], signal());
+  await saveDestination(store, "other", destination, signal());
+  expect(store.snapshot.user.targetIds).toEqual(["work", "other"]);
+  expect(store.snapshot.effective.targetIds).toEqual([]);
+  const before = await fs.readFile(store.userPath, "utf8");
+  const snapshot = store.snapshot;
+  vi.spyOn(fs, "rename").mockRejectedValueOnce(new Error("failure"));
+  await expect(saveDestination(store, "failed", destination, signal())).rejects.toThrow("not saved");
+  expect(store.snapshot).toBe(snapshot);
+  expect(await fs.readFile(store.userPath, "utf8")).toBe(before);
+});
+it.each([null, "invalid", ["personal", "personal"]])(
+  "protects invalid selections when adding: %j",
+  async (targetIds) => {
+    await fs.mkdir(join(directory, "agent"));
+    const before = JSON.stringify({ targetIds });
+    await fs.writeFile(store.userPath, before);
+    await expect(saveDestination(store, "personal", destination, signal())).rejects.toThrow("Repair");
+    expect(await fs.readFile(store.userPath, "utf8")).toBe(before);
+  },
+);
 it("merges trusted project policy only and supports inheritance reset", async () => {
   await saveDestination(store, "personal", destination, signal());
   await savePolicy(store, "user", "targetIds", ["personal"], signal());
