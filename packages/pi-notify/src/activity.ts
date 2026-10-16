@@ -1,6 +1,6 @@
 import { isKeyRelease, parseKey } from "@earendil-works/pi-tui";
 
-/** ProcessTerminal splits sequences; paste stays wrapped. Unknown replies are not activity. */
+/** Classify forwarded input, not all terminal activity. Pi can consume events before this hook. */
 export function isUserActivity(data: string): boolean {
   if (!data || isKeyRelease(data)) return false;
   if (data.startsWith("\x1b[200~") && data.endsWith("\x1b[201~")) return true;

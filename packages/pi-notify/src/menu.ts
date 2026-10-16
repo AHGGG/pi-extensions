@@ -68,7 +68,7 @@ export const helpLines = [
   "Use a negative group/supergroup chat ID when applicable. Forum topic IDs are optional positive integers.",
   "Destinations are User settings only. Project settings require trust and may select existing destinations but cannot change credentials or addresses.",
   "Notifications disclose hostname, session name/ID, workspace and Git metadata, elapsed time and timestamp. No conversation or code is sent.",
-  "Inactivity is not attention detection: reading without typing can still trigger a notification. Available focus-gain events count as activity, but focus support is not required.",
+  "Inactivity uses only input Pi forwards to this extension. Fullscreen focus, mouse, and viewport/search keys can be consumed first and do not reliably cancel reminders. Reading without typing can still trigger a notification.",
   "Input or new work cancels a pending reminder. Saved policy/destination changes cancel pending reminders. Settings save immediately; closing does not undo them.",
   "RPC/print/JSON cannot observe terminal activity and deliver at settlement instead. Short-lived processes can exit before delivery completes.",
   "Delivery is best effort, one attempt, with no automatic retries or history replay. Accepted means Telegram accepted the message, not that it was read.",
@@ -202,11 +202,12 @@ export async function showNotifyMenu(ctx: ExtensionCommandContext, options: Menu
             },
             {
               id: "inactivitySeconds",
-              label: "Inactivity time",
+              label: "Input inactivity time",
               currentValue: `${state.editing.inactivitySeconds}s${inherited("inactivitySeconds") ? " (inherited)" : ""}`,
               disabled: state.editing.mode !== "after-inactivity",
               action: "delay",
-              description: "Available only in after-inactivity mode. Measures activity, not reading.",
+              description:
+                "Only forwarded input resets this timer. Fullscreen focus, mouse, and viewport/search keys may not reach it.",
             },
             {
               id: "targetIds",
@@ -236,7 +237,7 @@ export async function showNotifyMenu(ctx: ExtensionCommandContext, options: Menu
       }),
       delay: () => ({
         kind: "choice",
-        title: `Inactivity time · ${scope}`,
+        title: `Input inactivity time · ${scope}`,
         items: [
           ...(scope === "project" ? [{ id: "inherit", label: "Inherit User setting" }] : []),
           { id: "30", label: "30 seconds" },

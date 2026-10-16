@@ -54,6 +54,39 @@ it.each(["{bad", "[]", "null", '"text"'])("warns and protects malformed files: %
   await expect(savePolicy(store, "user", "enabled", true, signal())).rejects.toThrow("Repair");
   expect(await fs.readFile(store.userPath, "utf8")).toBe(bytes);
 });
+it.each([[], ["legacy-secret"], "legacy-secret", null, 42, false].map((value) => [value]))(
+  "protects invalid destination collections during every destination mutation: %j",
+  async (destinations) => {
+    await fs.mkdir(join(directory, "agent"));
+    const bytes = `${JSON.stringify({ destinations, unrelated: { keep: true } }, null, 2)}\n`;
+    await fs.writeFile(store.userPath, bytes);
+    await store.load();
+    const snapshot = store.snapshot;
+    for (const value of [destination, undefined]) {
+      await expect(saveDestination(store, "personal", value, signal())).rejects.toThrow("Repair");
+      expect(await fs.readFile(store.userPath, "utf8")).toBe(bytes);
+      expect(store.snapshot).toBe(snapshot);
+      expect(await fs.readdir(join(directory, "agent"))).toEqual(["pi-notify.json"]);
+    }
+    await fs.writeFile(store.userPath, '{"destinations":{},"unrelated":{"keep":true}}');
+    await saveDestination(store, "personal", destination, signal());
+    expect(store.snapshot.effective.destinations.personal).toMatchObject(destination);
+    expect(store.snapshot.user.unrelated).toEqual({ keep: true });
+  },
+);
+it.each([[], "legacy-secret", null, 42, false].map((value) => [value]))(
+  "does not replace an invalid destination entry with a new object: %j",
+  async (entry) => {
+    await fs.mkdir(join(directory, "agent"));
+    const bytes = JSON.stringify({ destinations: { personal: entry, other: destination } });
+    await fs.writeFile(store.userPath, bytes);
+    await store.load();
+    const snapshot = store.snapshot;
+    await expect(saveDestination(store, "personal", destination, signal())).rejects.toThrow("Repair");
+    expect(await fs.readFile(store.userPath, "utf8")).toBe(bytes);
+    expect(store.snapshot).toBe(snapshot);
+  },
+);
 it("preserves unrelated fields and nested destination fields", async () => {
   await fs.mkdir(join(directory, "agent"));
   await fs.writeFile(

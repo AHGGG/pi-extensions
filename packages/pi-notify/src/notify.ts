@@ -53,6 +53,8 @@ export default function notify(pi: ExtensionAPI): void {
     if (controller.signal.aborted || owners.get(manager) !== owner) return;
     owner.coordinator.apply(snapshot.effective);
     if (ctx.mode === "tui") {
+      // Public listeners run after Pi viewport input handling. Focus, mouse, and
+      // viewport/search keys can be consumed first; this observes forwarded input only.
       owner.unsubscribe = ui.onTerminalInput((data) => {
         owner.coordinator.input(data);
       });

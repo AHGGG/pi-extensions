@@ -81,7 +81,7 @@ No prompts, assistant answers, code, tool output, Git remotes, or raw provider e
 
 Only Telegram is implemented. The provider boundary separates transport from notification policy, but it does not load third-party plugins.
 
-Inactivity means no observed terminal activity, not proof that you are away. Reading without typing can still produce a reminder. Focus events depend on the terminal and multiplexer; this extension does not enable focus reporting or detect screen locks. RPC, print, and JSON cannot observe terminal activity, so inactivity mode delivers at settlement instead.
+Inactivity means no input reached this extension, not proof that you are away. Pi handles fullscreen focus, mouse, scrolling, and search before extension input listeners. Those actions do not reliably cancel a reminder. Reading without typing can still produce one. Type a key that reaches the editor to cancel a pending reminder. Focus or mouse events count only if Pi forwards them; terminal support alone is not sufficient. This extension does not change Pi's listener order, enable focus reporting, or detect screen locks. RPC, print, and JSON cannot observe terminal input, so inactivity mode delivers at settlement instead.
 
 Notification delivery is best effort with one attempt and a 10-second request timeout. There is no automatic retry, persistent queue, or replay after reload. Accepted means Telegram accepted a message, not that someone read it. Telegram rate limits can reject rapid runs; Status reports a safe error code and available retry-after time. Immediate shutdown can cancel an in-flight notification, especially in a short-lived headless session.
 

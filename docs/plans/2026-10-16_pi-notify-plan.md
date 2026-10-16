@@ -40,7 +40,7 @@ For TUI inactivity behavior:
 - At `agent_settled`, send immediately if inactivity already meets the threshold; otherwise start a timer for the remaining time. Do not restart a full delay unconditionally.
 - If user activity occurs while waiting, cancel that work period's pending reminder. Do not rearm it later merely because the user becomes inactive again.
 - If a new work period starts while waiting, cancel the old pending reminder and evaluate the next settlement separately.
-- A real focus-gain event, when delivered by the terminal, counts as activity. Focus loss alone does not trigger delivery. A continuously focused window does not suppress delivery.
+- A focus-gain event counts only when Pi forwards it through `ctx.ui.onTerminalInput()`. Fullscreen Pi consumes focus, mouse, and viewport/search input before extension listeners; these actions do not reliably cancel a reminder. Terminal support alone is not sufficient. Focus loss alone does not trigger delivery. A continuously focused window does not suppress delivery.
 - Use existing focus reporting only when available through the supported input path. Do not emit terminal control sequences or take ownership of the host's focus-reporting mode. Correct operation must not require focus support.
 - Revalidate the session generation, pending work-period identity, current settings, cancellation state, and absence of newly started work before sending when the timer expires.
 - Changing enablement, mode, delay, or selected destinations cancels any pending reminder. Do not send an old reminder to a newly selected chat. The new policy applies to subsequent work periods.
@@ -214,7 +214,7 @@ No model-visible prefix transition is intended. Verify that no tools, context ho
 
 - [x] `/notify` can configure Telegram destinations, enablement, mode, and inactivity duration without manual JSON editing; secrets never appear in previews or status.
 - [x] Eligible settled work periods produce at most one attempt per selected destination, with no premature notification during automatic continuation.
-- [x] Inactivity mode uses time since last observed activity, waits only the remaining interval, cancels on return or new work, and never claims to detect reading.
+- [x] Inactivity mode uses time since last forwarded activity, waits only the remaining interval, cancels on observed input or new work, and never claims to detect reading. Fullscreen input-consumption limits are documented and tested.
 - [x] The coordinator uses only the common provider contract for delivery; Telegram is the sole production provider, and fake-provider tests verify dispatch, cancellation, safe results, and unsupported-provider behavior.
 - [x] Notifications identify the computer, session, and worktree when available, without claiming task success or transmitting conversation content.
 - [x] Cancellation, disposal, failure, policy changes, reload, replacement, shutdown, and delayed completion do not leak tasks or corrupt settings/status.
@@ -240,6 +240,29 @@ No model-visible prefix transition is intended. Verify that no tools, context ho
 - npm registry lookup returned 404 for the new package. Documentation uses local checkout installation until publication; no publication, visibility change, tag creation, or release dispatch was performed.
 - Draft PR: https://github.com/narumiruna/pi-extensions/pull/1588, based on `main`, with implementation commit `2d539618`. The PR records verification, risks, and blocked acceptance. This plan remains saved because live-smoke acceptance is still open.
 - A human-operated terminal smoke is impractical in this non-interactive harness. Kit harness and Pi Jiti tests verify loading and interactions but do not establish real terminal focus/mouse delivery.
+
+## Review ledger — PR #1588
+
+Reviewed head: `e804e1bddc26e311700ae74c26c5e00b23fe1ed1`. The checkout and PR both belong to `narumiruna/pi-extensions`. The PR is open and ready; its prior CI run passed. All REST pages and GraphQL thread/comment pages were fetched. The original implementation diff and relevant instructions are unchanged from the prior review. Source review is reused where unchanged; the reported failure classes are checked again across settings mutations, activity classification, UI, tests, and documentation.
+
+| Item | Evidence and relation to the goal | Severity | Outcome |
+| --- | --- | --- | --- |
+| R1: comment `4295840699` | `saveDestination()` converts any non-object `destinations` value to `{}`. This can discard stored data during Telegram setup. Existing destination entries also need protection from non-object replacement. Both affect the new settings contract. | P2 | Actionable and not yet addressed. The local fix rejects destructive coercion. Tests verify unchanged bytes, state, and queue recovery. Validation passed; publication and thread resolution are pending. |
+| R2: comment `4295840709` | Installed `TuiAltScreen` registers its viewport listener in its constructor. It consumes focus, mouse, and viewport/search keys before `onTerminalInput()` subscriptions. The current docs promise more activity coverage than the public hook provides. | P2 | Actionable and not yet addressed. The local fix keeps the public observer and states its limits in the UI and docs. Installed-runtime tests cover regular/fullscreen, overlay, search, and earlier-listener branches. Validation passed; publication and thread resolution are pending. |
+| Review receipt `5549327701` and summary `6217740470` | These identify the reviewed commit and the same two findings. They add no separate code request. | Informational | Already addressed by tracking R1 and R2. No duplicate reply is needed. |
+| Prior draft-status question | GitHub now reports `isDraft: false`. The description still says Draft blocker. Missing live credentials remain a verification limit, not a reason to change the PR back to draft. | P3 | Question or discussion item needing a response. Update stale status wording in the description and handoff. |
+
+Touched rules and verification: settings changes MUST protect invalid files, preserve unknown data, serialize mutations, and recover after failure (`Test`, `Review`); input behavior MUST be based on installed listener branches and must not depend on private host state (`Test`, `Review`); UI/docs MUST state supported behavior and keep mode, cancellation, framing, and credential rules (`Test`, `Review`); both repository gates and applicable package/runtime checks remain required (`Validator`, `Test`, `Smoke`). No raw stdin observer or host listener reordering will be added.
+
+### Review validation
+
+- `npm run check` passed. `npm test` passed: 8,887 tests passed, two skipped; 610 files passed, one skipped. All 205 package tests passed without skips.
+- Eleven new settings cases cover arrays, strings, null, numbers, and booleans in stored collections and entries. They check unchanged file bytes, unchanged effective state, no temporary-file residue, and save recovery after manual repair.
+- Seventy-three installed-runtime routing cases use real Pi regular/fullscreen renderers, public terminal input, and fake-clock reminder checks. They cover normal text/paste, key releases, focus, mouse, wheel, viewport keys, search, overlays, and prior-listener consumption. No private host state is accessed.
+- `npm run package:pack -- notify` passed. The actual tarball contains the same 14 intended source/documentation/license files and no tests or credentials.
+- Package build-if-present and the isolated `pi -e ./packages/pi-notify` RPC check passed. The Jiti menu test passed in the package suite. The heading audit passed for all 36 package READMEs. `git diff --check` passed.
+- The settings mutation paths and all activity claims in this PR were checked. Cleanup and signal ownership are unchanged. Existing package Changeset coverage remains sufficient. No API, settings key, provider, permission, or dependency was added.
+- Live Telegram delivery and physical terminal behavior remain unverified for the reasons already recorded above. They do not prevent responding to these two verified review items.
 
 ## Rollback / Recovery
 

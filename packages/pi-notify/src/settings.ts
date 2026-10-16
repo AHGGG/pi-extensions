@@ -226,8 +226,12 @@ export function saveDestination(
   return store.change(
     "user",
     (document, project) => {
+      if (document.destinations !== undefined && !isObject(document.destinations))
+        throw new Error("Invalid destinations setting. Repair the file before changing destinations.");
       const destinations = isObject(document.destinations) ? { ...document.destinations } : {};
       if (normalized) {
+        if (Object.hasOwn(destinations, id) && !isObject(destinations[id]))
+          throw new Error("Invalid stored destination. Repair the file before replacing this entry.");
         // Validators return owned optional keys as undefined so JSON publication removes them.
         destinations[id] = { ...(isObject(destinations[id]) ? destinations[id] : {}), ...normalized };
         if (Object.keys(destinations).length > MAX_DESTINATIONS)
