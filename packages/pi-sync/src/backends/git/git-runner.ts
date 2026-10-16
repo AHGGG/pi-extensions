@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
 import process from "node:process";
+import { throwIfAborted } from "../../sync/signals.js";
 
 const DEFAULT_TIMEOUT_MS = 30_000;
 const DEFAULT_OUTPUT_LIMIT = 1024 * 1024;
@@ -251,9 +252,4 @@ export async function readGitBlobs(
     maxOutputBytes: options.maxOutputBytes + protocolOverhead,
   });
   return parseGitBlobBatch(result.stdout, objects.length, options.maxOutputBytes);
-}
-
-function throwIfAborted(signal?: AbortSignal) {
-  if (!signal?.aborted) return;
-  throw signal.reason instanceof Error ? signal.reason : new DOMException("The operation was aborted", "AbortError");
 }

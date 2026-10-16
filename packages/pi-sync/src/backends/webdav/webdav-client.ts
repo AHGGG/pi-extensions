@@ -1,4 +1,5 @@
 import { XMLParser } from "fast-xml-parser";
+import { throwIfAborted } from "../../sync/signals.js";
 import type { RemoteObject, ResolvedWebDavBackend } from "../backend-types.js";
 
 const JSON_LIMIT = 1024 * 1024;
@@ -358,9 +359,4 @@ function redactText(value: string, config: ResolvedWebDavBackend) {
 
 function escapeRegExp(value: string) {
   return value.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
-}
-
-function throwIfAborted(signal?: AbortSignal) {
-  if (!signal?.aborted) return;
-  throw signal.reason instanceof Error ? signal.reason : new DOMException("The operation was aborted", "AbortError");
 }

@@ -2,9 +2,11 @@ import { createHash, randomUUID } from "node:crypto";
 import { decodeSnapshot, encodeSnapshot } from "../../snapshot/snapshot-codec.js";
 import type { Snapshot } from "../../snapshot/snapshot-types.js";
 import { validatePortableSnapshot } from "../../sync/local-fields.js";
+import { throwIfAborted } from "../../sync/signals.js";
 import { syncErrorGuidance } from "../../sync/sync-error-guidance.js";
 import { portableSnapshotSelection } from "../../sync/sync-policy.js";
 import type { LatestPointer, RemoteObject, ResolvedWebDavBackend } from "../backend-types.js";
+import { createLatestPointer, remoteHistoryEntry } from "../snapshot-pointer.js";
 import {
   type BackendDiagnostic,
   type ExpectedRemoteHead,
@@ -84,7 +86,7 @@ export class WebDavSyncBackend implements SyncBackend {
     await client.ensureCollection(snapshotsPath(this.config));
     const encoded = await encodeSnapshot(snapshot);
     throwIfAborted(options.signal);
-    const pointer = pointerFor(this.config, snapshot, sha256(encoded));
+    const pointer = createLatestPointer(this.config.destination.namespace, snapshot, sha256(encoded));
     const stagedPath = snapshotPath(this.config, snapshot.id);
     try {
       await client.putBuffer(stagedPath, encoded, "application/gzip", { ifAbsent: true });
@@ -392,19 +394,6 @@ function webDavStorageLocation(config: ResolvedWebDavBackend) {
   return `${url.host} · ${config.destination.path}`;
 }
 
-function pointerFor(config: ResolvedWebDavBackend, snapshot: Snapshot, checksum: string): LatestPointer {
-  return {
-    version: VERSION,
-    profile: config.destination.namespace,
-    snapshot: snapshot.id,
-    sha256: checksum,
-    createdAt: snapshot.createdAt,
-    machine: snapshot.machine,
-    syncSessions: snapshot.syncSessions === true || snapshot.files.some((file) => file.path.startsWith("sessions/")),
-    ...(snapshot.selection === undefined ? {} : { selection: snapshot.selection }),
-  };
-}
-
 function remoteHead(pointer: LatestPointer, identity: string, etag?: string): RemoteHead {
   return {
     snapshotRef: pointer.snapshot,
@@ -488,16 +477,6 @@ function requireHistory(value: { version: number; snapshots: LatestPointer[] } |
     throw new Error("Remote history contains duplicate snapshot references.");
   }
   return pointers;
-}
-
-function remoteHistoryEntry(pointer: LatestPointer): RemoteHistoryEntry {
-  return {
-    snapshotRef: pointer.snapshot,
-    snapshotId: pointer.snapshot,
-    createdAt: pointer.createdAt,
-    machine: pointer.machine,
-    syncSessions: pointer.syncSessions === true,
-  };
 }
 
 function assertSnapshotIdentity(snapshot: Snapshot, namespace: string) {
@@ -635,11 +614,6 @@ function secretFreeUrl(value: string) {
 
 function sha256(value: Buffer) {
   return createHash("sha256").update(value).digest("hex");
-}
-
-function throwIfAborted(signal?: AbortSignal) {
-  if (!signal?.aborted) return;
-  throw signal.reason instanceof Error ? signal.reason : new DOMException("The operation was aborted", "AbortError");
 }
 
 function errorMessage(error: unknown) {
