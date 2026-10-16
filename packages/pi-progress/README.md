@@ -99,7 +99,7 @@ Back returns to the main menu; Ctrl+C closes the flow.
 
 Direct routes remain available, with autocomplete:
 
-- `/progress clear` hides the widget and cancels its completion-summary timer in TUI or RPC mode. Saved progress remains unchanged; the next update, branch navigation, or session start can show incomplete progress again.
+- `/progress clear` hides the widget and cancels its completion-summary timer in TUI or RPC mode. Saved progress remains unchanged; the next update or branch navigation can show it again, and session start can show incomplete progress again.
 - `/progress settings` opens the display settings screen in TUI mode. RPC mode reports the settings path for manual editing.
 
 Unknown subcommands and trailing arguments show usage without changing state.
