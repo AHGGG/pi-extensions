@@ -1,4 +1,4 @@
-import { Container, Key, Loader, matchesKey, Spacer, Text, type TUI } from "@earendil-works/pi-tui";
+import { Container, Key, Loader, matchesKey, Spacer, Text, type TUI, truncateToWidth } from "@earendil-works/pi-tui";
 import { HorizontalRule } from "../horizontal-rule.js";
 import type { MenuKeybindings } from "./contracts.js";
 
@@ -34,10 +34,17 @@ export class TaskLoader extends Container {
     this.addChild(this.loader);
     if (cancelHint !== undefined) {
       this.addChild(new Spacer(1));
-      this.addChild(new Text(theme.fg("dim", cancelHint) + theme.fg("muted", " cancel"), 1, 0));
+      this.addChild(new CallbackText(() => theme.fg("dim", cancelHint) + theme.fg("muted", " cancel")));
     }
     this.addChild(new Spacer(1));
     this.addChild(new HorizontalRule({ ruleStyle: borderColor }));
+  }
+
+  render(width: number): string[] {
+    if (!Number.isFinite(width)) return [];
+    const safeWidth = Math.floor(width);
+    if (safeWidth <= 0) return [];
+    return super.render(safeWidth).map((line) => truncateToWidth(line, safeWidth, ""));
   }
 
   handleInput(data: string): void {
@@ -55,6 +62,17 @@ export class TaskLoader extends Container {
     if (this.disposed) return;
     this.disposed = true;
     this.loader.stop();
+  }
+}
+
+/** Text stores styled strings, so rebuild them from the callback theme on invalidation. */
+class CallbackText extends Text {
+  constructor(private readonly content: () => string) {
+    super(content(), 1, 0);
+  }
+
+  invalidate(): void {
+    this.setText(this.content());
   }
 }
 

@@ -304,7 +304,14 @@ test("diagnostics open all files before awaiting push publications", async () =>
   const adapter = fixtureAdapter("batch-push", 30, files.length);
 
   try {
-    const result = await runDiagnostics(adapter, { root, files }, 1_000, undefined, { ui: { setStatus() {} } }, "test");
+    const result = await runDiagnostics(
+      adapter,
+      { root, files },
+      1_000,
+      undefined,
+      { cwd: root, ui: { setStatus() {} } },
+      "test",
+    );
     const details = result.details as {
       files: Array<{ path: string; diagnostics: Array<{ message: string }> }>;
     };

@@ -24,6 +24,8 @@ jobs:
 
   select-mode:
     needs: checks
+    # Forks consume Git installs; only upstream may version or publish packages.
+    if: github.repository == 'narumiruna/pi-extensions'
     runs-on: ubuntu-latest
     permissions:
       contents: read

@@ -37,6 +37,7 @@ export function fixture(scenario = "lifecycle-normal") {
   const controller = new AbortController();
   const statuses: Array<string | undefined> = [];
   const ctx: StatusContext = {
+    cwd: root,
     ui: {
       setStatus: (_key, value) => {
         statuses.push(value);

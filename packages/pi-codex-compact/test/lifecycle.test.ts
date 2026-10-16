@@ -12,6 +12,7 @@ import type { SessionBeforeCompactEvent, SessionEntry } from "@earendil-works/pi
 import { test } from "vitest";
 import { createMockContext, createMockPi } from "../../../test/support.js";
 import { createCheckpointDetails, fallbackSummary, parseCheckpointDetails } from "../src/checkpoint.js";
+import { COMPACTION_WORK_REPLAY_MESSAGE } from "../src/checkpoint-replay.js";
 import { createCodexCompactExtension } from "../src/codex-compact.js";
 import type { RemoteCompactionProtocol } from "../src/model-api.js";
 import {
@@ -348,7 +349,11 @@ test("configured custom Codex Responses APIs compact and replay only while curre
     },
     replayContext,
   )) as { input: Record<string, unknown>[] };
-  assert.equal(rewritten.input.at(-2)?.type, "compaction");
+  assert.equal(rewritten.input.at(-3)?.type, "compaction");
+  assert.deepEqual(rewritten.input.at(-2), {
+    role: "developer",
+    content: [{ type: "input_text", text: COMPACTION_WORK_REPLAY_MESSAGE }],
+  });
   assert.match(JSON.stringify(rewritten.input.at(-1)), /later/);
 
   const differentModel = createMockContext({

@@ -1,5 +1,11 @@
 # @narumitw/pi-lsp
 
+## 0.49.10
+
+### Patch Changes
+
+- df7c88e: Resolve default and relative LSP workspace roots against the active session working directory instead of the Pi launch directory.
+
 ## 0.49.9
 
 ### Patch Changes

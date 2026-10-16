@@ -387,21 +387,25 @@ test("LSP operations cancelled before startup do not spawn or retain listeners",
   writeFileSync(file, "package main\n");
   const adapter = testAdapter("custom", [".go"]);
   const operations = [
-    (signal: AbortSignal, ctx: { ui: { setStatus: () => void } }) =>
+    (signal: AbortSignal, ctx: { cwd: string; ui: { setStatus: () => void } }) =>
       runDiagnostics(adapter, { root, files: [file] }, 100, signal, ctx, "lsp"),
-    (signal: AbortSignal, ctx: { ui: { setStatus: () => void } }) =>
+    (signal: AbortSignal, ctx: { cwd: string; ui: { setStatus: () => void } }) =>
       runFix(adapter, { root, path: "main.go" }, 100, signal, ctx, "lsp"),
   ];
   try {
     for (const operation of operations) {
       const preAborted = new AbortController();
       preAborted.abort();
-      await assert.rejects(operation(preAborted.signal, { ui: { setStatus() {} } }), /custom LSP request aborted/u);
+      await assert.rejects(
+        operation(preAborted.signal, { cwd: root, ui: { setStatus() {} } }),
+        /custom LSP request aborted/u,
+      );
       assert.equal(getEventListeners(preAborted.signal, "abort").length, 0);
 
       const cancelledByStatus = new AbortController();
       await assert.rejects(
         operation(cancelledByStatus.signal, {
+          cwd: root,
           ui: {
             setStatus() {
               cancelledByStatus.abort();
@@ -787,15 +791,18 @@ test("route selection handles server filters and ambiguous fix routes", () => {
   const ts = testAdapter("ts", [".ts"]);
   const alsoTs = testAdapter("also-ts", [".ts"]);
 
-  const diagnostic = selectDiagnosticRoutes([ts, alsoTs], { root, server: ["ts"] }, 50);
+  const diagnostic = selectDiagnosticRoutes(root, [ts, alsoTs], { root, server: ["ts"] }, 50);
   assert.deepEqual(
     diagnostic.routes.map((route) => route.adapter.name),
     ["ts"],
   );
-  assert.throws(() => selectFixRoute([ts, alsoTs], { root, path: "a.ts" }), /Multiple LSP servers/);
-  assert.equal(selectFixRoute([ts, alsoTs], { root, path: "a.ts", server: "also-ts" }).route.adapter.name, "also-ts");
+  assert.throws(() => selectFixRoute(root, [ts, alsoTs], { root, path: "a.ts" }), /Multiple LSP servers/);
+  assert.equal(
+    selectFixRoute(root, [ts, alsoTs], { root, path: "a.ts", server: "also-ts" }).route.adapter.name,
+    "also-ts",
+  );
   assert.throws(
-    () => selectDiagnosticRoutes([ts, alsoTs], { root, server: "missing" }, 50),
+    () => selectDiagnosticRoutes(root, [ts, alsoTs], { root, server: "missing" }, 50),
     (error: unknown) =>
       error instanceof Error &&
       error.message ===
@@ -815,7 +822,7 @@ test("diagnostic route caches keep per-server skip policies isolated", () => {
   skipGenerated.skipDirectories.add("generated");
 
   try {
-    const selection = selectDiagnosticRoutes([skipGenerated, includeGenerated], { root }, 50);
+    const selection = selectDiagnosticRoutes(root, [skipGenerated, includeGenerated], { root }, 50);
     const routes = new Map(selection.routes.map((route) => [route.adapter.name, route.files]));
     assert.deepEqual(routes.get("skip-generated"), [path.join(root, "src", "main.foo")]);
     assert.deepEqual(routes.get("include-generated"), [
@@ -847,7 +854,7 @@ test("diagnostic routes skip missing defaults but preserve explicit selection", 
   };
 
   try {
-    const selection = selectDiagnosticRoutes([available, missing], { root }, 50) as ReturnType<
+    const selection = selectDiagnosticRoutes(root, [available, missing], { root }, 50) as ReturnType<
       typeof selectDiagnosticRoutes
     > & { skipped?: Array<{ adapter: LspServerAdapter }> };
     assert.deepEqual(
@@ -860,7 +867,9 @@ test("diagnostic routes skip missing defaults but preserve explicit selection", 
     );
     assert.equal(missingFileChecks, 0);
     assert.deepEqual(
-      selectDiagnosticRoutes([missing], { root, server: "missing" }, 50).routes.map((route) => route.adapter.name),
+      selectDiagnosticRoutes(root, [missing], { root, server: "missing" }, 50).routes.map(
+        (route) => route.adapter.name,
+      ),
       ["missing"],
     );
     assert.equal(missingFileChecks > 0, true);
@@ -869,7 +878,7 @@ test("diagnostic routes skip missing defaults but preserve explicit selection", 
     unrelated.defaultCommand = { command: "available-lsp", args: [] };
     unrelated.env = { PATH: root };
     unrelated.isDefault = true;
-    const partiallyUnavailable = selectDiagnosticRoutes([unrelated, missing], { root }, 50);
+    const partiallyUnavailable = selectDiagnosticRoutes(root, [unrelated, missing], { root }, 50);
     assert.deepEqual(partiallyUnavailable.routes, []);
     assert.deepEqual(
       partiallyUnavailable.skipped.map((route) => route.adapter.name),
@@ -877,7 +886,7 @@ test("diagnostic routes skip missing defaults but preserve explicit selection", 
     );
     assert.equal(missingFileChecks, 0);
 
-    const unavailable = selectDiagnosticRoutes([missing], { root }, 50);
+    const unavailable = selectDiagnosticRoutes(root, [missing], { root }, 50);
     assert.deepEqual(unavailable.routes, []);
     assert.deepEqual(
       unavailable.skipped.map((route) => route.adapter.name),

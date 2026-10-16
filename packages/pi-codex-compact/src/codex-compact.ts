@@ -9,9 +9,10 @@ import {
   parseCheckpointDetails,
 } from "./checkpoint.js";
 import { projectSessionCheckpointContext } from "./checkpoint-projection.js";
+import { rewriteCheckpointForWork } from "./checkpoint-replay.js";
 import { type CompactionAttempt, compactRemotely } from "./compaction-operation.js";
 import { type RemoteCompactionProtocol, resolveCompactionRoute } from "./model-api.js";
-import { hasCheckpointMarker, rewriteCheckpointMarker } from "./protocol.js";
+import { hasCheckpointMarker } from "./protocol.js";
 import { RejectedRoutes, rejectionRouteKey } from "./rejection-state.js";
 import {
   type CodexCompactSettings,
@@ -395,6 +396,7 @@ export function createCodexCompactExtension(
         checkpoint.details.checkpointId === pending.checkpointId
       ) {
         pending.entryId = checkpoint.entry.id;
+        logCompaction(ctx, "Continuation: checkpoint committed; waiting for a work request or settlement.");
       } else {
         run.pending = undefined;
       }
@@ -431,9 +433,11 @@ export function createCodexCompactExtension(
         (ctx.hasPendingMessages() && event.context.canContinue) ||
         !projectSessionCheckpointContext(event.context.contextMessages, ctx.sessionManager.getBranch(), checkpoint)
       ) {
+        logCompaction(ctx, "Continuation: extra request suppressed by existing work or lifecycle guards.");
         return;
       }
       run.used = true;
+      logCompaction(ctx, "Continuation: requesting one extra work turn at settlement.");
       return {
         entries: [
           ...event.entries,
@@ -477,17 +481,21 @@ export function createCodexCompactExtension(
     });
 
     pi.on("before_provider_request", (event, ctx) => {
-      // This hook is for normal session requests, not the separate maintenance
-      // call. Mid-turn compaction and queued work already satisfy continuation.
+      // A normal request satisfies scheduling, but must still distinguish the
+      // completed maintenance handoff from the actual task. Do not add a second
+      // scheduler when Pi already retries or continues after a tool result.
       const run = owners.get(ctx.sessionManager)?.run;
-      if (run?.pending?.entryId) run.pending = undefined;
+      if (run?.pending?.entryId) {
+        run.pending = undefined;
+        logCompaction(ctx, "Continuation: normal work request prepared; no extra request scheduled.");
+      }
       if (!settingsRuntime.get().settings.enabled) return undefined;
       const settings = settingsRuntime.get().settings;
       const checkpoint = activeCheckpoint(ctx);
       if (!checkpoint || !isCheckpointCompatible(checkpoint.details, ctx.model, settings)) return undefined;
       const marker = checkpointMarker(checkpoint.details.checkpointId);
       if (!hasCheckpointMarker(event.payload, marker)) return undefined;
-      return rewriteCheckpointMarker(event.payload, marker, checkpoint.details.replacementHistory);
+      return rewriteCheckpointForWork(event.payload, marker, checkpoint.details.replacementHistory);
     });
 
     const beforeNavigation = (_event: unknown, ctx: ExtensionContext) => {

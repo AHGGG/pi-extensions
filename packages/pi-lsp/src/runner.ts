@@ -17,7 +17,7 @@ export async function runDiagnostics(
   statusKey: string,
 ) {
   throwIfAborted(signal, adapter);
-  const root = resolveRoot(params.root);
+  const root = resolveRoot(ctx.cwd, params.root);
   const command = adapter.defaultCommand;
   const files = params.files ?? collectSupportedFiles(adapter, root, params.paths, params.limit ?? DEFAULT_FILE_LIMIT);
   if (files.length === 0) {
@@ -68,7 +68,7 @@ export async function runFix(
   ctx: StatusContext,
   statusKey: string,
 ) {
-  const root = resolveRoot(params.root);
+  const root = resolveRoot(ctx.cwd, params.root);
   const file = resolveSupportedFile(adapter, root, params.path);
   const actionKind = params.kind?.trim() || "source.fixAll";
 

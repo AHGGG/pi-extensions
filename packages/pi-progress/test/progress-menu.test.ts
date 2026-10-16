@@ -45,7 +45,8 @@ test("TUI opens a Kit main menu and read-only Status and Help views", async () =
   const status = frame(tui);
   assert.match(status, /Progress Status/u);
   assert.match(status, /3 total, 1 completed, 1 in progress, 1 blocked/u);
-  assert.match(status, /User settings: .*pi-progress.json/u);
+  // Long temporary paths can wrap after the label or inside the path.
+  assert.match(status, /User settings:\s+[\s\S]*?pi-progress\.json/u);
   assert.doesNotMatch(status, /^→/mu);
   tui.press("tui.select.cancel");
   await tui.waitForOpen();

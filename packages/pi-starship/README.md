@@ -17,6 +17,7 @@ The extension parses and renders the footer itself, so it does not need the `sta
 - Wraps native multiline layouts to terminal width instead of truncating them.
 - Keeps rendering pure while refreshing filesystem, process, and network-derived data through bounded caches.
 - Uses `/starship` for presets, preview, configuration health, searchable module details, customization, and recovery.
+- Shares settings through unlisted GitHub Gists and reviews imported settings before replacement.
 - Bundles the authoritative configuration skill and references for editing `pi-starship.toml` or answering setup questions.
 - Loads a generated split runtime to reduce Pi package startup work.
 
@@ -70,7 +71,7 @@ It does not cover general TOML, shell Starship configuration, extension source d
 
 All routes support TUI and RPC with the exceptions above and reject unknown or trailing arguments.
 Print and JSON modes produce no command output; the footer runs only in TUI mode.
-Preset selection, module inspection, and recovery are menu-only, not extra subcommands.
+Preset selection, module inspection, Gist sharing and import, and recovery are menu-only, not extra subcommands.
 Restoring built-in configuration requires an existing settings document to replace; see [Settings](#-settings).
 
 ## ⚙️ Settings
@@ -101,6 +102,27 @@ For per-extension status colors, add `[extension_status.styles]` entries using r
 See [Configuration and format](./skills/configuring-pi-starship/references/configuration.md) for examples and matching rules.
 Use `/starship` for interactive configuration, preview, diagnostics, presets, and recovery.
 Manual file edits load at the next `session_start`, including `/reload`.
+
+## 🔗 Share and import settings
+
+In TUI mode, open `/starship` → **Configuration** and select **Share settings as Gist…** or **Import settings from Gist…**.
+Install GitHub CLI (`gh`) and run `gh auth login` for github.com with Gist access first; pi-starship uses that authentication and stores no GitHub credentials.
+
+Sharing reviews the exact loaded TOML, including comments and unknown fields, then asks permission to upload a new unlisted Gist with a `pi-starship.toml` file.
+With no settings file, it shares the built-in example without creating a local file.
+**Unlisted is not private: anyone with the link can read it. Remove secrets and local paths before sharing.**
+The result is a shareable Gist URL; existing Gists are never updated.
+
+Import accepts a Gist ID or an `https://gist.github.com/<owner>/<id>` link and reads only `pi-starship.toml`.
+It validates the TOML, shows the full document for review, then previews the footer and asks permission to replace the entire local settings document.
+Review untrusted settings carefully: they can enable command execution and network requests.
+A successful import applies immediately, preserves the imported bytes, and keeps no backup; application failure attempts to restore the previous document and footer.
+Concurrent in-process settings changes or disk changes during review block the import; this is not a cross-process lock.
+
+Only github.com Gists are supported, with a 64 KiB document limit, a 512 KiB API response limit, and a 30-second request timeout.
+Incomplete or truncated files are rejected without following raw-file URLs.
+Escape or Ctrl+C cancels a request, and session replacement or shutdown stops owned work.
+Cancelling or losing an upload response cannot undo a Gist already created on GitHub: check your Gists before retrying.
 
 ## 🔒 Security and privacy
 

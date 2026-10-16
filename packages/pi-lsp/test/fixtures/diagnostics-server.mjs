@@ -16,7 +16,7 @@ function record(event) {
 if (lifecycle) {
   process.on("SIGTERM", () => setTimeout(() => process.exit(0), 25));
   process.on("exit", () => record({ method: "exited" }));
-  record({ method: "ready" });
+  record({ method: "ready", cwd: process.cwd() });
 }
 
 function exitAfterDelay() {

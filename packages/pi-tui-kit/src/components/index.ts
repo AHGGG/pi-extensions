@@ -455,8 +455,9 @@ function renderChoiceSearchInput(input: Input, width: number): string[] {
   return input.render(inputWidth).map((line) => truncateToWidth(`${prefix}${line}`, width, ""));
 }
 
-// Pi's current SettingsList cannot initialize its cursor, enforce disabled rows, expose search
-// focus, or await rejected saves. Keep this adapter local while matching its public presentation.
+// Pi's SettingsList supports cursor initialization through selectItem(), but does not enforce
+// disabled rows, expose search focus, or await saves and roll back rejections. Keep this adapter
+// local while matching its public presentation.
 function createSettingsComponent<ScreenId extends string, ActionId extends string>(
   options: SettingsOptions<ScreenId, ActionId>,
 ): MenuScreenComponent {

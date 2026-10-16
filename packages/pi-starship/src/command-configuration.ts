@@ -99,6 +99,18 @@ export function configurationMenuScreen(loaded: LoadedStarshipConfig) {
         description: "Validate and preview external changes",
         action: "configuration-reload" as const,
       },
+      {
+        id: "gist-share",
+        label: "Share settings as Gist…",
+        description: "Upload reviewed TOML to GitHub · unlisted, not private · requires gh",
+        action: "gist-share" as const,
+      },
+      {
+        id: "gist-import",
+        label: "Import settings from Gist…",
+        description: "Review and preview remote TOML before replacing settings · requires gh",
+        action: "gist-import" as const,
+      },
     ],
     hint: "back" as const,
   };
