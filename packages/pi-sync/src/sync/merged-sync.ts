@@ -22,7 +22,12 @@ import {
   scanSnapshot,
 } from "../snapshot/snapshot.js";
 import type { Snapshot } from "../snapshot/snapshot-types.js";
-import { pruneMergeBaselines, readMergeAncestors, stageMergeBaseline } from "../state/merge-baseline-store.js";
+import {
+  hasCurrentMergeBaseline,
+  pruneMergeBaselines,
+  readMergeAncestors,
+  stageMergeBaseline,
+} from "../state/merge-baseline-store.js";
 import {
   readStateForConfig,
   statePathForConfig,
@@ -60,6 +65,7 @@ import {
   requireCompatibleRemoteSelection,
 } from "./remote-snapshot.js";
 import { resolveSettingsConflicts } from "./settings-conflicts.js";
+import { createStartupTimings, type StartupTimings } from "./startup-timings.js";
 import { createSyncDecision } from "./sync-decision.js";
 import { backupLocal, captureMutationOwner, protectedSessionPaths } from "./sync-local.js";
 import { inspectRemoteSelection } from "./sync-policy.js";
@@ -75,6 +81,7 @@ export async function mergeSync(
   factory: SyncBackendFactory = createSyncBackend,
   resolution?: ConflictResolution,
 ) {
+  const timings = options.startupTimings ?? createStartupTimings();
   const validateOwner = captureMutationOwner(ctx, options.signal);
   const isCurrent = () => {
     try {
@@ -93,33 +100,36 @@ export async function mergeSync(
     sessionDir: sessionRoot,
     signal: options.signal,
   };
-  const validate = async () => {
-    validateOwner();
-    const latest = await loadConfig(options.setup);
-    validateOwner();
-    if (configToken !== syncCheckConfigFingerprint(latest))
-      throw new Error("Sync setup or settings changed during transfer; reopen sync.");
-    if (sessionRoot !== undefined) {
-      const currentRoot = await effectiveSessionRoot(ctx);
+  const validate = () =>
+    timings.measure("transfer authorization", async () => {
       validateOwner();
-      if (currentRoot !== sessionRoot)
-        throw new Error("Session storage root changed during transfer; evidence retained for review.");
-    }
-    if (options.auto && (!latest.automaticTransfer || !ctx.isIdle()))
-      throw new Error("Automatic transfer is no longer authorized at this idle boundary.");
-  };
+      const latest = await loadConfig(options.setup);
+      validateOwner();
+      if (configToken !== syncCheckConfigFingerprint(latest))
+        throw new Error("Sync setup or settings changed during transfer; reopen sync.");
+      if (sessionRoot !== undefined) {
+        const currentRoot = await effectiveSessionRoot(ctx);
+        validateOwner();
+        if (currentRoot !== sessionRoot)
+          throw new Error("Session storage root changed during transfer; evidence retained for review.");
+      }
+      if (options.auto && (!latest.automaticTransfer || !ctx.isIdle()))
+        throw new Error("Automatic transfer is no longer authorized at this idle boundary.");
+    });
   await validate();
-  const backend = await factory(config);
+  const backend = await timings.measure("transfer backend initialization", () => factory(config));
   await validate();
   if (options.auto && backend.capability === "read-check-write-verify") {
     throw new Error(
       "Automatic transfer requires conditional publication or a lease; this backend supports only read/check/write/verify. Use manual sync.",
     );
   }
-  const pending = await readMergeJournal(config);
+  const pending = await timings.measure("transfer journal read", () => readMergeJournal(config));
   await validate();
   if (pending) {
-    const recovered = await completeJournal(ctx, config, backend, pending, validate, options.signal, options.auto);
+    const recovered = await timings.measure("transfer journal recovery", () =>
+      completeJournal(ctx, config, backend, pending, validate, timings, options.signal, options.auto),
+    );
     if (!recovered) {
       if ((options.auto || !options.silent) && !options.signal?.aborted)
         ctx.ui.notify(
@@ -138,18 +148,57 @@ export async function mergeSync(
   try {
     for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
       await validate();
-      const state = await readStateForConfig(config);
+      const state = await timings.measure("transfer state read", () => readStateForConfig(config));
       if (state.unresolved?.length && !config.partialSync)
         throw new Error(
           "Partial progress remains unresolved; re-enable partial sync or review an explicit force direction.",
         );
-      const localRaw = await createSnapshot(config.snapshotIdentity, snapshotOptions);
+      const localRaw = await timings.measure("transfer local snapshot", () =>
+        createSnapshot(config.snapshotIdentity, snapshotOptions),
+      );
       const local = portableSnapshot(localRaw, config.localFields);
       if (!sameLocalFields(state.localFields, config.localFields))
         throw new Error("Local-field rules changed; review and confirm a directional migration first.");
-      const head = await backend.readHead(options.signal);
+      const head = await timings.measure("transfer remote head", () => backend.readHead(options.signal));
       await validate();
-      const rawRemote = head ? await readSnapshotForHead(backend, head, options.signal) : undefined;
+      // This is a read-only shortcut, never authority to apply or publish. Pending
+      // journals were handled above. Legacy/partial baselines retain the full path.
+      if (
+        options.auto &&
+        !resolution &&
+        !config.partialSync &&
+        head &&
+        state.lastAppliedSnapshot &&
+        state.lastRemoteRevision &&
+        !state.unresolved?.length &&
+        head.snapshotId === state.lastAppliedSnapshot &&
+        backend.sameRevision(head.revision, state.lastRemoteRevision) &&
+        inspectRemoteSelection(config.include, { selection: head.selection, files: [] }).kind === "same" &&
+        matchesAcceptedState(state, config, head, local)
+      ) {
+        const unchanged = await timings.measure("transfer unchanged verification", async () => {
+          if (!(await hasCurrentMergeBaseline(config, local, state))) return false;
+          await validate();
+          const currentLocal = await timings.measure("transfer local snapshot", () =>
+            createSnapshot(config.snapshotIdentity, snapshotOptions),
+          );
+          await validate();
+          const currentState = await timings.measure("transfer state read", () => readStateForConfig(config));
+          await validate();
+          return (
+            sameHashes(fileHashMap(currentLocal), fileHashMap(localRaw)) &&
+            syncStateFingerprint(currentState) === syncStateFingerprint(state)
+          );
+        });
+        await validate();
+        if (unchanged) {
+          timings.markUnchanged();
+          return "applied" as const;
+        }
+      }
+      const rawRemote = head
+        ? await timings.measure("transfer snapshot download", () => readSnapshotForHead(backend, head, options.signal))
+        : undefined;
       await validate();
       if (rawRemote) {
         const files = [...local.files, ...rawRemote.files];
@@ -167,12 +216,15 @@ export async function mergeSync(
         : undefined;
       if (rawRemote) {
         requireCompatibleRemoteSelection(config, rawRemote);
-        const validation = planFileMerge({
-          baseline: state.lastFileHashes,
-          local: local.files,
-          remote: rawRemote.files,
-          selectionCompatible: true,
-        });
+        const validation = await timings.measure("transfer merge planning", () =>
+          planFileMerge({
+            baseline: state.lastFileHashes,
+            local: local.files,
+            remote: rawRemote.files,
+            selectionCompatible: true,
+          }),
+        );
+        await validate();
         const managedPaths = new Set([
           ...Object.keys(state.lastFileHashes),
           ...[...local.files, ...(remote?.files ?? [])].map((file) => file.path),
@@ -206,30 +258,32 @@ export async function mergeSync(
         throw review("The established remote is missing; choose an explicit recovery direction.", "remote-empty");
       const selectionState = inspectRemoteSelection(config.include, rawRemote);
       const selectionCompatible = selectionState.kind === "same";
-      let plan = planFileMerge({
-        baseline: state.lastFileHashes,
-        local: local.files,
-        remote: remote.files,
-        selectionCompatible,
-        protectedPaths: protectedSessionPaths(ctx, sessionRoot),
-      });
+      let plan = await timings.measure("transfer merge planning", () =>
+        planFileMerge({
+          baseline: state.lastFileHashes,
+          local: local.files,
+          remote: remote.files,
+          selectionCompatible,
+          protectedPaths: protectedSessionPaths(ctx, sessionRoot),
+        }),
+      );
+      await validate();
       let resolved = { plan, fields: [] as string[] };
       if (config.mergeSettings) {
         try {
-          resolved = await resolveSettingsConflicts(config, state, local, remote, plan);
+          resolved = await timings.measure("transfer settings merge", () =>
+            resolveSettingsConflicts(config, state, local, remote, plan),
+          );
         } catch (error) {
           if (!config.partialSync) throw error;
         }
       }
       await validate();
-      plan = await resolveContentConflicts(
-        config,
-        state,
-        local,
-        remote,
-        resolved.plan,
-        protectedSessionPaths(ctx, sessionRoot),
-        { textBudget, signal: options.signal },
+      plan = await timings.measure("transfer content merge", () =>
+        resolveContentConflicts(config, state, local, remote, resolved.plan, protectedSessionPaths(ctx, sessionRoot), {
+          textBudget,
+          signal: options.signal,
+        }),
       );
       await validate();
       if (resolution) {
@@ -353,40 +407,49 @@ export async function mergeSync(
         Boolean(config.partialSync && rawRemote.version !== 3);
       const apply = !sameHashes(fileHashMap(localRaw), fileHashMap(after));
       if (!publish && !apply) {
-        const beforeEvidence = await backend.readHead(options.signal);
+        const beforeEvidence = await timings.measure("transfer remote head", () => backend.readHead(options.signal));
         await validate();
         if (!beforeEvidence || !backend.sameRevision(beforeEvidence.revision, head.revision))
           throw new Error("Remote changed before baseline acceptance; retry from a fresh observation.");
         progress = await persistProgress();
         await validate();
-        const currentLocal = await createSnapshot(config.snapshotIdentity, snapshotOptions);
+        const currentLocal = await timings.measure("transfer local snapshot", () =>
+          createSnapshot(config.snapshotIdentity, snapshotOptions),
+        );
         await validate();
         if (
           !sameHashes(fileHashMap(currentLocal), fileHashMap(localRaw)) ||
-          syncStateFingerprint(await readStateForConfig(config)) !== syncStateFingerprint(state)
+          syncStateFingerprint(await timings.measure("transfer state read", () => readStateForConfig(config))) !==
+            syncStateFingerprint(state)
         )
           throw new Error(
             "Local content or baseline changed before baseline acceptance; retry from a fresh observation.",
           );
         await validate();
-        const currentHead = await backend.readHead(options.signal);
+        const currentHead = await timings.measure("transfer remote head", () => backend.readHead(options.signal));
         await validate();
         if (!currentHead || !backend.sameRevision(currentHead.revision, head.revision))
           throw new Error("Remote changed before baseline acceptance; retry from a fresh observation.");
-        await writeAcceptedState(config, head, accepted, validate, progress);
-        await pruneMergeBaselines(
-          config,
-          acceptedState(config, head, accepted, progress),
-          captureMutationOwner(ctx, options.signal),
+        await timings.measure("transfer baseline write", () =>
+          writeAcceptedState(config, head, accepted, validate, progress),
+        );
+        await timings.measure("transfer cleanup", () =>
+          pruneMergeBaselines(
+            config,
+            acceptedState(config, head, accepted, progress),
+            captureMutationOwner(ctx, options.signal),
+          ),
         );
         await validate();
-        await pruneCompletedConflicts(
-          config,
-          backend.identity,
-          acceptedState(config, head, accepted, progress),
-          accepted,
-          remote,
-          captureMutationOwner(ctx, options.signal),
+        await timings.measure("transfer cleanup", () =>
+          pruneCompletedConflicts(
+            config,
+            backend.identity,
+            acceptedState(config, head, accepted, progress),
+            accepted,
+            remote,
+            captureMutationOwner(ctx, options.signal),
+          ),
         );
         await validate();
         if (!options.silent)
@@ -398,7 +461,9 @@ export async function mergeSync(
           );
         return "applied" as const;
       }
-      await preflightMergedTargets(localRaw, after, snapshotOptions, ctx.sessionManager.getSessionFile?.());
+      await timings.measure("transfer preflight", () =>
+        preflightMergedTargets(localRaw, after, snapshotOptions, ctx.sessionManager.getSessionFile?.()),
+      );
       await validate();
       if (!config.skipSecretScan && scanSnapshot(upload).length)
         throw new Error("Refusing to merge possible secrets. Review managed content before syncing.");
@@ -430,19 +495,26 @@ export async function mergeSync(
           return "cancelled" as const;
       }
       await validate();
-      const refreshed = await createSnapshot(config.snapshotIdentity, snapshotOptions);
+      const refreshed = await timings.measure("transfer local snapshot", () =>
+        createSnapshot(config.snapshotIdentity, snapshotOptions),
+      );
       if (!sameHashes(fileHashMap(refreshed), fileHashMap(localRaw)))
         throw new Error("Local content changed during review; no merged transfer was performed.");
-      if (syncStateFingerprint(await readStateForConfig(config)) !== syncStateFingerprint(state))
+      if (
+        syncStateFingerprint(await timings.measure("transfer state read", () => readStateForConfig(config))) !==
+        syncStateFingerprint(state)
+      )
         throw new Error("Sync baseline changed during review; retry from a fresh observation.");
       await validate();
-      const refreshedHead = await backend.readHead(options.signal);
+      const refreshedHead = await timings.measure("transfer remote head", () => backend.readHead(options.signal));
       await validate();
       if (!refreshedHead || !backend.sameRevision(refreshedHead.revision, head.revision))
         throw new Error("Remote changed during review; no merged transfer was performed.");
       progress = await persistProgress();
       await validate();
-      const backup = await backupLocal(config.snapshotIdentity, snapshotOptions, options.signal);
+      const backup = await timings.measure("transfer backup", () =>
+        backupLocal(config.snapshotIdentity, snapshotOptions, options.signal),
+      );
       await validate();
       const journal: MergeJournal = {
         version: 1,
@@ -458,11 +530,15 @@ export async function mergeSync(
         ...(sessionRoot !== undefined ? { sessionRoot } : {}),
         ...(!publish ? { committedHead: head, applyOnly: true } : {}),
       };
-      await writeMergeJournal(config, journal);
+      await timings.measure("transfer journal write", () => writeMergeJournal(config, journal));
       // No backend call has begun: a stale candidate can be retired without ambiguous publication.
-      const atCommitState = syncStateFingerprint(await readStateForConfig(config));
+      const atCommitState = syncStateFingerprint(
+        await timings.measure("transfer state read", () => readStateForConfig(config)),
+      );
       await validate();
-      const atCommit = await createSnapshot(config.snapshotIdentity, snapshotOptions);
+      const atCommit = await timings.measure("transfer local snapshot", () =>
+        createSnapshot(config.snapshotIdentity, snapshotOptions),
+      );
       await validate();
       if (!sameHashes(fileHashMap(atCommit), fileHashMap(localRaw)) || atCommitState !== journal.stateIdentity) {
         await validate();
@@ -473,7 +549,9 @@ export async function mergeSync(
       }
       // Backup/journal awaits can also change physical identity without changing any bytes.
       try {
-        await preflightMergedTargets(atCommit, after, snapshotOptions, ctx.sessionManager.getSessionFile?.());
+        await timings.measure("transfer preflight", () =>
+          preflightMergedTargets(atCommit, after, snapshotOptions, ctx.sessionManager.getSessionFile?.()),
+        );
         await validate();
       } catch (error) {
         await validate();
@@ -482,13 +560,15 @@ export async function mergeSync(
       }
       try {
         if (publish) {
-          const result = await backend.publishSnapshot(upload, expectedRemoteHead(head), {
-            signal: options.signal,
-            onCommit: options.onCommit,
-          });
+          const result = await timings.measure("transfer remote publication", () =>
+            backend.publishSnapshot(upload, expectedRemoteHead(head), {
+              signal: options.signal,
+              onCommit: options.onCommit,
+            }),
+          );
           journal.committedHead = result.head;
           journal.warnings = result.warnings;
-          await writeMergeJournal(config, journal);
+          await timings.measure("transfer journal write", () => writeMergeJournal(config, journal));
         } else options.onCommit?.();
       } catch (error) {
         if (
@@ -504,7 +584,9 @@ export async function mergeSync(
         // Every uncertain/after-commit outcome retains evidence and is never blindly retried.
         throw mergeTransferError(error, config.backend);
       }
-      const completed = await completeJournal(ctx, config, backend, journal, validate, options.signal, options.auto);
+      const completed = await timings.measure("transfer journal recovery", () =>
+        completeJournal(ctx, config, backend, journal, validate, timings, options.signal, options.auto),
+      );
       if (!completed) {
         if (!options.signal?.aborted && (options.auto || !options.silent))
           ctx.ui.notify(
@@ -529,7 +611,7 @@ export async function mergeSync(
       return "applied" as const;
     }
   } finally {
-    await releaseConflictArtifacts(config, ownedStatePath, createdArtifacts);
+    await timings.measure("transfer cleanup", () => releaseConflictArtifacts(config, ownedStatePath, createdArtifacts));
   }
 }
 
@@ -539,6 +621,7 @@ async function completeJournal(
   backend: SyncBackend,
   journal: MergeJournal,
   validate: () => Promise<void>,
+  timings: StartupTimings,
   signal?: AbortSignal,
   auto = false,
 ) {
@@ -558,7 +641,7 @@ async function completeJournal(
     );
   }
   const snapshotOptions = { ...snapshotOptionsForContext(ctx, config), sessionDir: sessionRoot, signal };
-  const head = await backend.readHead(signal);
+  const head = await timings.measure("transfer remote head", () => backend.readHead(signal));
   if (
     !journal.committedHead &&
     head &&
@@ -566,10 +649,13 @@ async function completeJournal(
       backend.matchesUncommittedRecoveryHead?.(head, journal.expectedHead))
   ) {
     await validate();
-    const local = await createSnapshot(config.snapshotIdentity, snapshotOptions);
+    const local = await timings.measure("transfer local snapshot", () =>
+      createSnapshot(config.snapshotIdentity, snapshotOptions),
+    );
     if (
       !sameHashes(fileHashMap(local), fileHashMap(journal.before)) ||
-      syncStateFingerprint(await readStateForConfig(config)) !== journal.stateIdentity
+      syncStateFingerprint(await timings.measure("transfer state read", () => readStateForConfig(config))) !==
+        journal.stateIdentity
     ) {
       throw new Error(
         "Uncertain publication is not active, but local content or baseline changed; keep the journal for reviewed recovery.",
@@ -582,7 +668,7 @@ async function completeJournal(
   // Baseline publication is the durable completion boundary. A later remote revision
   // cannot undo that acceptance; retire only the journal for the recorded commit.
   if (journal.committedHead && (!head || !backend.sameRevision(head.revision, journal.committedHead.revision))) {
-    const state = await readStateForConfig(config);
+    const state = await timings.measure("transfer state read", () => readStateForConfig(config));
     await validate();
     if (
       matchesAcceptedState(state, config, journal.committedHead, journal.accepted ?? journal.after, journal.progress)
@@ -595,8 +681,10 @@ async function completeJournal(
     }
   }
   if (journal.applyOnly && (!head || !backend.sameRevision(head.revision, journal.expectedHead.revision))) {
-    const local = await createSnapshot(config.snapshotIdentity, snapshotOptions);
-    const state = await readStateForConfig(config);
+    const local = await timings.measure("transfer local snapshot", () =>
+      createSnapshot(config.snapshotIdentity, snapshotOptions),
+    );
+    const state = await timings.measure("transfer state read", () => readStateForConfig(config));
     await validate();
     if (
       sameHashes(fileHashMap(local), fileHashMap(journal.before)) &&
@@ -616,14 +704,16 @@ async function completeJournal(
       "Publication outcome cannot be reconciled with the current remote head. Journal and backup retained; do not retry publication or restore old bytes blindly.",
     );
   }
-  const observed = await readSnapshotForHead(backend, head, signal);
+  const observed = await timings.measure("transfer snapshot download", () =>
+    readSnapshotForHead(backend, head, signal),
+  );
   requireCompatibleRemoteSelection(config, observed);
   if (
     !sameHashes(fileHashMap(observed), fileHashMap(journal.upload)) ||
     JSON.stringify(observed.selection) !== JSON.stringify(journal.upload.selection)
   )
     throw new Error("Remote snapshot does not match the recorded merge publication.");
-  const state = await readStateForConfig(config);
+  const state = await timings.measure("transfer state read", () => readStateForConfig(config));
   if (matchesAcceptedState(state, config, head, journal.accepted ?? journal.after, journal.progress)) {
     await validate();
     await clearMergeJournal(config);
@@ -646,36 +736,44 @@ async function completeJournal(
     validateOwner();
     if (auto && !ctx.isIdle()) throw new Error("Automatic file apply is no longer idle; evidence retained.");
   };
-  await applyMergedSnapshot(
-    journal.before,
-    journal.after,
-    protectedSessionPaths(ctx, sessionRoot),
-    { ...snapshotOptions, validateMutation },
-    validate,
-    ctx.sessionManager.getSessionFile?.(),
+  await timings.measure("transfer local apply", () =>
+    applyMergedSnapshot(
+      journal.before,
+      journal.after,
+      protectedSessionPaths(ctx, sessionRoot),
+      { ...snapshotOptions, validateMutation },
+      validate,
+      ctx.sessionManager.getSessionFile?.(),
+    ),
   );
   await validate();
-  const headAtAcceptance = await backend.readHead(signal);
+  const headAtAcceptance = await timings.measure("transfer remote head", () => backend.readHead(signal));
   await validate();
   if (!headAtAcceptance || !backend.sameRevision(headAtAcceptance.revision, head.revision))
     throw new Error("Remote changed during merged apply; journal and backup retained for review.");
-  await writeAcceptedState(config, head, journal.accepted ?? journal.after, validate, journal.progress);
+  await timings.measure("transfer baseline write", () =>
+    writeAcceptedState(config, head, journal.accepted ?? journal.after, validate, journal.progress),
+  );
   await validate();
   await clearMergeJournal(config);
   await validate();
-  await pruneMergeBaselines(
-    config,
-    acceptedState(config, head, journal.accepted ?? journal.after, journal.progress),
-    captureMutationOwner(ctx, signal),
+  await timings.measure("transfer cleanup", () =>
+    pruneMergeBaselines(
+      config,
+      acceptedState(config, head, journal.accepted ?? journal.after, journal.progress),
+      captureMutationOwner(ctx, signal),
+    ),
   );
   await validate();
-  await pruneCompletedConflicts(
-    config,
-    backend.identity,
-    acceptedState(config, head, journal.accepted ?? journal.after, journal.progress),
-    journal.accepted ?? journal.after,
-    journal.upload,
-    captureMutationOwner(ctx, signal),
+  await timings.measure("transfer cleanup", () =>
+    pruneCompletedConflicts(
+      config,
+      backend.identity,
+      acceptedState(config, head, journal.accepted ?? journal.after, journal.progress),
+      journal.accepted ?? journal.after,
+      journal.upload,
+      captureMutationOwner(ctx, signal),
+    ),
   );
   await validate();
   return true;

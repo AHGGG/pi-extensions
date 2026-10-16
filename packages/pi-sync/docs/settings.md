@@ -168,7 +168,10 @@ There is no project or environment override.
 
 With `debug: true`, TUI/RPC notifications report local initialization after recovery and settings resolution, then background work when it ends.
 Stages include transaction recovery, settings reads, inspection import, backend initialization, local snapshot, sync state read, remote head, operations import, and automatic transfer when those stages run.
-The inspection-and-guards duration includes its nested stages and lock access; durations overlap and must not be summed.
+Automatic-transfer details separate authorization, journal recovery, state and local reads, remote-head reads, snapshot downloads, merge planning, backup, publication, local apply, baseline writes, and cleanup.
+Repeated stages aggregate elapsed time and show a call count. Stage output stays bounded during retries.
+Inspection-and-guards, automatic transfer, journal recovery, and unchanged verification include their nested stages; durations overlap and must not be summed.
+An eligible no-change transfer reports `transfer result: unchanged (fast path)`.
 Totals use a monotonic clock and include waits within each flow, not Pi's complete startup, the initial extension import/factory, or time queued for idle startup transfer.
 Recovery failures before valid settings can be read cannot enable a timing report.
 
@@ -238,7 +241,19 @@ Pull protects the currently open session file; restart Pi or resume a pulled ses
 
 When explicitly enabled, one startup transfer waits for an idle boundary in TUI/RPC. It requires an accepted baseline and a matching authoritative remote include list, retains all-or-nothing conflict review, checks secrets unless the global scan override is enabled, and never reloads resources. Git, verified conditional WebDAV, and R2/S3 with verified conditional writes support this policy. A saved On preference is not proof of eligibility: baseline, remote policy, idle ownership, conflicts, secrets, and publication capability are checked again at execution. Print/JSON skip automatic startup transfer. A settings save takes effect for subsequent authorization checks; enabling schedules the next session start, while foreground Settings cancels and drains any current work before saving. There is no polling.
 
-Turning it off does not revert transfers or remove backups/journals. For interrupted operations, follow [merge recovery](merge-implementation-audit.md). Unknown fields remain preserved and malformed/invalid files block saves, just as for the existing policy.
+#### Unchanged transfer fast path
+
+After pending merge journals are handled, automatic transfer reads a fresh remote head instead of trusting the earlier startup observation.
+It can return without downloading the remote snapshot or writing a baseline only when the head ID/revision and ordered selection match a complete clean merged baseline, local portable hashes match that baseline, and the current ancestor cache is valid and complete for the enabled merge policy.
+Local files, state, settings, idle authorization, and session ownership are rechecked after ancestor reads.
+This path makes no managed-file, remote, baseline, or ancestor-cache changes; it does not re-download and verify an already accepted immutable snapshot or run normal no-transfer retention cleanup.
+
+Manual sync retains the full path. Directional/legacy baselines, missing revisions or selection metadata, unresolved groups, changed policy or content, and missing/invalid/incomplete ancestors also retain the full path.
+Partial-sync setups keep the full path even with no unresolved groups, so snapshot-format upgrades and partial-state maintenance are not skipped.
+A baseline established by a directional push/pull may therefore need one full automatic sync before later starts use the fast path.
+Across startup inspection and transfer, an eligible unchanged setup makes two fresh head reads, with no snapshot download; a normal full no-transfer merge makes three head reads and one snapshot download in addition to inspection.
+
+Turning **Startup transfer** off does not revert transfers or remove backups/journals. For interrupted operations, follow [merge recovery](merge-implementation-audit.md). Unknown fields remain preserved and malformed/invalid files block saves, just as for the existing policy.
 
 ### Settings field merge and machine-local fields
 
