@@ -75,6 +75,33 @@ test("monotonic timings retain the original error but publish no error text", as
   }
 });
 
+test("repeated transfer stages aggregate durations and counts without losing interruption", async () => {
+  let now = 0;
+  const clock = vi.spyOn(performance, "now").mockImplementation(() => now);
+  try {
+    const timings = createStartupTimings();
+    for (let index = 0; index < 100; index++) {
+      await timings.measure("transfer remote head", () => {
+        now += 2;
+      });
+    }
+    await assert.rejects(
+      timings.measure("transfer remote head", () => {
+        now += 3;
+        throw new Error("private");
+      }),
+    );
+    const context = createMockContext({ mode: "rpc" });
+    timings.publish(context.ctx, true, new AbortController().signal, "background startup", "stopped");
+    const report = reports(context)[0]?.message ?? "";
+    assert.match(report, /transfer remote head: 203\.0 ms \(101 calls\) \(interrupted\)/u);
+    assert.equal(report.split("\n").length, 3, "retries do not produce unbounded output");
+    assert.doesNotMatch(report, /private/u);
+  } finally {
+    clock.mockRestore();
+  }
+});
+
 for (const debug of [undefined, false, true]) {
   for (const mode of ["tui", "rpc", "print", "json"] as const) {
     test(`startup debug=${debug} in ${mode} only reports through supported UI`, async () => {

@@ -133,6 +133,7 @@ export function createStartupCheck(loaders: SyncLoaders, attention: SyncAttentio
                       reload: false,
                       auto: true,
                       signal,
+                      startupTimings: timings,
                       onCommit: () => attention.clearObservation(),
                     }),
                   ),
