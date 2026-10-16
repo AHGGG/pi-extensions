@@ -230,3 +230,19 @@ test("compaction logging defaults off, validates booleans, and persists explicit
   await runtime.update({ logCompaction: false });
   assert.equal((await runtime.reload()).settings.logCompaction, false);
 });
+
+test("auto-apply is opt-in, strictly boolean, and persists without losing unknown fields", async () => {
+  assert.equal(DEFAULT_CODEX_COMPACT_SETTINGS.asyncAutoApply, false);
+  for (const asyncAutoApply of [true, false])
+    assert.equal(normalizeCodexCompactSettings({ asyncAutoApply })?.asyncAutoApply, asyncAutoApply);
+  for (const asyncAutoApply of [null, 0, "true", {}, []])
+    assert.equal(normalizeCodexCompactSettings({ asyncAutoApply }), undefined);
+  const path = await tempSettingsPath();
+  await writeFile(path, '{"future":"keep"}');
+  const runtime = createCodexCompactSettingsRuntime(path);
+  await runtime.update({ asyncAutoApply: true });
+  assert.equal((await runtime.reload()).settings.asyncAutoApply, true);
+  assert.deepEqual(JSON.parse(await readFile(path, "utf8")), { future: "keep", asyncAutoApply: true });
+  await runtime.update({ asyncAutoApply: false });
+  assert.equal((await runtime.reload()).settings.asyncAutoApply, false);
+});

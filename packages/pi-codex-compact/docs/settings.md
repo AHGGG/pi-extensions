@@ -17,7 +17,8 @@ An absent file uses defaults without creating a file. Save only the fields you n
 | Setting | Default | Accepted values | Behavior | Recommendation |
 | --- | ---: | --- | --- | --- |
 | `enabled` | `true` | Boolean | Attempt remote compaction and replay compatible opaque checkpoints. | Keep enabled when a session needs an existing checkpoint; disabling it also disables replay. |
-| `asyncEnabled` | `false` | Boolean | Enable experimental background checkpoint preparation after safe completed turns for adoption by Pi automatic compaction only. | Leave off unless unused-request quota and uncertain latency gains are acceptable; manual compaction stays foreground. |
+| `asyncEnabled` | `false` | Boolean | Enable experimental background checkpoint preparation after safe completed turns for reuse by plain manual or Pi automatic compaction. | Leave off unless unused-request quota and uncertain latency gains are acceptable; pending preparation still uses foreground manual compaction. |
+| `asyncAutoApply` | `false` | Boolean | Apply a ready checkpoint after the run settles or before the next input; requires `enabled` and `asyncEnabled`. | Enable to avoid manually applying ready checkpoints. Never interrupts active work or starts another inference request. |
 | `asyncThresholdPercent` | `65` | Integer from 1 to 99 | Minimum context-window usage percentage for background preparation. | This is a preparation threshold, not a replacement for Pi's automatic compaction threshold. |
 | `protocol` | `"auto"` | `"auto"`, `"remote-v2"`, `"responses-compact"`, or `"context-management"` | Select a preferred protocol; verified official OpenAI ChatGPT OAuth resolves to Context Management for every preference. | Keep `auto`; select Context Management explicitly for other compatible backends. |
 | `apiProfiles` | `{}` | Object mapping a custom API id to `"codex-responses-v1"` | Explicitly opts a non-built-in API into Codex-compatible request fields and replay. | Leave empty unless the provider documents Codex Responses compatibility. |
@@ -30,7 +31,7 @@ An absent file uses defaults without creating a file. Save only the fields you n
 
 Missing fields use defaults.
 Settings reload on every `session_start`, including `/reload`, resume, and fork.
-Menu writes apply immediately, preserve unknown JSON fields, serialize within the current Pi process, and use a final conflict check plus same-directory atomic rename. Successful settings changes discard pending or ready warm-ahead work; failed saves keep the previous effective settings.
+Menu writes apply immediately, preserve unknown JSON fields, serialize within the current Pi process, and use a final conflict check plus same-directory atomic rename. Successful settings changes except `logCompaction` and `asyncAutoApply` discard pending or ready warm-ahead work; failed saves keep the previous effective settings.
 On Unix, temporary files use mode `0600`.
 
 Malformed, invalid, oversized, or symlinked settings files remain unchanged.

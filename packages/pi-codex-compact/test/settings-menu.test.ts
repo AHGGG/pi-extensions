@@ -117,6 +117,7 @@ test("settings screen exposes bounded controls and invalid files remain repairab
     [
       ["enabled", "On"],
       ["asyncEnabled", "Off"],
+      ["asyncAutoApply", "Off"],
       ["asyncThresholdPercent", "65%"],
       ["logCompaction", "Off"],
       ["protocol", "Auto"],
@@ -578,6 +579,7 @@ test("TUI forwards warm-ahead status and save callbacks while new settings retai
           await harness.waitForPending();
         } else if (screens === 3) {
           harness.handleInput("tui.select.down");
+          harness.handleInput("tui.select.down");
           harness.handleInput("tui.select.confirm");
           await harness.waitForPending();
         } else {
@@ -642,6 +644,28 @@ test("logging toggle applies immediately without cancelling compaction work", as
       value,
     });
     assert.equal(memory.runtime.get().settings.logCompaction, value === "On");
+  }
+  assert.equal(cancellations, 0);
+});
+
+test("auto-apply toggle applies immediately without cancelling compaction work", async () => {
+  const memory = memoryRuntime();
+  let cancellations = 0;
+  const menu = createCodexCompactMenu(memory.runtime, {
+    onSettingsChanged: () => {
+      cancellations += 1;
+    },
+  });
+  const { ctx } = createMockContext({ mode: "tui" });
+  for (const value of ["On", "Off"]) {
+    await menu.actions["set-async-auto-apply"]({
+      ctx,
+      state: memory.runtime.get(),
+      signal: new AbortController().signal,
+      itemId: "asyncAutoApply",
+      value,
+    });
+    assert.equal(memory.runtime.get().settings.asyncAutoApply, value === "On");
   }
   assert.equal(cancellations, 0);
 });

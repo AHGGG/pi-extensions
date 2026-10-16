@@ -11,6 +11,7 @@ export const MAX_SETTINGS_BYTES = 64 * 1024;
 export interface CodexCompactSettings {
   enabled: boolean;
   asyncEnabled: boolean;
+  asyncAutoApply: boolean;
   logCompaction: boolean;
   asyncThresholdPercent: number;
   protocol: RemoteCompactionProtocolSetting;
@@ -22,15 +23,16 @@ export interface CodexCompactSettings {
   checkpointRecovery: "summarize" | "cancel";
 }
 
-/** Observability changes do not invalidate prepared work or pending continuation. */
+/** Logging and application timing do not invalidate prepared work or pending continuation. */
 export function compactionSettingsKey(settings: CodexCompactSettings): string {
-  const { logCompaction: _logCompaction, ...compactionSettings } = settings;
+  const { logCompaction: _logCompaction, asyncAutoApply: _asyncAutoApply, ...compactionSettings } = settings;
   return JSON.stringify(compactionSettings);
 }
 
 export const DEFAULT_CODEX_COMPACT_SETTINGS: Readonly<CodexCompactSettings> = Object.freeze({
   enabled: true,
   asyncEnabled: false,
+  asyncAutoApply: false,
   logCompaction: false,
   asyncThresholdPercent: 65,
   protocol: "auto",
@@ -124,6 +126,7 @@ export function normalizeCodexCompactSettings(value: unknown): CodexCompactSetti
   if (!isRecord(value)) return undefined;
   if (Object.hasOwn(value, "enabled") && typeof value.enabled !== "boolean") return undefined;
   if (Object.hasOwn(value, "logCompaction") && typeof value.logCompaction !== "boolean") return undefined;
+  if (Object.hasOwn(value, "asyncAutoApply") && typeof value.asyncAutoApply !== "boolean") return undefined;
   if (Object.hasOwn(value, "asyncEnabled") && typeof value.asyncEnabled !== "boolean") return undefined;
   if (
     Object.hasOwn(value, "protocol") &&
@@ -157,6 +160,8 @@ export function normalizeCodexCompactSettings(value: unknown): CodexCompactSetti
     enabled: typeof value.enabled === "boolean" ? value.enabled : DEFAULT_CODEX_COMPACT_SETTINGS.enabled,
     asyncEnabled:
       typeof value.asyncEnabled === "boolean" ? value.asyncEnabled : DEFAULT_CODEX_COMPACT_SETTINGS.asyncEnabled,
+    asyncAutoApply:
+      typeof value.asyncAutoApply === "boolean" ? value.asyncAutoApply : DEFAULT_CODEX_COMPACT_SETTINGS.asyncAutoApply,
     logCompaction:
       typeof value.logCompaction === "boolean" ? value.logCompaction : DEFAULT_CODEX_COMPACT_SETTINGS.logCompaction,
     asyncThresholdPercent:

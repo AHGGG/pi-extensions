@@ -11,6 +11,7 @@ type Action =
   | "set-enabled"
   | "set-log-compaction"
   | "set-async-enabled"
+  | "set-async-auto-apply"
   | "set-async-threshold"
   | "set-protocol"
   | "set-timeout"
@@ -74,7 +75,7 @@ async function update(
   try {
     await runtime.update(patch, signal);
     if (signal.aborted) return { kind: "rejected" as const };
-    if (Object.keys(patch).some((key) => key !== "logCompaction")) onSettingsChanged?.();
+    if (Object.keys(patch).some((key) => key !== "logCompaction" && key !== "asyncAutoApply")) onSettingsChanged?.();
     ctx.ui.notify("Responses compaction settings saved.", "info");
     return { kind: "stay" as const };
   } catch (error) {
@@ -111,6 +112,7 @@ export function createCodexCompactMenu(
         lines: [
           `Remote compaction: ${state.settings.enabled ? "On" : "Off"}`,
           `Warm-ahead (experimental): ${state.settings.asyncEnabled ? `On · ${state.settings.asyncThresholdPercent}%` : "Off"}`,
+          `Apply when ready: ${state.settings.asyncAutoApply ? "On" : "Off"}`,
           `Compaction logs: ${state.settings.logCompaction ? "On" : "Off"}`,
           ...backgroundStatusLines(options.backgroundStatus?.()),
           `Protocol setting: ${protocolLabel(state.settings.protocol)}`,
@@ -176,9 +178,18 @@ export function createCodexCompactMenu(
             action: "set-async-enabled",
           },
           {
+            id: "asyncAutoApply",
+            label: "Apply when ready",
+            description:
+              "Apply a ready warm-ahead checkpoint after the run settles or before the next input. Requires warm-ahead.",
+            currentValue: state.settings.asyncAutoApply ? "On" : "Off",
+            values: ["On", "Off"],
+            action: "set-async-auto-apply",
+          },
+          {
             id: "asyncThresholdPercent",
             label: "Warm-ahead threshold",
-            description: "Context-window usage that permits background preparation; Pi still decides when to compact.",
+            description: "Context-window usage that permits background preparation.",
             currentValue: `${state.settings.asyncThresholdPercent}%`,
             values: ["50%", "60%", "65%", "70%", "75%", "80%", "90%"],
             action: "set-async-threshold",
@@ -261,6 +272,7 @@ export function createCodexCompactMenu(
       },
       "set-log-compaction": ({ ctx, value, signal }) => save(ctx, { logCompaction: value === "On" }, signal),
       "set-enabled": ({ ctx, value, signal }) => save(ctx, { enabled: value === "On" }, signal),
+      "set-async-auto-apply": ({ ctx, value, signal }) => save(ctx, { asyncAutoApply: value === "On" }, signal),
       "set-async-enabled": ({ ctx, value, signal }) => save(ctx, { asyncEnabled: value === "On" }, signal),
       "set-async-threshold": ({ ctx, value, signal }) =>
         save(ctx, { asyncThresholdPercent: Number.parseInt(value ?? "65", 10) }, signal),

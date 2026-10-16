@@ -70,10 +70,12 @@ export function createCodexCompactExtension(
       operation?: AbortController;
       warm?: WarmCompactionJob;
       compactionPending?: boolean;
+      autoApply?: { job: WarmCompactionJob; done: Promise<void> };
       run?: ContinuationRun;
       lastRoute?: { key: string; protocol: RemoteCompactionProtocol };
     };
     const owners = new WeakMap<object, Owner>();
+    const autoApplyAttempts = new WeakSet<WarmCompactionJob>();
     const ownerFor = (ctx: ExtensionContext): Owner => {
       let owner = owners.get(ctx.sessionManager);
       const sessionId = ctx.sessionManager.getSessionId();
@@ -123,6 +125,59 @@ export function createCodexCompactExtension(
         owner.operation = undefined;
         ctx.ui.setStatus(STATUS_KEY, undefined);
       }
+    };
+
+    // Pi's compact() aborts active work. Only await it at idle lifecycle boundaries:
+    // agent_settled defers incoming prompts; input holds the next prompt before it runs.
+    // A ready promise alone is not a boundary (another input may be in preflight).
+    const applyReadyAtBoundary = async (ctx: ExtensionContext) => {
+      const owner = owners.get(ctx.sessionManager);
+      if (!owner) return;
+      if (owner.autoApply) {
+        await owner.autoApply.done;
+        return;
+      }
+      const job = owner.warm;
+      const settings = settingsRuntime.get().settings;
+      if (
+        !settings.enabled ||
+        !settings.asyncEnabled ||
+        !settings.asyncAutoApply ||
+        !job ||
+        job.state !== "Ready" ||
+        !job.isCurrent() ||
+        owner.controller.signal.aborted ||
+        owner.sessionId !== ctx.sessionManager.getSessionId() ||
+        owner.operation ||
+        owner.compactionPending ||
+        !ctx.isIdle() ||
+        ctx.hasPendingMessages() ||
+        autoApplyAttempts.has(job)
+      )
+        return;
+      autoApplyAttempts.add(job);
+      let finish!: () => void;
+      const done = new Promise<void>((resolve) => {
+        finish = resolve;
+      });
+      const claim = { job, done };
+      owner.autoApply = claim;
+      const release = () => {
+        if (owner.autoApply === claim) owner.autoApply = undefined;
+        finish();
+      };
+      try {
+        ctx.compact({
+          onComplete: release,
+          onError: () => {
+            logCompaction(ctx, "Automatic checkpoint application did not complete; history preserved.");
+            release();
+          },
+        });
+      } catch {
+        release();
+      }
+      await done;
     };
 
     pi.registerCommand("codex-compact", {
@@ -257,7 +312,9 @@ export function createCodexCompactExtension(
           () =>
             report(
               job.state === "Ready"
-                ? "Async compaction ready: run /compact to apply the prepared checkpoint. History is unchanged until compaction."
+                ? settingsRuntime.get().settings.asyncAutoApply
+                  ? "Async compaction ready: the prepared checkpoint will apply after this run settles or before the next input."
+                  : "Async compaction ready: run /compact to apply the prepared checkpoint. History is unchanged until compaction."
                 : "Async compaction failed: actual compaction will use the foreground recovery path.",
               job.state === "Ready",
             ),
@@ -269,6 +326,7 @@ export function createCodexCompactExtension(
     pi.on("session_before_compact", (event, ctx) => {
       const owner = ownerFor(ctx);
       const run = owner.run;
+      const autoApply = owner.autoApply;
       const reason = event.reason === "manual" ? "manual" : event.reason === "overflow" ? "overflow" : "threshold";
       logCompaction(ctx, `Actual compaction triggered (${reason}).`);
       if (run) run.pending = undefined;
@@ -291,6 +349,7 @@ export function createCodexCompactExtension(
         const currentSettings = settingsRuntime.get().settings;
         const currentRoute = resolveCompactionRoute(ctx.model, currentSettings);
         return (
+          (!autoApply || (currentSettings.asyncAutoApply && currentSettings.asyncEnabled && currentSettings.enabled)) &&
           compactionSettingsKey(currentSettings) === compactionSettingsKey(settings) &&
           (key === undefined ||
             (!!ctx.model && currentRoute.kind === "remote" && rejectionRouteKey(ctx.model, currentRoute) === key))
@@ -298,6 +357,18 @@ export function createCodexCompactExtension(
       };
       const execute = async () => {
         let failedAttempt: CompactionAttempt | undefined;
+        // An automatic application only adopts its exact prepared checkpoint. Never
+        // turn a stale/auth-changed checkpoint into an unsolicited inference request.
+        if (
+          autoApply &&
+          (warm !== autoApply.job ||
+            event.reason !== "manual" ||
+            event.customInstructions?.trim() ||
+            !settings.asyncAutoApply ||
+            !settings.asyncEnabled ||
+            !settings.enabled)
+        )
+          return { cancel: true };
         if (warm) {
           if (warm.state === "Preparing" && warm.isCurrent())
             logCompaction(ctx, "Actual compaction is waiting for the in-flight async checkpoint.");
@@ -309,6 +380,9 @@ export function createCodexCompactExtension(
             AbortSignal.any([owner.controller.signal, operation.signal]),
             isCurrent,
           );
+          // Switching automatic application off cancels the claim, not valid
+          // prepared work: leave it available for a later manual compaction.
+          if (autoApply && !settingsRuntime.get().settings.asyncAutoApply && warm.isCurrent()) return { cancel: true };
           if (owner.warm === warm) owner.warm = undefined;
           warm.controller.abort();
           if (adoption.kind === "cancel") return { cancel: true };
@@ -316,6 +390,7 @@ export function createCodexCompactExtension(
             if (isCurrent()) logCompaction(ctx, "Actual compaction is reusing the async checkpoint.");
             return adoption.result;
           }
+          if (autoApply) return { cancel: true };
           if (isCurrent()) logCompaction(ctx, "Async checkpoint unavailable; using the foreground compaction path.");
           if (adoption.kind === "failed") failedAttempt = adoption.attempt;
         }
@@ -470,10 +545,15 @@ export function createCodexCompactExtension(
       if (run) run.pending = undefined;
     });
 
-    pi.on("agent_settled", (event, ctx) => {
+    pi.on("input", async (_event, ctx) => {
+      await applyReadyAtBoundary(ctx);
+    });
+
+    pi.on("agent_settled", async (event, ctx) => {
       if (event.aborted) cancelWarm(ctx);
       const owner = owners.get(ctx.sessionManager);
       if (owner) owner.run = undefined;
+      if (!event.aborted) await applyReadyAtBoundary(ctx);
     });
 
     pi.on("context", (event, ctx) => {
