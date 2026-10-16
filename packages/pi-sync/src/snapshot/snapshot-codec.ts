@@ -2,6 +2,7 @@ import { Readable, Writable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { promisify } from "node:util";
 import { createGunzip, gzip } from "node:zlib";
+import { throwIfAborted } from "../sync/signals.js";
 import { snapshotSelectionInclude } from "../sync/sync-policy.js";
 import type { Snapshot } from "./snapshot-types.js";
 
@@ -46,9 +47,4 @@ export async function decodeSnapshot(
   } else if (parsed.localFields !== undefined) throw new Error("Portable field policy requires snapshot version 2.");
   snapshotSelectionInclude(parsed);
   return parsed;
-}
-
-function throwIfAborted(signal?: AbortSignal) {
-  if (!signal?.aborted) return;
-  throw signal.reason instanceof Error ? signal.reason : new DOMException("The operation was aborted", "AbortError");
 }

@@ -1,4 +1,5 @@
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
+import { throwIfAborted } from "../../sync/signals.js";
 import { promptSecret } from "../secret-input.js";
 import { requiredValueInput } from "./text-input.js";
 
@@ -69,9 +70,4 @@ export async function chooseS3Credentials(
     summary: "Stored privately (values hidden)",
     ready: true,
   };
-}
-
-function throwIfAborted(signal?: AbortSignal) {
-  if (!signal?.aborted) return;
-  throw signal.reason instanceof Error ? signal.reason : new DOMException("The operation was aborted", "AbortError");
 }

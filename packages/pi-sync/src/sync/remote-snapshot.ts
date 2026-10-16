@@ -5,6 +5,7 @@ import { filterSnapshotForConfigPolicy } from "../snapshot/snapshot.js";
 import type { Snapshot } from "../snapshot/snapshot-types.js";
 import { safeTerminalText } from "../ui/terminal-text.js";
 import { sameLocalFields, validatePortableSnapshot } from "./local-fields.js";
+import { throwIfAborted } from "./signals.js";
 import {
   inspectRemoteSelection,
   type RemoteSelectionState,
@@ -15,9 +16,7 @@ import {
 
 export async function readSnapshotForHead(backend: SyncBackend, head: RemoteHead, signal?: AbortSignal) {
   const snapshot = await backend.readSnapshot(head.snapshotRef, signal);
-  if (signal?.aborted) {
-    throw signal.reason instanceof Error ? signal.reason : new DOMException("The operation was aborted", "AbortError");
-  }
+  throwIfAborted(signal);
   validatePortableSnapshot(snapshot);
   if (snapshot.id !== head.snapshotId) {
     throw new Error(`Remote head ${head.snapshotId} resolved to unexpected snapshot ${snapshot.id}.`);

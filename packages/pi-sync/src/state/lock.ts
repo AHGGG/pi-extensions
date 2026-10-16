@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import lockfile from "proper-lockfile";
 import type { CommandOptions } from "../commands/command-types.js";
+import { throwIfAborted } from "../sync/signals.js";
 import { LOCK_GUARD_STALE_MS, LOCK_GUARD_UPDATE_MS } from "./lock-policy.js";
 import { LOCKFILE_FS_ADAPTER } from "./lockfile-fs.js";
 import type { LockFile } from "./state-types.js";
@@ -218,11 +219,6 @@ async function unlockGuarded(ctx: ExtensionCommandContext, options: CommandOptio
   if (!options.signal?.aborted) {
     ctx.ui.notify("Removed stale pi-sync lock. No settings, files, sync state, or remote data were changed.", "info");
   }
-}
-
-function throwIfAborted(signal?: AbortSignal) {
-  if (!signal?.aborted) return;
-  throw signal.reason instanceof Error ? signal.reason : new DOMException("The operation was aborted", "AbortError");
 }
 
 async function releaseGuard(guard: Guard) {

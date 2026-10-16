@@ -4,9 +4,11 @@ import { sessionTokenWarnings } from "../../settings/config.js";
 import { decodeSnapshot, encodeSnapshot } from "../../snapshot/snapshot-codec.js";
 import type { Snapshot } from "../../snapshot/snapshot-types.js";
 import { validatePortableSnapshot } from "../../sync/local-fields.js";
+import { throwIfAborted } from "../../sync/signals.js";
 import { syncErrorGuidance } from "../../sync/sync-error-guidance.js";
 import { portableSnapshotSelection } from "../../sync/sync-policy.js";
 import type { LatestPointer, RemoteObject, ResolvedS3Backend } from "../backend-types.js";
+import { createLatestPointer, remoteHistoryEntry } from "../snapshot-pointer.js";
 import {
   type BackendDiagnostic,
   type ExpectedRemoteHead,
@@ -318,16 +320,7 @@ export function storageRoot(config: ResolvedS3Backend) {
 }
 
 export function pointerFor(config: ResolvedS3Backend, snapshot: Snapshot, checksum: string): LatestPointer {
-  return {
-    version: VERSION,
-    profile: config.destination.namespace,
-    snapshot: snapshot.id,
-    sha256: checksum,
-    createdAt: snapshot.createdAt,
-    machine: snapshot.machine,
-    syncSessions: snapshot.syncSessions === true || snapshot.files.some((file) => file.path.startsWith("sessions/")),
-    ...(snapshot.selection === undefined ? {} : { selection: snapshot.selection }),
-  };
+  return createLatestPointer(config.destination.namespace, snapshot, checksum);
 }
 
 export function s3BackendIdentity(config: ResolvedS3Backend) {
@@ -363,16 +356,6 @@ function secretFreeEndpoint(value: string) {
 
 function trimSlashes(value: string) {
   return value.replace(/^\/+|\/+$/g, "");
-}
-
-function remoteHistoryEntry(pointer: LatestPointer): RemoteHistoryEntry {
-  return {
-    snapshotRef: pointer.snapshot,
-    snapshotId: pointer.snapshot,
-    createdAt: pointer.createdAt,
-    machine: pointer.machine,
-    syncSessions: pointer.syncSessions === true,
-  };
 }
 
 function remoteHead(pointer: LatestPointer, identity: string, etag?: string): RemoteHead {
@@ -527,11 +510,6 @@ function hasControlCharacter(value: string) {
     const code = character.codePointAt(0) ?? 0;
     return code < 0x20 || code === 0x7f;
   });
-}
-
-function throwIfAborted(signal?: AbortSignal) {
-  if (!signal?.aborted) return;
-  throw signal.reason instanceof Error ? signal.reason : new DOMException("The operation was aborted", "AbortError");
 }
 
 function sha256(value: Buffer) {

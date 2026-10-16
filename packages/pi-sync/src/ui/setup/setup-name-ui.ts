@@ -1,5 +1,6 @@
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { validateConfigName } from "../../settings/settings-validation.js";
+import { throwIfAborted } from "../../sync/signals.js";
 import { errorMessage } from "../../sync/sync-errors.js";
 import { safeTerminalText } from "../terminal-text.js";
 
@@ -10,11 +11,7 @@ export async function promptInitialSetupName(ctx: ExtensionCommandContext, signa
     const guidance = ctx.mode === "tui" ? ctx.ui.theme.fg("muted", hint) : hint;
     // This compact prompt owns its default hint; the general helper would repeat it.
     const value = await ctx.ui.input(`Sync setup name\n${guidance}`, undefined, { signal });
-    if (signal?.aborted) {
-      throw signal.reason instanceof Error
-        ? signal.reason
-        : new DOMException("The operation was aborted", "AbortError");
-    }
+    throwIfAborted(signal);
     if (value === undefined) return undefined;
     const name = value.trim() || "default";
     try {

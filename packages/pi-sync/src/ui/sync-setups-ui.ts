@@ -3,6 +3,7 @@ import { defineMenu, runMenu } from "@narumitw/pi-tui-kit";
 import { loadConfig } from "../settings/config.js";
 import { readLocalConfigObject } from "../settings/settings-store.js";
 import { ownRecord } from "../settings/settings-validation.js";
+import { throwIfAborted } from "../sync/signals.js";
 import { syncErrorGuidance } from "../sync/sync-error-guidance.js";
 import { syncIncludeSelection } from "../sync/sync-policy.js";
 import { safeTerminalText } from "./terminal-text.js";
@@ -22,11 +23,6 @@ export async function countValidSyncSetups(setups: Record<string, unknown> | und
     if (valid) count += 1;
   }
   return count;
-}
-
-function throwIfAborted(signal?: AbortSignal) {
-  if (!signal?.aborted) return;
-  throw signal.reason instanceof Error ? signal.reason : new DOMException("The operation was aborted", "AbortError");
 }
 
 type SyncSetupActions = {

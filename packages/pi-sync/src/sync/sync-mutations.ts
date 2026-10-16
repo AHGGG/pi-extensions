@@ -451,15 +451,13 @@ export async function syncBoth(
   throwIfAborted(options.signal);
   const localChanged = hasLocalChanges(local, state, config);
   const remoteChanged = remote ? hasRemoteChanges(remote, state, config, protectedSessionPaths(ctx)) : false;
-  const firstSync = !state.lastAppliedSnapshot;
   if (options.auto) throw new Error("Automatic transfer is not authorized by the current settings.");
 
+  // Established baselines return through mergeSync above; only initial-source selection remains.
   const portableLocal = portableSnapshot(local, config.localFields);
   const acceptMatchingState = async (snapshot: Snapshot) => {
     requireCompatibleRemoteSelection(config, snapshot);
     const accepted = portableSnapshot(snapshot, config.localFields);
-    if (state.lastAppliedSnapshot && !sameLocalFields(state.localFields, config.localFields))
-      throw new Error("Local-field rules changed; review and confirm a directional migration first.");
     await writeStateForConfig(
       config,
       {
@@ -477,7 +475,7 @@ export async function syncBoth(
     await pruneMergeBaselines(config, await readStateForConfig(config), validateMutation);
     validateMutation();
   };
-  if (firstSync && remote && remote.files.length > 0 && local.files.length > 0) {
+  if (remote && remote.files.length > 0 && local.files.length > 0) {
     requireCompatibleRemoteSelection(config, remote);
     const portableRemote = portableSnapshot(remote, config.localFields);
     if (!canPullRemoteSettingsOnFirstSync(portableLocal, portableRemote)) {
@@ -524,18 +522,6 @@ export async function syncBoth(
     await acceptMatchingState(remote);
     if (!options.silent) ctx.ui.notify("pi-sync is already up to date.", "info");
     return;
-  }
-  if (localChanged && remoteChanged && state.lastAppliedSnapshot) {
-    throw createSyncDecision({
-      kind: "both-changed",
-      config,
-      state,
-      local,
-      remote,
-      localChanged,
-      remoteChanged,
-      directMessage: "Both local and remote changed. Run /sync diff and resolve with push --force or pull --force.",
-    });
   }
   if (remoteChanged) {
     await pull(ctx, options, factory);

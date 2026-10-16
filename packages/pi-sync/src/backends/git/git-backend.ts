@@ -4,6 +4,7 @@ import path from "node:path";
 import { posixJoin } from "../../paths.js";
 import type { Snapshot, SnapshotFile } from "../../snapshot/snapshot-types.js";
 import { stateDir } from "../../state/state-directory.js";
+import { throwIfAborted } from "../../sync/signals.js";
 import { syncErrorGuidance } from "../../sync/sync-error-guidance.js";
 import type { ResolvedGitBackend } from "../backend-types.js";
 import {
@@ -780,8 +781,4 @@ function sha256(value: Buffer) {
 
 function abortReason(signal: AbortSignal) {
   return signal.reason instanceof Error ? signal.reason : new DOMException("The operation was aborted", "AbortError");
-}
-
-function throwIfAborted(signal?: AbortSignal) {
-  if (signal?.aborted) throw abortReason(signal);
 }

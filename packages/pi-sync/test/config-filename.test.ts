@@ -18,7 +18,8 @@ import {
   withLocalConfigFileLock,
   withMissingConfigReadProbeHookForTest,
 } from "../src/settings/config-file.js";
-import { readLocalConfigObject, updateLocalConfig, writeLocalConfigObject } from "../src/settings/settings-store.js";
+import { readLocalConfigObject, updateLocalConfig } from "../src/settings/settings-store.js";
+import type { PiSyncSettingsV3 } from "../src/settings/settings-types.js";
 import { validateSettingsDocument } from "../src/settings/settings-validation.js";
 import { v3S3Settings, withTempHome } from "./helpers.js";
 
@@ -172,7 +173,7 @@ test("quarantine cleanup never restores over settings raced in after removal", a
 test("pi-sync uses the canonical private settings filename", async () => {
   await withTempHome(async (agentDir) => {
     mkdirSync(agentDir, { recursive: true });
-    await writeLocalConfigObject(v3S3Settings());
+    await updateLocalConfig(() => v3S3Settings() as PiSyncSettingsV3);
     assert.equal(existsSync(localConfigPath()), true);
     assert.equal(path.basename(localConfigPath()), "pi-sync.json");
     if (process.platform !== "win32") {
