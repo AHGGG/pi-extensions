@@ -222,7 +222,7 @@ No model-visible prefix transition is intended. Verify that no tools, context ho
 - [x] `npm run package:pack -- notify` passes and its inspected tarball contains an independently installable package.
 - [x] `npm --workspace @narumitw/pi-notify run build --if-present` and `pi -e ./packages/pi-notify` pass their applicable runtime smoke paths.
 - [ ] Live Telegram smoke has explicit approval and recorded results, or its absence is accepted with precise unverified paths; stop after one clear external entitlement failure and use deterministic tests.
-- [ ] Final diff passes the guides' semantic audit, and handoff names checks, smokes, deviations, and unverified paths; no publication, visibility change, version tag, or release dispatch occurs without explicit approval.
+- [x] Final diff passes the guides' semantic audit, and handoff names checks, smokes, deviations, and unverified paths; no publication, visibility change, version tag, or release dispatch occurs without explicit approval. Evidence: draft PR #1588 records local verification and the live-smoke blocker.
 
 ## Verification evidence
 
@@ -238,7 +238,8 @@ No model-visible prefix transition is intended. Verify that no tools, context ho
 - Unverified: real Telegram token/chat permissions, private/group/forum delivery, actual terminal focus and mouse behavior through SSH/tmux, and physical terminal interaction. Terminal flows have harness coverage, not a human-operated terminal smoke.
 - Blocked: live Telegram smoke requires an approved Bot token and destination chat. No credentials were searched for and no real Telegram message was sent. Absence of that smoke has not been accepted, so its task and completion criterion remain open.
 - npm registry lookup returned 404 for the new package. Documentation uses local checkout installation until publication; no publication, visibility change, tag creation, or release dispatch was performed.
-- Final PR/handoff tracking remains open until the draft pull request is created and its reference is recorded.
+- Draft PR: https://github.com/narumiruna/pi-extensions/pull/1588, based on `main`, with implementation commit `2d539618`. The PR records verification, risks, and blocked acceptance. This plan remains saved because live-smoke acceptance is still open.
+- A human-operated terminal smoke is impractical in this non-interactive harness. Kit harness and Pi Jiti tests verify loading and interactions but do not establish real terminal focus/mouse delivery.
 
 ## Rollback / Recovery
 
