@@ -182,7 +182,7 @@ npm run check
 ```
 
 `npm test` typechecks the test sources and runs the root and workspace suites with Vitest.
-CI and release use `npm ci` with strict dependency script review and a seven-day minimum age for new resolution.
+CI and release use `npm ci` with strict dependency script review and a three-day minimum age for new resolution.
 See [dependency installation policy](./docs/dependency-installation.md) for script approvals, lockfile-age limitations,
 failed-update recovery, urgent-patch review, and toolchain upgrades.
 

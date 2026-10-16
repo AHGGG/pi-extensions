@@ -18,13 +18,13 @@ Install policy is not a sandbox. It does not constrain an approved script, root/
 
 ## Release age and lockfile maintenance
 
-`.npmrc` applies a seven-day minimum release age to newly resolved registry versions. A range may select an older eligible version; a fresh exact version or range with no eligible candidate fails. **Existing lockfile versions can be retained without rechecking age**, both by lockfile-only updates and by `npm ci`. This policy is not an independent age audit of the lockfile.
+`.npmrc` applies a three-day minimum release age to newly resolved registry versions. A range may select an older eligible version; a fresh exact version or range with no eligible candidate fails. **Existing lockfile versions can be retained without rechecking age**, both by lockfile-only updates and by `npm ci`. This policy is not an independent age audit of the lockfile.
 
 `npm run update:lock` asks `npm-check-updates` for proposed versions, then uses `npm install --package-lock-only --ignore-scripts`. The proposal tool may select a version too recent for npm's policy; the subsequent npm resolution then fails rather than silently weakening the age requirement. Changesets' `version-packages` lockfile update has the same boundary. `--ignore-scripts` is intentional for these metadata-only updates and does not itself disable release-age filtering.
 
 If an update fails, inspect the manifest and lockfile diff, then use Git to restore only that attempted update or choose eligible versions and rerun verification. The updater requires a clean worktree before mutation but can leave manifest edits when npm rejects a proposal; there is no automatic rollback.
 
-For an urgent patch, prefer an eligible fixed version where possible. Otherwise review the artifact, advisory, age exception, and exact resulting lockfile diff explicitly, and obtain maintainer approval for a targeted temporary exception during lockfile generation. Do not commit a blanket exclusion, disable strict policy, or silently add overrides to CI. Subsequent normal installs must pass the unchanged preflight and script policy; retaining the reviewed lock does not establish that every entry is seven days old.
+For an urgent patch, prefer an eligible fixed version where possible. Otherwise review the artifact, advisory, age exception, and exact resulting lockfile diff explicitly, and obtain maintainer approval for a targeted temporary exception during lockfile generation. Do not commit a blanket exclusion, disable strict policy, or silently add overrides to CI. Subsequent normal installs must pass the unchanged preflight and script policy; retaining the reviewed lock does not establish that every entry is three days old.
 
 ## Toolchain upgrades and verification
 
