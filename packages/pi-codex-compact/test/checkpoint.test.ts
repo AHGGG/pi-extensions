@@ -145,7 +145,8 @@ test("validates versioned details and rejects malformed or unbounded persisted d
     }),
     { ...details, api: "openai-responses", profile: "openai-responses-v1", protocol: "responses-compact" },
   );
-  assert.equal(parseCheckpointDetails({ ...details, version: 4 }), undefined);
+  assert.deepEqual(parseCheckpointDetails({ ...details, version: 3 }), details);
+  assert.equal(parseCheckpointDetails({ ...details, version: 5 }), undefined);
   assert.equal(parseCheckpointDetails({ ...details, checkpointId: "x".repeat(129) }), undefined);
   assert.equal(parseCheckpointDetails({ ...details, provider: "" }), undefined);
   assert.equal(parseCheckpointDetails({ ...details, provider: "x".repeat(257) }), undefined);
@@ -174,6 +175,31 @@ test("validates versioned details and rejects malformed or unbounded persisted d
   assert.deepEqual(parseCheckpointDetails(custom), custom);
   assert.equal(parseCheckpointDetails({ ...custom, profile: "openai-responses-v1" }), undefined);
   assert.doesNotMatch(JSON.stringify(details), /token|authorization|header/i);
+});
+
+test("v4 validates optional snapshot cutoffs without changing legacy parsing", () => {
+  const details = checkpoint();
+  const warm = createCheckpointDetails({
+    ...details,
+    keptMessages: [],
+    snapshotLeafId: "snapshot-leaf",
+  });
+  assert.equal(warm.version, 4);
+  assert.equal(warm.snapshotLeafId, "snapshot-leaf");
+  assert.deepEqual(parseCheckpointDetails(warm), warm);
+  assert.equal(Object.hasOwn(details, "snapshotLeafId"), false);
+  for (const snapshotLeafId of ["", "x".repeat(129), null, 123, {}, []]) {
+    assert.equal(parseCheckpointDetails({ ...details, snapshotLeafId }), undefined);
+  }
+  for (const version of [1, 2, 3]) {
+    const legacy = {
+      ...details,
+      version,
+      protocol: version === 1 ? "remote-compaction-v2" : "remote-v2",
+      snapshotLeafId: "ignored-legacy-field",
+    };
+    assert.deepEqual(parseCheckpointDetails(legacy), details);
+  }
 });
 
 test("projects the persisted summary without regenerating version-dependent prose", () => {

@@ -23,9 +23,19 @@ Older v1 and v2 checkpoints are normalized to the current checkpoint format when
 
 ## Compaction ownership
 
-Compaction captures immutable serialized branch values before awaiting authentication. The live branch must retain that exact prefix, and appended entries must form direct descendants. Bookkeeping entries (`custom`, `usage`, `label`, and `session_info`) can extend the branch without canceling work. A `context_edit` append is accepted only when Pi's finalized session context remains identical; replacement and omission edits that change the input cancel it. New conversation messages, even hidden custom messages or subsequently omitted turns, new summaries, model/thinking changes, and different ancestry are not bookkeeping.
+Foreground compaction captures immutable serialized branch values before awaiting authentication. The live branch must retain that exact prefix, and appended entries must form direct descendants. Bookkeeping entries (`custom`, `usage`, `label`, and `session_info`) can extend the branch without canceling work. A `context_edit` append is accepted only when Pi's finalized session context remains identical; replacement and omission edits that change the input cancel it. New conversation messages, even hidden custom messages or subsequently omitted turns, new summaries, model/thinking changes, and different ancestry are not bookkeeping.
 
 Ownership checks also require the effective system prompt and ordered active tool names, descriptions, and schemas to remain unchanged. State entries that indirectly change that request input cannot bypass cancellation. The same checks run after asynchronous authentication and provider work, before checkpoint publication, and before recovery or native fallback. Session replacement, reload, shutdown, explicit abort, model/settings changes, and completed tree navigation retain their existing invalidation paths. No extension-specific state identifier or cross-extension dependency is used.
+
+## Experimental warm-ahead ownership and adoption
+
+With `asyncEnabled: true`, a completed `turn_end` boundary may start one background request once context-window usage reaches `asyncThresholdPercent`. Eligibility requires completed, persisted conversation output and its tool results, not a partial stream or an unfinished tool exchange. The request captures an immutable preparation snapshot, its branch ancestry, model and route, settings, system prompt, and ordered active tool definitions. Preparation does not append a compaction entry, change checkpoint replay, or rewrite ordinary provider requests.
+
+The foreground ownership rule above remains strict for foreground requests. Warm-ahead instead permits a validated descendant conversation tail after the immutable snapshot. Adoption must revalidate the snapshot and current projected context rather than blindly reuse Pi's later retained cut point. The adopted checkpoint covers the snapshot only; every post-snapshot conversation entry is retained in original order and content. Any incompatible ownership or projection change invalidates the candidate. Persistence starts a deliberate new model-visible prefix epoch; subsequent ordinary requests must preserve that new prefix. Exact tail preservation does not establish native suffix-cache reuse or any provider-reported cache hit.
+
+Only `session_before_compact` for Pi automatic compaction can adopt a candidate. A ready result is validated before publication; an in-flight request may be awaited only until its original timeout expires. Adoption does not start a fresh timeout. A missing, stale, failed, or incompatible candidate returns to the existing foreground compaction policy, including checkpoint-aware recovery where applicable. Manual compaction always uses foreground preparation. Background work owns no recovery or native-compaction publication before adoption.
+
+User cancellation, settings changes, model changes, navigation, session replacement, reload, shutdown, and aborted `agent_settled` release background work and discard unused results. Completion is not publication and cannot arm automatic continuation; only an actually adopted, persisted checkpoint is eligible under the existing continuation rules. Background requests can consume quota without adoption and provide no latency guarantee.
 
 ## Recovery and native fallback
 
@@ -55,7 +65,7 @@ Ordinary requests preserve their prefix after each compaction and append the con
 
 ## OAuth rejection state
 
-This fork retains upstream's maintenance handoff and single bounded continuation implementation instead of the previous fork-only developer replay boundary. The stored checkpoint format is unchanged. No additional replay clarification is inserted, and normal provider dispatch consumes pending continuation before settlement can schedule another request.
+This fork retains upstream's maintenance handoff and single bounded continuation implementation instead of the previous fork-only developer replay boundary. The opaque replacement-history payload is unchanged; checkpoint v4 adds the snapshot cutoff and continues to read v1–v3 checkpoints. No additional replay clarification is inserted, and normal provider dispatch consumes pending continuation before settlement can schedule another request.
 
 Configured protocol and dispatched protocol have separate roles. Ownership and preference changes are checked using the configured route key; rejection dispatches use the authenticated protocol and endpoint. Successful checkpoint metadata, not the configured preference, determines whether Context Management continuation can be armed. This preserves continuation when Auto or V2 is adapted to Context Management.
 

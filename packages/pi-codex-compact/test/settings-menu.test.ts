@@ -116,6 +116,9 @@ test("settings screen exposes bounded controls and invalid files remain repairab
     screen.items.map((item) => [item.id, item.currentValue]),
     [
       ["enabled", "On"],
+      ["asyncEnabled", "Off"],
+      ["asyncThresholdPercent", "65%"],
+      ["logCompaction", "Off"],
       ["protocol", "Auto"],
       ["checkpointRecovery", "Summarize"],
       ["requestTimeoutMs", "5 min"],
@@ -181,6 +184,9 @@ test("menu actions persist exact setting patches", async () => {
     value,
   });
   await menu.actions["set-enabled"](action("Off"));
+  await menu.actions["set-async-enabled"](action("On"));
+  await menu.actions["set-async-threshold"](action("75%"));
+  await menu.actions["set-log-compaction"](action("On"));
   await menu.actions["set-protocol"](action("Responses Compact"));
   await menu.actions["set-protocol"](action("Context Management (experimental)"));
   await menu.actions["set-timeout"](action("10 min"));
@@ -189,6 +195,9 @@ test("menu actions persist exact setting patches", async () => {
   await menu.actions["set-notify"](action("Off"));
   assert.deepEqual(memory.patches, [
     { enabled: false },
+    { asyncEnabled: true },
+    { asyncThresholdPercent: 75 },
+    { logCompaction: true },
     { protocol: "responses-compact" },
     { protocol: "context-management" },
     { requestTimeoutMs: 600_000 },
@@ -211,7 +220,12 @@ test("stale settings saves do not notify through a disposed menu", async () => {
       return memory.runtime.update(patch);
     },
   };
-  const menu = createCodexCompactMenu(runtime);
+  let changes = 0;
+  const menu = createCodexCompactMenu(runtime, {
+    onSettingsChanged: () => {
+      changes += 1;
+    },
+  });
   const controller = new AbortController();
   const { ctx, notifications } = createMockContext({ mode: "tui" });
   const pending = menu.actions["set-enabled"]({
@@ -225,6 +239,7 @@ test("stale settings saves do not notify through a disposed menu", async () => {
   release();
   assert.deepEqual(await pending, { kind: "rejected" });
   assert.deepEqual(notifications, []);
+  assert.equal(changes, 0);
 });
 
 test("TUI manual action compacts once after close and reports core errors", async () => {
@@ -470,4 +485,163 @@ test("menu reports mandatory cancellation for incompatible checkpoint routes and
     "summarize",
     "effective cancellation does not rewrite policy",
   );
+});
+
+test("main menu shows experimental warm-ahead configuration and only an available background status", async () => {
+  const memory = memoryRuntime();
+  let status: "Preparing" | "Ready" | undefined;
+  const menu = createCodexCompactMenu(memory.runtime, { backgroundStatus: () => status });
+  let main = resolveMenuScreen(menu, "main", memory.runtime.get());
+  assert.match(main.lines?.join("\n") ?? "", /Warm-ahead \(experimental\): Off/);
+  assert.doesNotMatch(main.lines?.join("\n") ?? "", /Warm-ahead checkpoint:/);
+  await memory.runtime.update({ asyncEnabled: true, asyncThresholdPercent: 75 });
+  for (const nextStatus of ["Preparing", "Ready"] as const) {
+    status = nextStatus;
+    main = resolveMenuScreen(menu, "main", memory.runtime.get());
+    assert.match(main.lines?.join("\n") ?? "", /Warm-ahead \(experimental\): On · 75%/);
+    assert.ok(main.lines?.includes(`Warm-ahead checkpoint: ${nextStatus}`));
+  }
+  const settings = resolveMenuScreen(menu, "settings", memory.runtime.get());
+  assert.equal(settings.kind, "settings");
+  if (settings.kind !== "settings") assert.fail("Expected settings screen");
+  assert.match(settings.items.find((item) => item.id === "asyncEnabled")?.description ?? "", /quota even if unused/);
+  assert.equal(settings.items.find((item) => item.id === "asyncThresholdPercent")?.currentValue, "75%");
+});
+
+test("settings-change callback observes durable new state and is suppressed on save failure", async () => {
+  const memory = memoryRuntime();
+  let release!: () => void;
+  const blocked = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  let fail = false;
+  const runtime: CodexCompactSettingsRuntime = {
+    ...memory.runtime,
+    async update(patch) {
+      await blocked;
+      if (fail) throw new Error("disk failure");
+      return memory.runtime.update(patch);
+    },
+  };
+  const observed: boolean[] = [];
+  const menu = createCodexCompactMenu(runtime, {
+    onSettingsChanged: () => {
+      observed.push(runtime.get().settings.asyncEnabled);
+    },
+  });
+  const context = createMockContext({ mode: "tui" });
+  const action = (value: string) => ({
+    ctx: context.ctx,
+    state: runtime.get(),
+    signal: new AbortController().signal,
+    itemId: "asyncEnabled",
+    value,
+  });
+  const pending = menu.actions["set-async-enabled"](action("On"));
+  assert.deepEqual(observed, []);
+  release();
+  assert.deepEqual(await pending, { kind: "stay" });
+  assert.deepEqual(observed, [true]);
+  fail = true;
+  assert.deepEqual(await menu.actions["set-async-enabled"](action("Off")), { kind: "rejected" });
+  assert.deepEqual(observed, [true]);
+  assert.equal(runtime.get().settings.asyncEnabled, true);
+  const settings = resolveMenuScreen(menu, "settings", runtime.get());
+  assert.equal(settings.kind, "settings");
+  if (settings.kind !== "settings") assert.fail("Expected settings screen");
+  assert.equal(settings.items.find((item) => item.id === "asyncEnabled")?.currentValue, "On");
+  assert.match(context.notifications.at(-1)?.message ?? "", /disk failure/);
+});
+
+test("TUI forwards warm-ahead status and save callbacks while new settings retain bounded framing", async () => {
+  const memory = memoryRuntime();
+  let screens = 0;
+  let changes = 0;
+  let main: string[] = [];
+  let normal: string[] = [];
+  let constrained: string[] = [];
+  const resized: Array<{ width: number; lines: string[] }> = [];
+  const context = createMockContext({
+    mode: "tui",
+    custom: async (factory: unknown) => {
+      const harness = createCustomSelectorHarness(factory, 100);
+      screens += 1;
+      try {
+        if (screens === 1) {
+          main = harness.render();
+          harness.handleInput("tui.select.down");
+          harness.handleInput("tui.select.confirm");
+        } else if (screens === 2) {
+          harness.handleInput("tui.select.down");
+          normal = harness.render();
+          harness.handleInput("tui.select.confirm");
+          await harness.waitForPending();
+        } else if (screens === 3) {
+          harness.handleInput("tui.select.down");
+          harness.handleInput("tui.select.confirm");
+          await harness.waitForPending();
+        } else {
+          harness.setTerminalRows(8);
+          constrained = harness.render();
+          harness.setTerminalRows(4);
+          for (const width of [0, 12, 32]) {
+            harness.invalidate();
+            resized.push({ width, lines: harness.render(width) });
+          }
+          harness.handleInput("\u0003");
+          await harness.waitForPending();
+        }
+        return await harness.resultPromise;
+      } finally {
+        harness.dispose();
+      }
+    },
+  });
+  await showCodexCompactMenu(memory.runtime, context.ctx, {
+    signal: new AbortController().signal,
+    isCurrent: () => true,
+    backgroundStatus: () => "Ready",
+    onSettingsChanged: () => {
+      changes += 1;
+    },
+  });
+  assert.equal(screens, 4);
+  assert.match(main.join("\n"), /Warm-ahead checkpoint: Ready/);
+  assert.match(normal[0], /^─+$/);
+  assert.match(normal.at(-1) ?? "", /^─+$/);
+  assert.match(normal.join("\n"), /Warm-ahead \(experimental\)/);
+  assert.ok(constrained.length <= 5);
+  assert.match(constrained.join("\n"), /Warm-ahead threshold.*70%/);
+  for (const { width, lines } of resized) {
+    assert.ok(lines.length <= 1);
+    assert.ok(lines.every((line) => visibleWidth(line) <= Math.max(1, width)));
+  }
+  assert.equal(changes, 2);
+  assert.deepEqual(memory.patches, [{ asyncEnabled: true }, { asyncThresholdPercent: 70 }]);
+  assert.deepEqual(
+    context.notifications.map((notification) => notification.level),
+    ["info", "info"],
+  );
+});
+
+test("logging toggle applies immediately without cancelling compaction work", async () => {
+  const memory = memoryRuntime();
+  let cancellations = 0;
+  const menu = createCodexCompactMenu(memory.runtime, {
+    onSettingsChanged: () => {
+      cancellations += 1;
+    },
+  });
+  const { ctx } = createMockContext({ mode: "tui" });
+  for (const value of ["On", "Off"]) {
+    await menu.actions["set-log-compaction"]({
+      ctx,
+      state: memory.runtime.get(),
+      signal: new AbortController().signal,
+      itemId: "logCompaction",
+      value,
+    });
+    assert.equal(memory.runtime.get().settings.logCompaction, value === "On");
+  }
+  assert.equal(cancellations, 0);
 });

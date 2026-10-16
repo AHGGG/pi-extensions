@@ -7,7 +7,7 @@ import type { RemoteCompactionProtocol, ResponsesCompactionProfile } from "./mod
 import { type JsonObject, validateCompactionItem } from "./protocol.js";
 
 export const CHECKPOINT_KIND = "pi-codex-remote-compaction";
-export const CHECKPOINT_VERSION = 3;
+export const CHECKPOINT_VERSION = 4;
 export const REPLACEMENT_TOKEN_BUDGET = 64_000;
 export const REPLACEMENT_BYTE_BUDGET = 8 * 1024 * 1024;
 const MAX_MEDIA_ITEM_BYTES = 2 * 1024 * 1024;
@@ -29,6 +29,7 @@ export interface CodexCheckpointDetails {
   protocol: RemoteCompactionProtocol;
   replacementHistory: JsonObject[];
   keptMessageFingerprints: string[];
+  snapshotLeafId?: string;
   createdAt: string;
 }
 
@@ -95,8 +96,8 @@ export function parseCheckpointDetails(value: unknown): CodexCheckpointDetails |
       value.api === "openai-responses" ||
       value.api === "azure-openai-responses") &&
     (value.protocol === "remote-v2" || value.protocol === "responses-compact");
-  const isVersionThree =
-    value.version === CHECKPOINT_VERSION &&
+  const isProfileVersion =
+    (value.version === 3 || value.version === CHECKPOINT_VERSION) &&
     typeof value.api === "string" &&
     value.api.length > 0 &&
     value.api.length <= MAX_API_ID_LENGTH &&
@@ -106,7 +107,7 @@ export function parseCheckpointDetails(value: unknown): CodexCheckpointDetails |
       value.protocol === "context-management");
   if (
     value.kind !== CHECKPOINT_KIND ||
-    (!isVersionOne && !isVersionTwo && !isVersionThree) ||
+    (!isVersionOne && !isVersionTwo && !isProfileVersion) ||
     typeof value.checkpointId !== "string" ||
     value.checkpointId.length < 8 ||
     value.checkpointId.length > MAX_CHECKPOINT_ID_LENGTH ||
@@ -137,7 +138,16 @@ export function parseCheckpointDetails(value: unknown): CodexCheckpointDetails |
       api !== "openai-responses" &&
       api !== "azure-openai-responses" &&
       profile !== "codex-responses-v1") ||
-    (isVersionThree && value.profile !== profile)
+    (isProfileVersion && value.profile !== profile)
+  ) {
+    return undefined;
+  }
+  if (
+    value.version === CHECKPOINT_VERSION &&
+    value.snapshotLeafId !== undefined &&
+    (typeof value.snapshotLeafId !== "string" ||
+      value.snapshotLeafId.length === 0 ||
+      value.snapshotLeafId.length > MAX_CHECKPOINT_ID_LENGTH)
   ) {
     return undefined;
   }
@@ -171,6 +181,9 @@ export function parseCheckpointDetails(value: unknown): CodexCheckpointDetails |
     protocol: isVersionOne ? "remote-v2" : (value.protocol as RemoteCompactionProtocol),
     replacementHistory: structuredClone(value.replacementHistory),
     keptMessageFingerprints: [...value.keptMessageFingerprints],
+    ...(value.version === CHECKPOINT_VERSION && typeof value.snapshotLeafId === "string"
+      ? { snapshotLeafId: value.snapshotLeafId }
+      : {}),
     createdAt: value.createdAt,
   };
 }
@@ -325,6 +338,7 @@ export function createCheckpointDetails(input: {
   protocol: RemoteCompactionProtocol;
   replacementHistory: JsonObject[];
   keptMessages: readonly AgentMessage[];
+  snapshotLeafId?: string;
   checkpointId?: string;
   createdAt?: string;
 }): CodexCheckpointDetails {
@@ -339,6 +353,7 @@ export function createCheckpointDetails(input: {
     protocol: input.protocol,
     replacementHistory: structuredClone(input.replacementHistory),
     keptMessageFingerprints: input.keptMessages.map(fingerprintMessage),
+    ...(input.snapshotLeafId !== undefined ? { snapshotLeafId: input.snapshotLeafId } : {}),
     createdAt: input.createdAt ?? new Date().toISOString(),
   };
   const parsed = parseCheckpointDetails(details);
