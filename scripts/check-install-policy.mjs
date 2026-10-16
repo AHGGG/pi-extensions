@@ -6,7 +6,7 @@ const root = path.resolve(import.meta.dirname, "..");
 const expectedNpm = "11.20.0";
 const expectedConfig = {
   "strict-allow-scripts": "true",
-  "min-release-age": "7",
+  "min-release-age": "3",
   "ignore-scripts": "false",
   "dangerously-allow-all-scripts": "false",
   "min-release-age-exclude": "",
