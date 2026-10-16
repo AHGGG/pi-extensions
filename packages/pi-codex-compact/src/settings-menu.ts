@@ -9,6 +9,9 @@ type Screen = "main" | "settings" | "invalid";
 type Action =
   | "compact-now"
   | "set-enabled"
+  | "set-log-compaction"
+  | "set-async-enabled"
+  | "set-async-threshold"
   | "set-protocol"
   | "set-timeout"
   | "set-retries"
@@ -23,6 +26,8 @@ export interface SettingsMenuOwner {
   hasCheckpoint?(): boolean;
   canReplayCheckpoint?(): boolean;
   lastProtocol?(): RemoteCompactionProtocol | undefined;
+  backgroundStatus?(): "Preparing" | "Ready" | undefined;
+  onSettingsChanged?(): void;
 }
 
 interface CompactMenuStatus {
@@ -55,15 +60,21 @@ function lastProtocolLines(protocol: RemoteCompactionProtocol | undefined): stri
   return protocol ? [`Last resolved protocol: ${protocolLabel(protocol)}`] : [];
 }
 
+function backgroundStatusLines(status: "Preparing" | "Ready" | undefined): string[] {
+  return status ? [`Warm-ahead checkpoint: ${status}`] : [];
+}
+
 async function update(
   runtime: CodexCompactSettingsRuntime,
   ctx: ExtensionCommandContext,
   patch: Partial<CodexCompactSettings>,
   signal: AbortSignal,
+  onSettingsChanged?: () => void,
 ) {
   try {
     await runtime.update(patch, signal);
     if (signal.aborted) return { kind: "rejected" as const };
+    if (Object.keys(patch).some((key) => key !== "logCompaction")) onSettingsChanged?.();
     ctx.ui.notify("Responses compaction settings saved.", "info");
     return { kind: "stay" as const };
   } catch (error) {
@@ -85,8 +96,12 @@ export function createCodexCompactMenu(
     hasCheckpoint?: () => boolean;
     canReplayCheckpoint?: () => boolean;
     lastProtocol?: () => RemoteCompactionProtocol | undefined;
+    backgroundStatus?: () => "Preparing" | "Ready" | undefined;
+    onSettingsChanged?: () => void;
   } = {},
 ): MenuDefinition<CodexCompactSettingsState, Screen, Action, ExtensionCommandContext> {
+  const save = (ctx: ExtensionCommandContext, patch: Partial<CodexCompactSettings>, signal: AbortSignal) =>
+    update(runtime, ctx, patch, signal, options.onSettingsChanged);
   return {
     start: "main",
     screens: {
@@ -95,6 +110,9 @@ export function createCodexCompactMenu(
         title: "Responses Compaction",
         lines: [
           `Remote compaction: ${state.settings.enabled ? "On" : "Off"}`,
+          `Warm-ahead (experimental): ${state.settings.asyncEnabled ? `On · ${state.settings.asyncThresholdPercent}%` : "Off"}`,
+          `Compaction logs: ${state.settings.logCompaction ? "On" : "Off"}`,
+          ...backgroundStatusLines(options.backgroundStatus?.()),
           `Protocol setting: ${protocolLabel(state.settings.protocol)}`,
           `Active model: ${safeText(options.status?.model ?? "none")}`,
           `Preferred route: ${safeText(compactRoute(state, options.status))}`,
@@ -147,6 +165,31 @@ export function createCodexCompactMenu(
             currentValue: state.settings.enabled ? "On" : "Off",
             values: ["On", "Off"],
             action: "set-enabled",
+          },
+          {
+            id: "asyncEnabled",
+            label: "Warm-ahead (experimental)",
+            description:
+              "Prepare a checkpoint after a completed turn for Pi automatic compaction. May consume quota even if unused.",
+            currentValue: state.settings.asyncEnabled ? "On" : "Off",
+            values: ["On", "Off"],
+            action: "set-async-enabled",
+          },
+          {
+            id: "asyncThresholdPercent",
+            label: "Warm-ahead threshold",
+            description: "Context-window usage that permits background preparation; Pi still decides when to compact.",
+            currentValue: `${state.settings.asyncThresholdPercent}%`,
+            values: ["50%", "60%", "65%", "70%", "75%", "80%", "90%"],
+            action: "set-async-threshold",
+          },
+          {
+            id: "logCompaction",
+            label: "Compaction logs",
+            description: "Show async preparation and actual compaction lifecycle notices in TUI and RPC.",
+            currentValue: state.settings.logCompaction ? "On" : "Off",
+            values: ["On", "Off"],
+            action: "set-log-compaction",
           },
           {
             id: "protocol",
@@ -216,10 +259,13 @@ export function createCodexCompactMenu(
         options.onCompactRequested?.();
         return { kind: "close" };
       },
-      "set-enabled": ({ ctx, value, signal }) => update(runtime, ctx, { enabled: value === "On" }, signal),
+      "set-log-compaction": ({ ctx, value, signal }) => save(ctx, { logCompaction: value === "On" }, signal),
+      "set-enabled": ({ ctx, value, signal }) => save(ctx, { enabled: value === "On" }, signal),
+      "set-async-enabled": ({ ctx, value, signal }) => save(ctx, { asyncEnabled: value === "On" }, signal),
+      "set-async-threshold": ({ ctx, value, signal }) =>
+        save(ctx, { asyncThresholdPercent: Number.parseInt(value ?? "65", 10) }, signal),
       "set-protocol": ({ ctx, value, signal }) =>
-        update(
-          runtime,
+        save(
           ctx,
           {
             protocol:
@@ -234,14 +280,13 @@ export function createCodexCompactMenu(
           signal,
         ),
       "set-recovery": ({ ctx, value, signal }) =>
-        update(runtime, ctx, { checkpointRecovery: value === "Cancel" ? "cancel" : "summarize" }, signal),
+        save(ctx, { checkpointRecovery: value === "Cancel" ? "cancel" : "summarize" }, signal),
       "set-timeout": ({ ctx, value, signal }) =>
-        update(runtime, ctx, { requestTimeoutMs: Number.parseInt(value ?? "5", 10) * 60_000 }, signal),
-      "set-retries": ({ ctx, value, signal }) =>
-        update(runtime, ctx, { maxRetries: Number.parseInt(value ?? "2", 10) }, signal),
+        save(ctx, { requestTimeoutMs: Number.parseInt(value ?? "5", 10) * 60_000 }, signal),
+      "set-retries": ({ ctx, value, signal }) => save(ctx, { maxRetries: Number.parseInt(value ?? "2", 10) }, signal),
       "set-retention": ({ ctx, value, signal }) =>
-        update(runtime, ctx, { replacementTokenBudget: Number.parseInt(value ?? "64", 10) * 1000 }, signal),
-      "set-notify": ({ ctx, value, signal }) => update(runtime, ctx, { notifyOnFallback: value === "On" }, signal),
+        save(ctx, { replacementTokenBudget: Number.parseInt(value ?? "64", 10) * 1000 }, signal),
+      "set-notify": ({ ctx, value, signal }) => save(ctx, { notifyOnFallback: value === "On" }, signal),
     },
   };
 }
@@ -278,6 +323,10 @@ export async function showCodexCompactMenu(
       hasCheckpoint: owner.hasCheckpoint,
       canReplayCheckpoint: owner.canReplayCheckpoint,
       lastProtocol: owner.lastProtocol,
+      backgroundStatus: owner.backgroundStatus,
+      onSettingsChanged: () => {
+        if (!owner.signal.aborted && owner.isCurrent()) owner.onSettingsChanged?.();
+      },
     }),
     {
       getState: () => runtime.get(),

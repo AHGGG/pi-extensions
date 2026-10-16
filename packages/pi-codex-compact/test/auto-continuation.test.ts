@@ -422,3 +422,13 @@ test("headless sessions sharing one UI retain independent continuation ownership
     assert.ok(await f.boundary());
   });
 });
+
+test("changing lifecycle logging preserves committed continuation", async () => {
+  await withFixture(async (f) => {
+    await f.start();
+    await f.compact();
+    await f.settingsRuntime.update({ logCompaction: true });
+    const result = (await f.boundary()) as { continue: boolean } | undefined;
+    assert.equal(result?.continue, true);
+  });
+});

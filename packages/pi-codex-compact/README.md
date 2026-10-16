@@ -3,7 +3,7 @@
 [![npm](https://img.shields.io/npm/v/@narumitw/pi-codex-compact)](https://www.npmjs.com/package/@narumitw/pi-codex-compact) [![Pi extension](https://img.shields.io/badge/Pi-extension-blue)](https://pi.dev) [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](./LICENSE)
 
 Use Responses compaction in Pi to replace older conversation context with an opaque server-generated checkpoint.
-The extension replays that checkpoint in later compatible requests. Pi still controls when compaction runs.
+The extension replays that checkpoint in later compatible requests. Pi still controls when conversation history is compacted.
 
 ## ✨ Features
 
@@ -11,6 +11,7 @@ The extension replays that checkpoint in later compatible requests. Pi still con
 - Offers Remote Compaction V2, unary `responses/compact`, and experimental streaming Context Management.
 - Adapts verified official OpenAI ChatGPT OAuth requests to Context Management before dispatch, including Auto and V2 preferences.
 - Handles manual, threshold, and overflow compaction through Pi's normal lifecycle.
+- Optionally prepares checkpoints in the background after completed turns for later automatic compaction.
 - Preserves compatible checkpoints across repeated compaction, protocol changes, reloads, resumes, and forks.
 - Uses Pi-native fallback before the first checkpoint; afterward, tries checkpoint-aware recovery with lossy native fallback on recovery failure.
 - Pauses an operation rejected by OAuth without disabling compatible checkpoint replay.
@@ -31,7 +32,7 @@ To use this fork, replace the upstream compact entry in Pi's `settings.json` pac
 }
 ```
 
-Restart Pi after resolving the Git package. This filter loads only the compaction extension. Remove `npm:@narumitw/pi-codex-compact` from the same installation scope to avoid loading two copies. The upstream npm package does not contain this fork's OAuth routing or 15-minute timeout changes.
+Restart Pi after resolving the Git package. This filter loads only the compaction extension. Remove `npm:@narumitw/pi-codex-compact` from the same installation scope to avoid loading two copies. The upstream npm package does not contain this fork's OAuth routing, 15-minute timeout, or experimental warm-ahead changes.
 
 The upstream npm package is available separately:
 
@@ -88,6 +89,9 @@ For example, select Remote V2 explicitly on a compatible backend:
 ```
 
 With `auto`, verified official OpenAI ChatGPT OAuth uses Context Management; API-key OpenAI and Azure use unary `responses/compact`, and legacy Codex uses Remote V2. The OAuth adaptation also applies to explicit V2 and Compact preferences. Other APIs remain Pi-native unless explicitly configured. The menu reports the last resolved protocol after a compaction attempt without refreshing OAuth merely to display it.
+
+**Experimental warm-ahead is off by default.** Enabling it can consume quota even when its result is never used, and does not guarantee lower compaction latency. Read [Experimental warm-ahead](#experimental-warm-ahead) before enabling it.
+
 Menu changes apply immediately. Manual file edits take effect on `/reload` or the next session start. Invalid settings files remain unchanged and make the menu read-only until repaired and reloaded.
 
 See the [settings reference](./docs/settings.md) for all fields, defaults, accepted values, custom API configuration, and save/reload behavior. This extension does not read `~/.codex/config.toml`.
@@ -110,6 +114,18 @@ Built-in adapter tests cover request plumbing, not backend support or hosted ent
 Changing providers can replay a checkpoint only when its API label, compatibility profile, and exact model ID still match. Custom checkpoints also require the matching `apiProfiles` entry.
 An incompatible route exposes the fallback marker and recent messages, not the checkpoint's older history. An ordinary request cannot transparently recover after an incompatible backend has already received the checkpoint.
 The extension does not make capability probes or automatically retry a failed billable request through another protocol.
+
+### Experimental warm-ahead
+
+Enable **Warm-ahead (experimental)** in `/codex-compact` → **Settings** to prepare a checkpoint after a completed turn while an agent run is continuing. Preparation begins only at a safe completed-turn boundary once context-window usage reaches the configured threshold (65% by default). This threshold starts preparation; Pi's own automatic compaction threshold remains authoritative.
+
+Preparation uses an immutable snapshot and does not change session history, the active checkpoint, or ordinary requests. Only Pi-triggered automatic compaction can adopt a compatible result. Manual `/compact` and **Compact now** continue through the foreground path. If preparation is still running when automatic compaction starts, the preparation wait uses only the remaining request timeout, measured from preparation start. Authentication revalidation and the existing recovery path run afterward; this deadline does not bound total adoption latency.
+
+Adoption preserves conversation entries added after the snapshot exactly, after the prepared checkpoint and its retained history. A stale, failed, or incompatible candidate is discarded and the existing foreground compaction and recovery policy applies. Aborted runs, session/navigation changes, and incompatible model, thinking-level, or compaction settings changes discard background work. A prepared candidate can remain available while the session is idle; turning warm-ahead off or reloading discards it. The menu shows **Preparing** or **Ready** while a candidate is available.
+
+To verify operation, enable **Compaction logs** in `/codex-compact` → **Settings**, or set `"logCompaction": true` in `pi-codex-compact.json` and run `/reload`. The logging toggle takes effect immediately without discarding prepared work or interrupting compaction. It defaults off and shows lifecycle notifications in TUI and RPC: async preparation started/ready, actual compaction triggered, waiting/reusing a checkpoint or taking the foreground path, cancellation, and completion after Pi commits the checkpoint. Print and JSON modes stay silent. Notices contain no conversation, checkpoint, or credential contents; fallback warnings remain controlled separately by `notifyOnFallback`.
+
+Background requests use the active route's quota or API usage even if their results are discarded. They may overlap ordinary work and do not guarantee lower latency. Adoption intentionally begins a new request prefix; preserving the new conversation tail does not promise provider prompt-cache reuse, including native suffix-cache reuse after adoption. Turn warm-ahead off to stop speculative preparation while keeping normal compaction and compatible checkpoint replay enabled.
 
 ### Experimental Context Management
 
@@ -167,7 +183,7 @@ Keep the extension enabled while the active session needs its checkpoint; recove
 
 ## 🧭 How it works
 
-Pi chooses when to compact and which recent messages to keep. The extension requests a checkpoint for older context, saves it in the session, and replays it alongside the retained messages on compatible requests.
+Pi chooses when to compact and which recent messages to keep. The extension requests a checkpoint for older context, saves it in the session, and replays it alongside the retained messages on compatible requests. With [experimental warm-ahead](#experimental-warm-ahead) enabled, automatic compaction may adopt a previously prepared checkpoint instead.
 
 ```mermaid
 flowchart LR
@@ -181,6 +197,8 @@ If a request fails, the extension uses native fallback before the first checkpoi
 ## 🔒 Security and privacy
 
 Remote compaction sends conversation context and the system prompt to the configured Responses backend. Remote V2 and Context Management also send active tool schemas; Codex-profile unary requests retain provider-supported tools.
+New checkpoints use format v4, including the snapshot cutoff for warm-ahead; v1–v3 checkpoints remain readable. Keep a v4-capable extension installed when resuming these sessions, because older versions cannot replay the new format.
+
 The session stores the provider ID, encrypted checkpoint, and bounded retained user items or Context Management output. It does not store credentials or authorization/request headers in checkpoint details.
 
 | Boundary | Limit |
