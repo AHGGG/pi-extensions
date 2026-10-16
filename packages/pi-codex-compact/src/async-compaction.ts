@@ -2,15 +2,17 @@ import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import {
   buildSessionContext,
   buildSessionProjection,
+  type CompactionEntryDraft,
   type ExtensionAPI,
   type ExtensionContext,
   estimateTokens,
   type SessionBeforeCompactEvent,
   type SessionEntry,
+  SessionManager,
 } from "@earendil-works/pi-coding-agent";
 import { abortable } from "./abortable.js";
-import { createCheckpointDetails, fallbackSummary, parseCheckpointDetails } from "./checkpoint.js";
-import { checkpointKeptMessages } from "./checkpoint-projection.js";
+import { createCheckpointDetails, fallbackSummary, latestCheckpoint, parseCheckpointDetails } from "./checkpoint.js";
+import { checkpointKeptMessages, projectSessionCheckpointContext } from "./checkpoint-projection.js";
 import { resolveCompactionBinding, sameCompactionBinding } from "./compaction-binding.js";
 import { activeTools, type CompactionAttempt, compactRemotely } from "./compaction-operation.js";
 import { captureCompactionBranch } from "./compaction-ownership.js";
@@ -120,7 +122,12 @@ export function startWarmCompaction(
   const toolsKey = JSON.stringify([pi.getActiveTools(), activeTools(pi)]);
   const thinkingLevel = pi.getThinkingLevel();
   const controller = new AbortController();
-  const signal = AbortSignal.any([controller.signal, ownerSignal, ...(ctx.signal ? [ctx.signal] : [])]);
+  // The request belongs to the run while preparing, but a completed checkpoint
+  // belongs to the session. Escape must not invalidate an already-ready result.
+  const signal = AbortSignal.any([controller.signal, ownerSignal]);
+  const runSignal = ctx.signal;
+  const cancelPreparing = () => controller.abort();
+  runSignal?.addEventListener("abort", cancelPreparing, { once: true });
   const isCurrent = () =>
     !signal.aborted &&
     ownerIsCurrent() &&
@@ -162,7 +169,7 @@ export function startWarmCompaction(
     promptAndToolsTokens: Math.ceil((systemPrompt.length + toolsKey.length) / 4),
     promise: Promise.resolve(undefined),
   };
-  // Never publish from this promise: Pi owns the session_before_compact commit.
+  // Never publish from this promise: Pi owns foreground and boundary commits.
   job.promise = compactRemotely(
     pi,
     event,
@@ -177,10 +184,12 @@ export function startWarmCompaction(
     { background: { attempt, branchIsCurrent }, deadlineSignal: deadline.signal },
   )
     .then((result) => {
+      runSignal?.removeEventListener("abort", cancelPreparing);
       job.state = result && "compaction" in result ? "Ready" : "Failed";
       return result;
     })
     .finally(() => {
+      runSignal?.removeEventListener("abort", cancelPreparing);
       clearTimeout(timeout);
       deadline.abort();
     });
@@ -208,7 +217,9 @@ export async function adoptWarmCompaction(
     !signal.aborted && isCurrent() && job.isCurrent() && adoptionBranchIsCurrent(ctx.sessionManager.getBranch());
   if (signal.aborted) return { kind: "cancel" };
   if (!valid()) return { kind: "stale" };
-  const cancel = () => job.controller.abort();
+  const cancel = () => {
+    if (job.state !== "Ready") job.controller.abort();
+  };
   signal.addEventListener("abort", cancel, { once: true });
   try {
     // Wait for the bounded preparation before refreshing auth. A duplicate auth
@@ -232,6 +243,7 @@ export async function adoptWarmCompaction(
     if (job.attempt.failure) return { kind: "failed", attempt: job.attempt };
     if (!result || !("compaction" in result) || !result.compaction) return { kind: "stale" };
     const entries = event.branchEntries;
+    if (!completeToolPairs(buildSessionContext(entries).messages)) return { kind: "stale" };
     const cutoffIndex = entries.findIndex((entry) => entry.id === job.snapshotLeafId);
     if (cutoffIndex < 0) return { kind: "stale" };
     const leafId = entries.at(-1)?.id ?? null;
@@ -276,4 +288,78 @@ export async function adoptWarmCompaction(
   } finally {
     signal.removeEventListener("abort", cancel);
   }
+}
+
+/** Adopt only a ready result at Pi's serialized model/tool-batch boundary. */
+export async function warmCompactionDraft(
+  job: WarmCompactionJob,
+  ctx: ExtensionContext,
+  runtime: CodexCompactSettingsRuntime,
+  signal: AbortSignal,
+  isCurrent: () => boolean,
+): Promise<CompactionEntryDraft | undefined> {
+  if (job.state !== "Ready") return undefined;
+  const entries = JSON.parse(JSON.stringify(ctx.sessionManager.getBranch())) as SessionEntry[];
+  // Keep the newest visible raw message as the native anchor. Adoption moves
+  // this cut earlier if needed to retain every uncovered suffix message. Do not
+  // use projection order: older summaries precede physically earlier messages.
+  const visible = new Set(
+    buildSessionProjection(entries)
+      .entries.filter(
+        ({ sourceEntry, messages }) =>
+          sourceEntry.type !== "compaction" && messages.some((message) => message.role !== "system"),
+      )
+      .map(({ sourceEntry }) => sourceEntry.id),
+  );
+  const first = [...entries].reverse().find((entry) => visible.has(entry.id));
+  if (!first) return undefined;
+  const branch = JSON.stringify(entries);
+  const adoption = await adoptWarmCompaction(
+    job,
+    {
+      type: "session_before_compact",
+      reason: "threshold",
+      willRetry: false,
+      signal,
+      branchEntries: entries,
+      preparation: {
+        firstKeptEntryId: first.id,
+        messagesToSummarize: [],
+        turnPrefixMessages: [],
+        isSplitTurn: false,
+        tokensBefore: ctx.getContextUsage()?.tokens ?? 0,
+        fileOps: { read: new Set(), written: new Set(), edited: new Set() },
+        settings: { enabled: true, reserveTokens: ctx.model?.maxTokens ?? 0, keepRecentTokens: 0 },
+      },
+    },
+    ctx,
+    runtime,
+    signal,
+    () => isCurrent() && JSON.stringify(ctx.sessionManager.getBranch()) === branch,
+  );
+  if (
+    signal.aborted ||
+    !isCurrent() ||
+    !job.isCurrent() ||
+    JSON.stringify(ctx.sessionManager.getBranch()) !== branch ||
+    adoption.kind !== "ready" ||
+    !adoption.result ||
+    !("compaction" in adoption.result) ||
+    !adoption.result.compaction
+  )
+    return undefined;
+  const { summary, firstKeptEntryId, details, usage } = adoption.result.compaction;
+  // Verify Pi's own finalized projection before handing it a draft. In
+  // particular, old summaries and system entries are folded during compaction.
+  const header = ctx.sessionManager.getHeader();
+  if (!header) return undefined;
+  const preview = SessionManager.inMemory(ctx.cwd, undefined, [header, ...entries]);
+  preview.appendCompaction(summary, firstKeptEntryId, 0, details, true, usage);
+  const checkpoint = latestCheckpoint(preview.getBranch());
+  if (
+    !checkpoint ||
+    !projectSessionCheckpointContext(preview.buildSessionContext().messages, preview.getBranch(), checkpoint)
+  )
+    return undefined;
+  return { type: "compaction", summary, firstKeptEntryId, details, usage };
 }

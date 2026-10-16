@@ -181,7 +181,7 @@ export function createCodexCompactMenu(
             id: "asyncAutoApply",
             label: "Apply when ready",
             description:
-              "Apply a ready warm-ahead checkpoint after the run settles or before the next input. Requires warm-ahead.",
+              "Apply a ready warm-ahead checkpoint after the current model/tool batch or before the next idle input. Requires warm-ahead.",
             currentValue: state.settings.asyncAutoApply ? "On" : "Off",
             values: ["On", "Off"],
             action: "set-async-auto-apply",

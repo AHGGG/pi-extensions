@@ -1,6 +1,11 @@
 import type { Api, Model } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { adoptWarmCompaction, startWarmCompaction, type WarmCompactionJob } from "./async-compaction.js";
+import {
+  adoptWarmCompaction,
+  startWarmCompaction,
+  type WarmCompactionJob,
+  warmCompactionDraft,
+} from "./async-compaction.js";
 import {
   type CodexCheckpointDetails,
   checkpointMarker,
@@ -70,6 +75,7 @@ export function createCodexCompactExtension(
       operation?: AbortController;
       warm?: WarmCompactionJob;
       compactionPending?: boolean;
+      boundaryCheckpoint?: { job: WarmCompactionJob; checkpointId: string };
       autoApply?: { job: WarmCompactionJob; done: Promise<void> };
       run?: ContinuationRun;
       lastRoute?: { key: string; protocol: RemoteCompactionProtocol };
@@ -112,7 +118,36 @@ export function createCodexCompactExtension(
         );
       owner.warm.controller.abort();
       owner.warm = undefined;
+      owner.boundaryCheckpoint = undefined;
       if (!owner.operation) ctx.ui.setStatus(STATUS_KEY, undefined);
+    };
+
+    // Returning a draft is not a commit. Confirm persisted identity at the next
+    // public hook; entry_appended is only exposed to AgentSession subscribers.
+    const confirmBoundaryCheckpoint = (ctx: ExtensionContext) => {
+      const owner = owners.get(ctx.sessionManager);
+      const pending = owner?.boundaryCheckpoint;
+      if (
+        !owner ||
+        !pending ||
+        owner.controller.signal.aborted ||
+        owner.sessionId !== ctx.sessionManager.getSessionId()
+      )
+        return;
+      owner.boundaryCheckpoint = undefined;
+      const checkpoint = activeCheckpoint(ctx);
+      if (checkpoint?.details.checkpointId !== pending.checkpointId) return;
+      if (owner.warm === pending.job) owner.warm = undefined;
+      pending.job.controller.abort();
+      ctx.ui.setStatus(STATUS_KEY, undefined);
+      logCompaction(ctx, "Actual compaction completed: checkpoint committed at the turn boundary.");
+    };
+
+    const stopWarmPreparation = (ctx: ExtensionContext) => {
+      confirmBoundaryCheckpoint(ctx);
+      const job = owners.get(ctx.sessionManager)?.warm;
+      if (job?.state === "Ready" && job.isCurrent()) autoApplyAttempts.add(job);
+      else if (job) cancelWarm(ctx);
     };
 
     const cancelOperation = (ctx: ExtensionContext) => {
@@ -273,13 +308,61 @@ export function createCodexCompactExtension(
       if (!owner.controller.signal.aborted) owner.run = { used: false };
     });
 
-    pi.on("turn_end", (event, ctx) => {
+    pi.on("turn_end", async (event, ctx) => {
+      confirmBoundaryCheckpoint(ctx);
       const owner = ownerFor(ctx);
       if (event.outcome !== "completed" || ctx.signal?.aborted) {
-        cancelWarm(ctx);
+        stopWarmPreparation(ctx);
         return;
       }
       if (owner.warm && !owner.warm.isCurrent()) cancelWarm(ctx);
+      const job = owner.warm;
+      const boundaryBranch = JSON.stringify(ctx.sessionManager.getBranch());
+      const canApply = () => {
+        const settings = settingsRuntime.get().settings;
+        return (
+          settings.enabled &&
+          settings.asyncEnabled &&
+          settings.asyncAutoApply &&
+          owners.get(ctx.sessionManager) === owner &&
+          owner.warm === job &&
+          !!job?.isCurrent() &&
+          JSON.stringify(ctx.sessionManager.getBranch()) === boundaryBranch &&
+          !owner.controller.signal.aborted &&
+          !ctx.signal?.aborted &&
+          !owner.operation &&
+          !owner.compactionPending &&
+          !owner.autoApply
+        );
+      };
+      if (
+        job?.state === "Ready" &&
+        canApply() &&
+        !autoApplyAttempts.has(job) &&
+        !(event.entries ?? []).some((entry) => entry.type === "compaction" || entry.type === "context_edit")
+      ) {
+        autoApplyAttempts.add(job);
+        const draft = await warmCompactionDraft(
+          job,
+          ctx,
+          settingsRuntime,
+          AbortSignal.any([owner.controller.signal, ...(ctx.signal ? [ctx.signal] : [])]),
+          canApply,
+        );
+        if (draft && canApply()) {
+          const details = parseCheckpointDetails(draft.details);
+          if (details) {
+            owner.boundaryCheckpoint = { job, checkpointId: details.checkpointId };
+            logCompaction(ctx, "Actual compaction is reusing the async checkpoint at the turn boundary.");
+            return { entries: [...(event.entries ?? []), draft] };
+          }
+        }
+        // A cancelled wait/toggle preserves valid prepared work. A completed
+        // validation failure discards the candidate without starting inference.
+        if (!ctx.signal?.aborted && owner.warm === job && settingsRuntime.get().settings.asyncAutoApply)
+          cancelWarm(ctx);
+        return;
+      }
       if (owner.warm || owner.operation || owner.controller.signal.aborted) return;
       let warm: WarmCompactionJob | undefined;
       warm = startWarmCompaction(
@@ -313,7 +396,7 @@ export function createCodexCompactExtension(
             report(
               job.state === "Ready"
                 ? settingsRuntime.get().settings.asyncAutoApply
-                  ? "Async compaction ready: the prepared checkpoint will apply after this run settles or before the next input."
+                  ? "Async compaction ready: the prepared checkpoint will apply after the current model/tool batch, or at the next idle input boundary."
                   : "Async compaction ready: run /compact to apply the prepared checkpoint. History is unchanged until compaction."
                 : "Async compaction failed: actual compaction will use the foreground recovery path.",
               job.state === "Ready",
@@ -546,17 +629,22 @@ export function createCodexCompactExtension(
     });
 
     pi.on("input", async (_event, ctx) => {
+      confirmBoundaryCheckpoint(ctx);
       await applyReadyAtBoundary(ctx);
     });
 
     pi.on("agent_settled", async (event, ctx) => {
-      if (event.aborted) cancelWarm(ctx);
+      confirmBoundaryCheckpoint(ctx);
+      if (event.aborted) stopWarmPreparation(ctx);
       const owner = owners.get(ctx.sessionManager);
       if (owner) owner.run = undefined;
       if (!event.aborted) await applyReadyAtBoundary(ctx);
     });
 
+    pi.on("turn_start", (_event, ctx) => confirmBoundaryCheckpoint(ctx));
+
     pi.on("context", (event, ctx) => {
+      confirmBoundaryCheckpoint(ctx);
       const warm = owners.get(ctx.sessionManager)?.warm;
       if (warm && !warm.isCurrent()) cancelWarm(ctx);
       if (!settingsRuntime.get().settings.enabled) return undefined;
