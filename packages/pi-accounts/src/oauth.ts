@@ -381,6 +381,9 @@ async function loadProviderOwnedOAuth(
       if (!oauth) throw new Error(`Pi's built-in ${providerId} OAuth provider is unavailable.`);
       return oauth;
     });
+    void promise.catch(() => {
+      if (oauthPromises.get(providerId) === promise) oauthPromises.delete(providerId);
+    });
     oauthPromises.set(providerId, promise);
   }
   return promise;
