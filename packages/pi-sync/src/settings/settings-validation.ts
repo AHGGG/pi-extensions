@@ -68,6 +68,9 @@ export function validateSettingsDocument(value: Record<string, unknown>): PiSync
   if (value.showStatus !== undefined && typeof value.showStatus !== "boolean") {
     throw new Error("Invalid pi-sync settings: showStatus must be boolean.");
   }
+  if (value.debug !== undefined && typeof value.debug !== "boolean") {
+    throw new Error("Invalid pi-sync settings: debug must be boolean.");
+  }
   const storageConnections = requireNamedObjectMap(
     value.storageConnections,
     "storageConnections",

@@ -166,6 +166,7 @@ test("RPC init creates a valid empty version 3 document", async () => {
       onSwitch: "ask-before-pull",
       skipSecretScan: false,
       showStatus: true,
+      debug: false,
       storageConnections: {},
       syncSetups: {},
     });

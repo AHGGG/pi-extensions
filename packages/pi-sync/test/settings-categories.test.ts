@@ -97,7 +97,16 @@ const categories = [
   ["Sync content", ["Included paths", "Compare included paths", "Machine-local fields"]],
   ["Sync behavior", ["Automatic sync", "Startup transfer", "On setup switch"]],
   ["Storage & setups", ["Storage location", "Manage sync setups", "Manage storage connections"]],
-  ["Advanced", ["Merge settings fields", "Content merge / partial progress", "Skip secret scan", "Show sync status"]],
+  [
+    "Advanced",
+    [
+      "Merge settings fields",
+      "Content merge / partial progress",
+      "Skip secret scan",
+      "Show sync status",
+      "Debug startup timings",
+    ],
+  ],
 ] as const;
 
 for (const [index, [name, labels]] of categories.entries()) {

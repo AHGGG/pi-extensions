@@ -13,6 +13,7 @@ import { ensureStateDir, readStateForConfig } from "../state/sync-state-store.js
 import { configureSyncStatus, setSyncStatus } from "../ui/sync-status.js";
 import { safeTerminalText } from "../ui/terminal-text.js";
 import { throwIfAborted } from "./signals.js";
+import { createStartupTimings } from "./startup-timings.js";
 import { errorMessage } from "./sync-errors.js";
 import type { SyncLoaders } from "./sync-loaders.js";
 import { captureMutationOwner } from "./sync-local.js";
@@ -28,44 +29,55 @@ const AUTO_SYNC_OPTIONS: CommandOptions = {
 };
 
 export async function startSession(ctx: ExtensionContext, signal: AbortSignal) {
-  throwIfAborted(signal);
-  const stateNotice = stateDirectoryMigrationNotice();
-  if (stateNotice && ctx.hasUI) ctx.ui.notify(stateNotice, "warning");
-  // Recovery can restore managed files: finish it before Pi accepts user edits.
-  // Unlike remote inspection, it must never be detached behind startup.
-  const validateMutation = captureMutationOwner(ctx, signal);
-  const currentFile = ctx.sessionManager.getSessionFile?.();
-  await recoverSnapshotTransactionsOnStartup({
-    signal,
-    sessionDir: sessionDirFromContext(ctx),
-    protectedTargets: currentFile ? [currentFile] : [],
-    validateMutation,
-  });
-  throwIfAborted(signal);
+  const timings = createStartupTimings();
+  let debug = false;
+  let outcome: "completed" | "stopped" = "stopped";
   try {
-    const settings = await readLocalConfigObject();
     throwIfAborted(signal);
-    const names = settings ? Object.keys(settings.syncSetups).sort((left, right) => left.localeCompare(right)) : [];
-    setSyncSetupCompletions(names);
-    configureSyncStatus(ctx, settings?.showStatus ?? true);
-  } catch {
-    if (signal.aborted) return;
-    setSyncSetupCompletions([]);
-  }
-  const migrationNotice = consumeLocalConfigMigrationNotice();
-  if (migrationNotice && ctx.hasUI) ctx.ui.notify(migrationNotice, "warning");
-  throwIfAborted(signal);
-  if (!ctx.hasUI) return;
-  try {
-    const config = await loadConfig();
+    const stateNotice = stateDirectoryMigrationNotice();
+    if (stateNotice && ctx.hasUI) ctx.ui.notify(stateNotice, "warning");
+    // Recovery can restore managed files: finish it before Pi accepts user edits.
+    // Unlike remote inspection, it must never be detached behind startup.
+    const validateMutation = captureMutationOwner(ctx, signal);
+    const currentFile = ctx.sessionManager.getSessionFile?.();
+    await timings.measure("transaction recovery", () =>
+      recoverSnapshotTransactionsOnStartup({
+        signal,
+        sessionDir: sessionDirFromContext(ctx),
+        protectedTargets: currentFile ? [currentFile] : [],
+        validateMutation,
+      }),
+    );
     throwIfAborted(signal);
-    configureSyncStatus(ctx, config.showStatus);
-    return config.automatic || config.automaticTransfer ? config : undefined;
-  } catch (error) {
-    throwIfAborted(signal);
-    if (!isMissingConfigError(error)) {
-      ctx.ui.notify(`pi-sync startup check skipped: ${safeTerminalText(errorMessage(error))}`, "warning");
+    try {
+      const settings = await timings.measure("settings read", () => readLocalConfigObject());
+      throwIfAborted(signal);
+      debug = settings?.debug ?? false;
+      const names = settings ? Object.keys(settings.syncSetups).sort((left, right) => left.localeCompare(right)) : [];
+      setSyncSetupCompletions(names);
+      configureSyncStatus(ctx, settings?.showStatus ?? true);
+    } catch {
+      if (signal.aborted) return;
+      setSyncSetupCompletions([]);
     }
+    const migrationNotice = consumeLocalConfigMigrationNotice();
+    if (migrationNotice && ctx.hasUI) ctx.ui.notify(migrationNotice, "warning");
+    throwIfAborted(signal);
+    if (!ctx.hasUI) return;
+    try {
+      const config = await timings.measure("config resolution", () => loadConfig());
+      throwIfAborted(signal);
+      configureSyncStatus(ctx, config.showStatus);
+      outcome = "completed";
+      return config.automatic || config.automaticTransfer ? config : undefined;
+    } catch (error) {
+      throwIfAborted(signal);
+      if (!isMissingConfigError(error)) {
+        ctx.ui.notify(`pi-sync startup check skipped: ${safeTerminalText(errorMessage(error))}`, "warning");
+      }
+    }
+  } finally {
+    timings.publish(ctx, debug, signal, "local initialization", outcome);
   }
 }
 
