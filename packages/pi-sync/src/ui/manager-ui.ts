@@ -1,7 +1,8 @@
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { type ActionMenuItem, defineMenu, runMenu } from "@narumitw/pi-tui-kit";
-import { loadConfig } from "../settings/config.js";
+import { loadConfig, syncCheckConfigFingerprint } from "../settings/config.js";
 import { operationBlocksChanges } from "../state/operation-availability.js";
+import { captureMutationOwner } from "../sync/sync-local.js";
 import { type RunRoute, runCancellableOperation } from "./cancellable-operation.js";
 import {
   attentionMainMenuItems,
@@ -11,12 +12,13 @@ import {
 } from "./manager-attention.js";
 import { recoverSyncAccess } from "./manager-recovery.js";
 import { dispatchManagerResult } from "./manager-result-dispatcher.js";
-import { describeManagerState } from "./manager-state.js";
+import { backendStorageDescription, describeManagerState } from "./manager-state.js";
 import { showSyncSettings } from "./settings-ui.js";
 import { showSyncSetupManager } from "./setup/setup-actions.js";
 import { showSetupSwitcher } from "./setup/setup-switcher.js";
 import { showStorageConnections } from "./storage-connections-ui.js";
 import { observationMatchesConfig } from "./sync-attention.js";
+import { safeTerminalText } from "./terminal-text.js";
 
 export async function showSyncManager(
   ctx: ExtensionCommandContext,
@@ -36,6 +38,8 @@ export async function showSyncManager(
     | "settings"
     | "pull"
     | "push"
+    | "diff"
+    | "status"
     | "setups"
     | "connections"
     | "history"
@@ -167,9 +171,40 @@ export async function showSyncManager(
         });
         return { kind: result.kind === "closed" ? "close" : "stay" };
       },
-      doctor: async () => {
-        const result = await runCancellableOperation(ctx, "Checking setup access…", "doctor", runRoute, {
+      diff: async () => {
+        const result = await runCancellableOperation(ctx, "Comparing local and remote…", "diff", runRoute, {
           signal: sessionSignal,
+        });
+        return { kind: result.kind === "closed" ? "close" : "stay" };
+      },
+      status: async () => {
+        const result = await runCancellableOperation(ctx, "Checking remote status…", "status", runRoute, {
+          signal: sessionSignal,
+        });
+        return { kind: result.kind === "closed" ? "close" : "stay" };
+      },
+      doctor: async ({ signal: actionSignal }) => {
+        const signal = sessionSignal ? AbortSignal.any([sessionSignal, actionSignal]) : actionSignal;
+        const validate = captureMutationOwner(ctx, signal);
+        const config = await loadConfig();
+        validate();
+        const confirmed = await ctx.ui.confirm(
+          "Run diagnostics?",
+          `Setup: ${safeTerminalText(config.setupName)}\nStorage: ${backendStorageDescription(config)}\nS3/R2 reads the latest pointer without writing. Git reads remote snapshots and checks its cache. WebDAV probes conditional writes and cleanup, and can repair a missing history entry. Possible-secret checks still run. This is not the read-only Check remote status action.`,
+          { signal },
+        );
+        if (signal.aborted) return { kind: "close" };
+        validate();
+        if (!confirmed) return { kind: "stay" };
+        const latest = await loadConfig();
+        validate();
+        if (syncCheckConfigFingerprint(config) !== syncCheckConfigFingerprint(latest)) {
+          ctx.ui.notify("Setup changed during diagnostics review; reopen Diagnostics.", "warning");
+          return { kind: "stay" };
+        }
+        const result = await runCancellableOperation(ctx, "Checking setup access…", "doctor", runRoute, {
+          signal,
+          target: config.setupName,
         });
         return { kind: result.kind === "closed" ? "close" : "stay" };
       },
@@ -228,6 +263,8 @@ function syncMainMenuItem(
   | "sync"
   | "pull"
   | "push"
+  | "diff"
+  | "status"
   | "switch"
   | "settings"
   | "setups"
@@ -244,6 +281,8 @@ function syncMainMenuItem(
     "Sync now": "sync",
     "Pull from remote…": "pull",
     "Push to remote…": "push",
+    "View differences": "diff",
+    "Check remote status": "status",
     "Switch sync setup": "switch",
     Settings: "settings",
     History: "history",
@@ -263,8 +302,19 @@ function syncMainMenuItem(
     id: action,
     label,
     action,
-    ...(action === "doctor"
-      ? { description: "Check setup access; WebDAV also probes writes and repairs history." }
-      : {}),
+    description:
+      action === "doctor"
+        ? "Manage: review backend checks before running."
+        : action === "settings" || action === "history" || action === "switch"
+          ? "Manage"
+          : action === "sync"
+            ? "Transfer: choose a safe direction or review conflicts."
+            : action === "pull"
+              ? "Transfer: remote → local; review writes and removals."
+              : action === "push"
+                ? "Transfer: local → remote active snapshot; review publication."
+                : action === "status" || action === "diff"
+                  ? "Inspect: read current local and remote state without transferring files."
+                  : undefined,
   };
 }

@@ -66,7 +66,16 @@ test("Sync setups list and detail expose current marker, Make current, edit, rem
   await withSettings(async () => {
     const titles: string[] = [];
     const optionsSeen: string[][] = [];
-    const choices = ["Settings", "Manage sync setups", "work", "Back", undefined, "Back", undefined];
+    const choices = [
+      "Settings",
+      "Storage & setups",
+      "Manage sync setups",
+      "work",
+      "Back",
+      undefined,
+      "Back",
+      undefined,
+    ];
     const { ctx } = createMockContext({
       hasUI: true,
       mode: "tui",
@@ -91,7 +100,16 @@ test("Storage connections list and detail are symmetric and redact credentials",
   await withSettings(async () => {
     const titles: string[] = [];
     const optionsSeen: string[][] = [];
-    const choices = ["Settings", "Manage storage connections", "r2", "Back", undefined, "Back", undefined];
+    const choices = [
+      "Settings",
+      "Storage & setups",
+      "Manage storage connections",
+      "r2",
+      "Back",
+      undefined,
+      "Back",
+      undefined,
+    ];
     const { ctx } = createMockContext({
       hasUI: true,
       mode: "tui",
@@ -142,7 +160,16 @@ test("the sole current sync setup offers removal to return to an empty catalog",
   await withSettings(async () => {
     const titles: string[] = [];
     const optionsSeen: string[][] = [];
-    const choices = ["Settings", "Manage sync setups", "home (current)", "Back", "Back", "Back", undefined];
+    const choices = [
+      "Settings",
+      "Storage & setups",
+      "Manage sync setups",
+      "home (current)",
+      "Back",
+      "Back",
+      "Back",
+      undefined,
+    ];
     const { ctx } = createMockContext({
       hasUI: true,
       mode: "tui",
@@ -164,7 +191,16 @@ test("S3-compatible lookalike hosts are not labeled as Cloudflare R2", async () 
   value.storageConnections.r2.endpoint = "https://example.r2.cloudflarestorage.com.attacker.example";
   await withSettings(async () => {
     const titles: string[] = [];
-    const choices = ["Settings", "Manage storage connections", "r2", "Back", undefined, "Back", undefined];
+    const choices = [
+      "Settings",
+      "Storage & setups",
+      "Manage storage connections",
+      "r2",
+      "Back",
+      undefined,
+      "Back",
+      undefined,
+    ];
     const { ctx } = createMockContext({
       hasUI: true,
       mode: "tui",

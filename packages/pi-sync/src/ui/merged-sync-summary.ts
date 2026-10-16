@@ -2,13 +2,8 @@ import { truncateToWidth } from "@earendil-works/pi-tui";
 import type { PublicationCapability } from "../backends/sync-backend.js";
 import type { Snapshot } from "../snapshot/snapshot-types.js";
 import type { FileMergeDecision } from "../sync/file-merge-planner.js";
-import { fileHashMap } from "../sync/sync-state.js";
 import { safeTerminalText, snapshotPathLabel } from "./terminal-text.js";
-
-interface FileChange {
-  path: string;
-  action: "Add" | "Update" | "Delete";
-}
+import { transferChanges as changes, type TransferChange as FileChange } from "./transfer-changes.js";
 
 export interface MergedSyncSummaryInput {
   setupName: string;
@@ -78,6 +73,7 @@ export function mergedSyncSummary(input: MergedSyncSummaryInput) {
   const context = [`Setup: ${safeTerminalText(input.setupName)}`, `Remote: ${safeTerminalText(input.destination)}`];
   const safety = [
     `Remote snapshot publication: ${input.publish ? "yes" : "no"}`,
+    "Remote removals affect the active snapshot; retained history is not erased.",
     `Sessions: ${input.sessions ? "included — may contain private conversations" : "not included"}`,
     input.groups.length
       ? `Unresolved groups: ${input.groups.length} — these paths stay unchanged on each side`
@@ -113,16 +109,4 @@ export function mergedSyncSummary(input: MergedSyncSummaryInput) {
       ),
     ].join("\n"),
   };
-}
-
-function changes(before: Snapshot, after: Snapshot): FileChange[] {
-  const beforeMap = fileHashMap(before);
-  const afterMap = fileHashMap(after);
-  return [...new Set([...Object.keys(beforeMap), ...Object.keys(afterMap)])]
-    .sort()
-    .flatMap((filePath): FileChange[] => {
-      if (!Object.hasOwn(beforeMap, filePath)) return [{ path: filePath, action: "Add" }];
-      if (!Object.hasOwn(afterMap, filePath)) return [{ path: filePath, action: "Delete" }];
-      return beforeMap[filePath] !== afterMap[filePath] ? [{ path: filePath, action: "Update" }] : [];
-    });
 }

@@ -147,6 +147,7 @@ for (const kind of kinds) {
         ];
         const choices = [
           "Settings",
+          "Storage & setups",
           "Manage sync setups",
           "Add sync setup",
           connection,
@@ -193,6 +194,7 @@ for (const kind of kinds) {
       const inputs = ["work", ...(kind === "Git" ? ["", ""] : kind === "WebDAV" ? [""] : [])];
       const choices = [
         "Settings",
+        "Storage & setups",
         "Manage sync setups",
         "Add sync setup",
         connection,

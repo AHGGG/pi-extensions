@@ -2,7 +2,11 @@ import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { readLocalConfigObject } from "../../settings/settings-store.js";
 import { validateConfigName } from "../../settings/settings-validation.js";
 import { DEFAULT_SYNC_INCLUDE } from "../../sync/sync-policy.js";
+import { AUTOMATIC_SYNC_DESCRIPTION } from "../sync-behavior.js";
 import { safeTerminalText } from "../terminal-text.js";
+
+export { AUTOMATIC_SYNC_DESCRIPTION } from "../sync-behavior.js";
+
 import { promptTextInput } from "./text-input.js";
 
 export async function readSetupConnection(name: string, signal?: AbortSignal) {
@@ -11,9 +15,6 @@ export async function readSetupConnection(name: string, signal?: AbortSignal) {
   if (!connection) throw new Error("Storage connection changed; reopen setup.");
   return connection;
 }
-
-export const AUTOMATIC_SYNC_DESCRIPTION =
-  "Check the current setup in the background at startup; review changes in /sync before transferring. At shutdown, automatically push selected content only when sessions are included. No startup dialogs.";
 
 export async function chooseSetupContent(ctx: ExtensionCommandContext, signal?: AbortSignal) {
   const choice = await ctx.ui.select(

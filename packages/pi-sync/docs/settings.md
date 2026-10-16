@@ -31,9 +31,11 @@ If both paths exist, `pi-sync.json` wins and the legacy file remains untouched.
 
 ### Editing in the manager
 
-Open `/sync` → **Settings** for one searchable list ordered by content, destination, automation, merge, and global preferences; these are task groups, not submenus. **Included content** and **Compare synced content** are adjacent. **Storage location** edits the current setup's coordinates, while **Manage sync setups** and **Manage storage connections** retain the catalog and affected-setup reviews. Returning from catalog management refreshes the rows; switching or removing the owning setup closes its old Settings screen.
+Open `/sync` → **Settings** and choose **Sync content**, **Sync behavior**, **Storage & setups**, or **Advanced**. **All settings (search)** provides cross-category typing-to-search over the same rows. **Included paths** and **Compare included paths** are adjacent in Sync content; the latter compares path policies, not file contents. **Storage location** edits the current setup's coordinates, while **Manage sync setups** and **Manage storage connections** retain the catalog and affected-setup reviews. Returning from catalog management refreshes the rows; switching or removing the owning setup closes its old Settings screen.
 
-Simple choices save immediately, preserve the selected row and search during refresh, and restore their previous value if saving fails. Escape closes the screen without undoing successful saves. Complex values retain their input/review flows. This navigation change does not alter schema, defaults, automatic-sync behavior, or experimental opt-ins.
+Descriptions identify the owner: this setup, all setups on this device, or shared connections. Simple choices report Saving and the durable Saved or failed/rejected result, preserve the selected row and search during refresh, and restore their previous value if saving fails. Escape closes the screen without undoing successful saves. Complex values retain their input/review flows. This navigation change does not alter schema, defaults, automatic-sync behavior, or experimental opt-ins.
+
+The manager separates current state from transfer, inspection, and management actions. **Check remote status** and **View differences** invoke the existing read/check routes only when selected. Last applied shows a compact snapshot ID with application time explicitly unavailable; full IDs remain in History. It never uses snapshot creation time as application time. See the [TUI behavior contract](tui-contract.md) for scopes and transfer branches.
 
 RPC reports the manual settings path and offers the existing setup/connection catalog dialogs, not the TUI preference or masked-credential editors. Print/JSON do not support `/sync`; use the private settings file directly. Main-menu summaries remain cached observations; `/sync status`, `/sync diff`, and `/sync help` remain available through the visible command hints.
 
@@ -144,7 +146,7 @@ A referenced connection cannot be removed.
 The current setup must be switched before removal when other setups exist. Removing the last setup is allowed; local removal never deletes remote history.
 Two setups cannot resolve to the same normalized backend location.
 
-The global **After switching setup (all setups)** setting persists as `onSwitch` and applies whenever any setup is made current. It accepts:
+The global **On setup switch** setting persists as `onSwitch` and applies whenever any setup is made current. It accepts:
 
 - `ask-before-pull` — switch, then ask in TUI whether to start a reviewed pull;
 - `pull-after-switch` — require observable UI and start the normal reviewed pull;
@@ -153,14 +155,14 @@ The global **After switching setup (all setups)** setting persists as `onSwitch`
 ### Status display
 
 The global `showStatus` setting accepts a boolean and defaults to `true` when omitted from an existing version 3 document.
-Set it through **/sync → Settings → Show status (all setups)**; changes are saved and applied immediately for every setup.
+Set it through **/sync → Settings → Advanced → Show sync status**; changes are saved and applied immediately for every setup.
 When `false`, pi-sync clears and suppresses status text for background checks, manual and automatic transfers, and review attention.
 TUI review widgets and TUI/RPC notifications remain available, and lifecycle cleanup still clears any stale status owned by pi-sync.
 
 ### Secret scanning
 
 The global `skipSecretScan` setting accepts a boolean and defaults to `false`, including when omitted from an existing version 3 document.
-Set it through **/sync → Settings → Skip secret scan (all setups)**; changes are saved immediately and apply to subsequent pushes for every sync setup, including automatic pushes.
+Set it through **/sync → Settings → Advanced → Skip secret scan**; changes are saved immediately and apply to subsequent pushes for every sync setup, including automatic pushes.
 When `true`, pushes skip the local secret scan; other safety checks and confirmations remain unchanged.
 Enable it only after reviewing the destination and selected content because files containing secrets can be uploaded.
 `/sync doctor` still scans and reports possible secrets regardless of this setting.
@@ -194,7 +196,7 @@ RPC remains a read-only summary with the manual `sync.include` path.
 
 Every new snapshot stores the normalized included-content selection separately from the files that happened to exist.
 This preserves selected-but-missing paths without syncing `pi-sync.json`, storage credentials, automatic-sync preferences, or setup names.
-**Settings → Compare synced content** opens the same review-first flow as a manager operation when local and remote lists differ.
+**Settings → Sync content → Compare included paths** opens the same review-first flow as a manager operation when local and remote lists differ.
 Adoption revalidates the remote head, immutable snapshot, reviewed storage coordinates, and local include list before one atomic settings update.
 The saved state changes only `sync.include`, preserves unknown settings fields, and never pulls files or writes sync state.
 Its explicit Continue action starts a fresh **Sync now** route, while **Done** leaves the reviewed settings change saved without implying a file operation.
@@ -212,9 +214,9 @@ Pull protects the currently open session file; restart Pi or resume a pulled ses
 
 ### Automatic startup transfer
 
-`sync.automaticTransfer` is optional and accepts only a boolean; absent means `false`. Set it through **/sync → Settings → Automatic transfer at startup**. It is separate from `sync.automatic`: the legacy setting retains observation and selected-content shutdown behavior.
+`sync.automaticTransfer` is optional and accepts only a boolean; absent means `false`. Set it through **/sync → Settings → Sync behavior → Startup transfer**. It is separate from `sync.automatic`: the legacy setting retains observation and selected-content shutdown behavior.
 
-When explicitly enabled, one startup transfer waits for an idle boundary in TUI/RPC. It requires an accepted baseline and a matching authoritative remote include list, retains all-or-nothing conflict review, checks secrets unless the global scan override is enabled, and never reloads resources. Git and verified conditional WebDAV support this automatic policy; R2/S3 require manual sync. Print/JSON skip automatic startup transfer. A settings save takes effect for subsequent authorization checks; enabling schedules the next session start, while foreground Settings cancels and drains any current work before saving. There is no polling.
+When explicitly enabled, one startup transfer waits for an idle boundary in TUI/RPC. It requires an accepted baseline and a matching authoritative remote include list, retains all-or-nothing conflict review, checks secrets unless the global scan override is enabled, and never reloads resources. Git, verified conditional WebDAV, and R2/S3 with verified conditional writes support this policy. A saved On preference is not proof of eligibility: baseline, remote policy, idle ownership, conflicts, secrets, and publication capability are checked again at execution. Print/JSON skip automatic startup transfer. A settings save takes effect for subsequent authorization checks; enabling schedules the next session start, while foreground Settings cancels and drains any current work before saving. There is no polling.
 
 Turning it off does not revert transfers or remove backups/journals. For interrupted operations, follow [merge recovery](merge-implementation-audit.md). Unknown fields remain preserved and malformed/invalid files block saves, just as for the existing policy.
 
@@ -232,7 +234,7 @@ Accepted ancestors are private, hash/identity-bound, bounded records below the d
 
 ### Content merge and partial progress
 
-`sync.mergeContent` and `sync.partialSync` are independent experimental booleans, both default `false`. The owning **Content / partial sync** setting offers Off, Content only, Partial only, and Content & partial and confirms an explicit settings-version-5 upgrade. Manual configuration must also declare version 5. Settings version 5 retains the portable-policy behavior of version 4; moving from a legacy setup can require the existing separately confirmed directional policy migration. Disabling options retains the schema and recovery evidence.
+`sync.mergeContent` and `sync.partialSync` are independent experimental booleans, both default `false`. The owning **Advanced → Content merge / partial progress** setting offers Off, Merge only, Merge + partial, and Partial only and confirms an explicit settings-version-5 upgrade. Manual configuration must also declare version 5. Settings version 5 retains the portable-policy behavior of version 4; moving from a legacy setup can require the existing separately confirmed directional policy migration. Disabling options retains the schema and recovery evidence.
 
 Content merge initially supports global `AGENTS.md` and `.md`/`.txt` prompt/skill resources. Strict UTF-8, 1 MiB/file and a four-million-cell complexity bound apply. BOM, CRLF/LF and final-newline bytes are not silently normalized; unsupported/binary/oversized input remains a file conflict. Output never includes conflict markers. JSON/keybindings/executable resources are not treated as generic text; settings has its separate strategy. A clean line merge is not proof of semantic correctness.
 

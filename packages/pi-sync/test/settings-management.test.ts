@@ -396,6 +396,7 @@ test.each([3, 4, 5])(
       sync(mock.pi);
       const choices = [
         "Settings",
+        "Storage & setups",
         "Manage sync setups",
         "Add sync setup",
         "r2",
@@ -702,16 +703,20 @@ test("settings UI exposes local editing and synced-content comparison", async ()
       mode: "tui",
       custom: async (factory: unknown) => {
         const harness = createCustomSelectorHarness(factory, 100);
+        if (harness.render().includes("Pi Sync Settings")) {
+          harness.handleInput("\r");
+          return harness.result;
+        }
         rendered = harness.render().join("\n");
-        harness.handleInput("tui.select.cancel");
+        harness.handleInput("\u0003");
         return harness.result;
       },
     });
 
     await showSyncSettings(ctx, async () => undefined);
 
-    assert.match(rendered, /Included content/u);
-    assert.match(rendered, /Compare synced content/u);
+    assert.match(rendered, /Included paths/u);
+    assert.match(rendered, /Compare included paths/u);
     assert.deepEqual(readFileSync(localConfigPath()), before);
   });
 });
@@ -725,15 +730,21 @@ test("settings UI persists the global secret-scan override", async () => {
       mode: "tui",
       custom: async (factory: unknown) => {
         const harness = createCustomSelectorHarness(factory, 100);
+        if (harness.render().includes("Pi Sync Settings")) {
+          if (notifications.length > 0) harness.handleInput("\u0003");
+          else {
+            for (let index = 0; index < 4; index++) harness.handleInput("tui.select.down");
+            harness.handleInput("\r");
+          }
+          return harness.result;
+        }
         if (notifications.length > 0) {
           harness.handleInput("\u0003");
           return harness.result;
         }
         harness.handleInput("Skip secret scan");
         harness.handleInput("\r");
-        for (let attempt = 0; attempt < 100 && notifications.length === 0; attempt += 1) {
-          await new Promise((resolve) => setTimeout(resolve, 10));
-        }
+        await harness.waitForPending();
         harness.handleInput("\u001b");
         return harness.result;
       },
@@ -755,15 +766,21 @@ test("settings UI disables status globally and applies the saved value immediate
       mode: "tui",
       custom: async (factory: unknown) => {
         const harness = createCustomSelectorHarness(factory, 100);
+        if (harness.render().includes("Pi Sync Settings")) {
+          if (context.notifications.length > 0) harness.handleInput("\u0003");
+          else {
+            for (let index = 0; index < 4; index++) harness.handleInput("tui.select.down");
+            harness.handleInput("\r");
+          }
+          return harness.result;
+        }
         if (context.notifications.length > 0) {
           harness.handleInput("\u0003");
           return harness.result;
         }
-        harness.handleInput("Show status");
+        harness.handleInput("Show sync status");
         harness.handleInput("\r");
-        for (let attempt = 0; attempt < 100 && context.notifications.length === 0; attempt += 1) {
-          await new Promise((resolve) => setTimeout(resolve, 10));
-        }
+        await harness.waitForPending();
         harness.handleInput("\u001b");
         return harness.result;
       },
@@ -815,11 +832,17 @@ test("settings UI restores its displayed value when a private atomic save is rej
       mode: "tui",
       custom: async (factory: unknown) => {
         const harness = createCustomSelectorHarness(factory, 80);
+        if (harness.render().includes("Pi Sync Settings")) {
+          if (notifications.length > 0) harness.handleInput("\u0003");
+          else {
+            for (let index = 0; index < 4; index++) harness.handleInput("tui.select.down");
+            harness.handleInput("\r");
+          }
+          return harness.result;
+        }
         harness.handleInput("Skip secret scan");
         harness.handleInput("\r");
-        for (let attempt = 0; attempt < 100 && notifications.length === 0; attempt += 1) {
-          await new Promise((resolve) => setTimeout(resolve, 10));
-        }
+        await harness.waitForPending();
         afterFailure = harness.render().join("\n");
         harness.handleInput("\u001b");
         return harness.result;
@@ -835,7 +858,7 @@ test("settings UI restores its displayed value when a private atomic save is rej
     );
     assert.match(afterFailure, /Skip secret scan/u);
     assert.match(afterFailure, /Off/u);
-    assert.match(notifications.at(-1)?.message ?? "", /settings save failed/iu);
+    assert.ok(notifications.some((entry) => /settings save failed/iu.test(entry.message)));
     assert.equal((await loadConfig()).skipSecretScan, false);
   });
 });
@@ -852,11 +875,17 @@ test("a rejected status save preserves its displayed, persisted, and runtime val
       mode: "tui",
       custom: async (factory: unknown) => {
         const harness = createCustomSelectorHarness(factory, 80);
-        harness.handleInput("Show status");
-        harness.handleInput("\r");
-        for (let attempt = 0; attempt < 100 && context.notifications.length === 0; attempt += 1) {
-          await new Promise((resolve) => setTimeout(resolve, 10));
+        if (harness.render().includes("Pi Sync Settings")) {
+          if (context.notifications.length > 0) harness.handleInput("\u0003");
+          else {
+            for (let index = 0; index < 4; index++) harness.handleInput("tui.select.down");
+            harness.handleInput("\r");
+          }
+          return harness.result;
         }
+        harness.handleInput("Show sync status");
+        harness.handleInput("\r");
+        await harness.waitForPending();
         afterFailure = harness.render().join("\n");
         harness.handleInput("\u001b");
         return harness.result;
@@ -873,9 +902,9 @@ test("a rejected status save preserves its displayed, persisted, and runtime val
       () => showSyncSettings(context.ctx, async () => undefined),
     );
 
-    assert.match(afterFailure, /Show status/u);
+    assert.match(afterFailure, /Show sync status/u);
     assert.match(afterFailure, /On/u);
-    assert.match(context.notifications.at(-1)?.message ?? "", /settings save failed/iu);
+    assert.ok(context.notifications.some((entry) => /settings save failed/iu.test(entry.message)));
     assert.equal((await loadConfig()).showStatus, true);
     assert.equal((await readLocalConfigObject())?.showStatus, undefined);
     setSyncStatus(context.ctx, "after");
