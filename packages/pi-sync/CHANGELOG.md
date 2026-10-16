@@ -1,5 +1,13 @@
 # @narumitw/pi-sync
 
+## 0.54.3
+
+### Patch Changes
+
+- 2a9ad3a: Add opt-in startup timing notifications with the global `debug` boolean setting, including local initialization, background inspection, and automatic transfer stages.
+- d02ca5f: Skip remote snapshot downloads and baseline rewrites for verified unchanged automatic transfers while retaining recovery and conservative fallbacks. Add aggregated transfer-stage durations and call counts to startup debug reports.
+- 8ae9e62: Group Settings by task, retain cross-category search, and clarify setting scope, save results, and independent startup policies. Add manager status/difference actions and directional transfer counts with safe-default scrollable TUI Pull/Push reviews. Recheck reviewed local content and baselines, preserve protected sessions in preview counts, and clarify that remote removals do not erase retained history.
+
 ## 0.54.2
 
 ### Patch Changes

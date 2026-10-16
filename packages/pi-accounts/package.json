@@ -1,6 +1,6 @@
 {
   "name": "@narumitw/pi-accounts",
-  "version": "0.53.1",
+  "version": "0.53.2",
   "description": "Pi extension for switching named provider-owned OAuth accounts.",
   "type": "module",
   "license": "MIT",
