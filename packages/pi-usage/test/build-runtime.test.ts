@@ -69,7 +69,7 @@ test("generated runtime is loadable by Pi's Jiti resource loader", async () => {
       assert.ok(command);
       await command.handler("", context.ctx);
       assert.match(title, /Connected \(native OAuth\)/);
-      assert.match(title, /Numerical usage requires a companion/);
+      assert.match(title, /Codex companion usage is disabled/);
       assert.match(title, /https:\/\/chatgpt\.com\/settings\/usage/);
       assert.equal(context.statuses.get("usage"), "chatgpt usage: web only");
 
@@ -117,7 +117,23 @@ test("generated runtime is loadable by Pi's Jiti resource loader", async () => {
           ),
         );
       });
-      // Both generated lazy modules are loaded through the real Jiti boundary.
+      // An existing companion login and historical preference must not opt in.
+      for (const handler of extension.handlers.get("session_start") ?? []) await handler({}, context.ctx);
+      await command.handler("", context.ctx);
+      assert.match(title, /Codex companion usage is disabled/);
+      assert.equal(requests.length, 0);
+      await writeFile(
+        join(agentDir, "pi-usage.json"),
+        JSON.stringify({
+          openaiUseCodexUsage: true,
+          statuslineDisplay: {
+            template: "[{windows}] {provider}",
+            countdown: "{window}:{value} ↻ {reset}",
+            separator: " / ",
+          },
+        }),
+      );
+      // Both generated lazy modules are loaded through the real Jiti boundary after opt-in.
       for (const handler of extension.handlers.get("session_start") ?? []) await handler({}, context.ctx);
       await command.handler("", context.ctx);
       assert.match(title, /Plan limits/);

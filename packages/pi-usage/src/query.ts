@@ -408,8 +408,9 @@ export async function resolveUsageAuth(
   salt: Uint8Array = AUTH_FINGERPRINT_SALT,
   credentialReader: StoredCredentialReader = readStoredCredential,
   candidateReader?: OAuthCredentialCandidateReader,
-  /** @deprecated Companion resolution is automatic; this argument is ignored. */
+  /** @deprecated This historical companion argument is ignored; use options instead. */
   _openaiCompanionUsage?: boolean,
+  options: { openaiUseCodexUsage?: boolean } = {},
 ): Promise<ResolvedUsageAuth | undefined> {
   if (ctx.model?.provider === adapter.id && !hasOfficialOrigin(ctx.model, adapter.id)) {
     throw new Error(
@@ -510,6 +511,8 @@ export async function resolveUsageAuth(
     const native = finalize(
       resolveOpenAIChatGPTAuth(auth, providerResult.auth, providerResult.source, model, offered.candidates),
     );
+    if (options.openaiUseCodexUsage !== true) return native;
+    native.openaiUseCodexUsage = true;
     const { resolveOpenAICompanionAuth } = await import("./openai-companion-auth.js");
     return resolveOpenAICompanionAuth(ctx, native, salt, credentialReader, candidateReader);
   }

@@ -9,7 +9,7 @@ const ON = "On";
 const REMAINING = "Remaining";
 const USED = "Used";
 
-type UsageSettingId = "codexFastMode" | "codexStatusResetCountdown" | "codexStatusPercentage";
+type UsageSettingId = "codexFastMode" | "codexStatusResetCountdown" | "codexStatusPercentage" | "openaiUseCodexUsage";
 
 function settingValueLabel(id: UsageSettingId, value: UsageSettings[UsageSettingId]): string {
   if (id === "codexStatusPercentage") return value === "used" ? USED : REMAINING;
@@ -57,6 +57,14 @@ export async function showUsageSettings(
         description: "Show remaining or used Codex quota in the statusline.",
         currentValue: settingValueLabel("codexStatusPercentage", state.settings.codexStatusPercentage),
         values: [REMAINING, USED],
+      },
+      {
+        id: "openaiUseCodexUsage",
+        label: "Use Codex login for OpenAI usage",
+        description:
+          "Read native OpenAI usage with the Codex login. Enable only when both logins use the same ChatGPT account and workspace. Experimental: sends the Codex bearer and account ID to undocumented ChatGPT endpoints; shared identity is not verified.",
+        currentValue: state.settings.openaiUseCodexUsage ? ON : OFF,
+        values: [OFF, ON],
       },
     ];
     const rule = new HorizontalRule({ ruleStyle: (text) => theme.fg("border", text) });
@@ -111,7 +119,7 @@ export async function showUsageSettings(
         if (closing || signal.aborted || !isCurrent()) return;
         if (id === "codexStatusPercentage") {
           queueUpdate(id, value === USED ? "used" : "remaining", value);
-        } else if (id === "codexFastMode" || id === "codexStatusResetCountdown") {
+        } else if (id === "codexFastMode" || id === "codexStatusResetCountdown" || id === "openaiUseCodexUsage") {
           queueUpdate(id, value === ON, value);
         }
       },

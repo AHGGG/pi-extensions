@@ -26,9 +26,9 @@ The README contains the capability overview and shared security requirements.
 ### OpenAI native ChatGPT OAuth
 
 - Provider ID: `openai`
-- Source: verified native OAuth plus automatic same-account Codex companion OAuth; distinct shared plan and app windows
+- Source: verified native OAuth status by default; optional Codex companion OAuth for distinct shared plan and app windows
 - Display: plan percentages and plan/app resets; app used/remaining percentages are hidden
-- Missing-companion fallback: **Connected (native OAuth)**, same-account login guidance, and [ChatGPT usage settings](https://chatgpt.com/settings/usage)
+- Disabled/missing-companion fallback: **Connected (native OAuth)**, same-account login guidance, and [ChatGPT usage settings](https://chatgpt.com/settings/usage)
 - Fallback statusline: `chatgpt usage: web only`
 
 Use `/login openai` in a Pi runtime that supports native Sign in with ChatGPT, then select an official `https://api.openai.com` model.
@@ -39,7 +39,7 @@ Runtime/API-key overrides, model-level Authorization replacements or removals, a
 OpenAI API-key usage reporting remains unsupported.
 
 Without companion credentials, the report verifies authentication, not the plan tier, allowance, remaining quota, or reset time.
-With valid companion credentials, queries and automatic refreshes read both companion endpoints; otherwise no usage request is made.
+With companion usage enabled and valid companion credentials, queries and automatic refreshes read both companion endpoints; otherwise no usage request is made.
 The settings link is guidance, not an automatically opened browser or a promise that the browser is signed into Pi's account.
 Native tokens are never sent to `/backend-api/wham`, and opaque native metadata is not decoded as a legacy Codex account ID.
 Legacy Fast payload rewriting, pricing correction, and earned reset redemption do not apply to native `openai`.
@@ -49,10 +49,11 @@ The boundary is verified against Pi's [`openai-chatgpt.ts`](https://github.com/e
 These contracts establish the public inference and authentication boundary, not a numerical usage API.
 Deterministic verification uses synthetic credentials with Pi's real auth resolver. A user reported one plan weekly remaining percentage and reset time matching the web overview; browser login, app numerical agreement, and broader live coverage remain unverified.
 
-#### Automatic companion quotas
+#### Optional companion quotas
 
-Follow the [companion setup](../README.md#chatgpt-companion-usage): a same-account/workspace `/login openai-codex` is required.
-The former opt-in setting and confirmation are removed; stored `openaiCompanionUsage` values, including `false`, no longer disable requests and are preserved without rewriting on reads.
+Follow the [companion setup and settings reference](../README.md#chatgpt-companion-usage): explicit opt-in and a same-account/workspace `/login openai-codex` are required.
+Companion usage defaults to Off, including after upgrade; historical settings cannot enable it.
+Off prevents Codex discovery, readiness waits, and auth resolution for native OpenAI queries, without affecting explicit Codex provider queries.
 Fresh companion OAuth must match a complete grant with its own account ID; custom origins, API-key overrides, conflicting grants, and effective Authorization overrides fail closed.
 Only the companion bearer and matching `ChatGPT-Account-Id` reach these fixed, redirect-rejecting GET routes:
 
@@ -68,10 +69,10 @@ Reports keep plan/app windows and reset boundaries separate; the statusline show
 Codex display preferences do not apply.
 App used/remaining values are validated internally but not displayed; app reset/window information and the separately labeled allowance cap remain visible in detailed reports.
 
-Missing-companion paths remain web-only without requests. Other companion failures invalidate numerical data and remain observable.
+Disabled and missing-companion paths remain web-only without requests. Other companion failures invalidate numerical data and remain observable.
 No native token, refresh token, app name, or account ID is rendered or persisted by this feature.
 An exact registration match is not independent identity proof; users must choose the same account/workspace for both logins.
-The endpoints remain an experimental, undocumented source despite automatic querying. One user-reported plan weekly comparison matched the web; app numerical agreement and broader live availability remain unverified.
+The endpoints remain an experimental, undocumented source even after explicit opt-in. One user-reported plan weekly comparison matched the web; app numerical agreement and broader live availability remain unverified.
 Contract fixtures derive from [Specode's pinned implementation](https://github.com/specode/pi-subscription-usage/blob/1015f9f419dfef9ac27c9845ec2318394928fa38/src/providers/openai.ts) and [OpenAI's shared-plan/app-limit explanation](https://help.openai.com/en/articles/20001542-using-your-chatgpt-plan-in-other-apps-and-sites), not a public native quota API.
 
 ### OpenAI Codex
