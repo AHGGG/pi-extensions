@@ -1,6 +1,7 @@
 import { createHash, createHmac } from "node:crypto";
 import { setTimeout as sleep } from "node:timers/promises";
 import { encodeKey, posixJoin } from "../../paths.js";
+import { retryAfter } from "../../sync/continuous-errors.js";
 import type { RemoteObject, ResolvedS3Backend } from "../backend-types.js";
 
 const MAX_JSON_RESPONSE_BYTES = 1024 * 1024;
@@ -34,6 +35,7 @@ export class S3HttpError extends Error {
   constructor(
     message: string,
     readonly status: number,
+    readonly retryAfterMs?: number,
   ) {
     super(message);
     this.name = "S3HttpError";
@@ -81,7 +83,11 @@ export class S3Client {
       const object = await this.request("GET", key);
       if (object.status === 404) return { missing: true };
       if (!object.ok) {
-        throw new S3HttpError(`S3 GET failed (${object.status}): ${await this.readErrorText(object)}`, object.status);
+        throw new S3HttpError(
+          `S3 GET failed (${object.status}): ${await this.readErrorText(object)}`,
+          object.status,
+          retryAfter(object),
+        );
       }
       const body = await readBoundedText(object, MAX_JSON_RESPONSE_BYTES, "S3 JSON response");
       // R2 can intermittently return an empty 200 body (read-after-write
@@ -111,7 +117,11 @@ export class S3Client {
       const object = await this.request("GET", key);
       if (object.status === 404) return { missing: true };
       if (!object.ok) {
-        throw new S3HttpError(`S3 GET failed (${object.status}): ${await this.readErrorText(object)}`, object.status);
+        throw new S3HttpError(
+          `S3 GET failed (${object.status}): ${await this.readErrorText(object)}`,
+          object.status,
+          retryAfter(object),
+        );
       }
       const buffer = await readBoundedBuffer(object, MAX_SNAPSHOT_RESPONSE_BYTES, "S3 snapshot response");
       // R2 can intermittently return an empty 200 body on a long-lived
@@ -158,6 +168,7 @@ export class S3Client {
       throw new S3HttpError(
         `S3 PUT failed (${response.status}): ${await this.readErrorText(response)}`,
         response.status,
+        retryAfter(response),
       );
     }
     await response.body?.cancel();
@@ -169,6 +180,7 @@ export class S3Client {
       throw new S3HttpError(
         `S3 DELETE failed (${response.status}): ${await this.readErrorText(response)}`,
         response.status,
+        retryAfter(response),
       );
     }
     await response.body?.cancel();

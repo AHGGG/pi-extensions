@@ -36,6 +36,10 @@ export async function status(
   );
   throwIfAborted(options.signal);
 
+  const continuous = config.continuous
+    ? await (await import("./continuous-record.js")).continuousStatusLines(config)
+    : [];
+  throwIfAborted(options.signal);
   const remoteText = head ? `remote: ${head.snapshotId} from ${head.machine} at ${head.createdAt}` : "remote: empty";
   const warnings = syncSessionsWarnings(config);
   setSyncStatus(ctx, undefined);
@@ -47,6 +51,7 @@ export async function status(
       `publication safety: ${publicationCapabilityDescription(capability)}`,
       `included content: ${config.include.join(", ") || "none"}`,
       `sessions: ${config.include.includes("sessions") ? "included" : "excluded"}`,
+      ...continuous,
       remoteText,
       formatRemoteSelectionStatus(selectionState),
       `local files: ${localFiles}`,

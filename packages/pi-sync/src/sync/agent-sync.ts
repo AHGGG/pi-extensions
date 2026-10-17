@@ -4,6 +4,7 @@ import { withLock } from "../state/lock.js";
 import { setSyncStatus } from "../ui/sync-status.js";
 import { AGENT_MAX_ATTEMPTS } from "./agent-policy.js";
 import { type AgentAcceptance, AgentResolutionRequired } from "./agent-request.js";
+import { ContinuousError } from "./continuous-errors.js";
 
 /** All callers retain their existing state-directory access guard. Off stays lazy. */
 export async function withAgentSyncLock<T>(
@@ -12,6 +13,7 @@ export async function withAgentSyncLock<T>(
   run: (options: CommandOptions) => Promise<T>,
 ): Promise<T> {
   let request: AgentResolutionRequired;
+  const background = options.background;
   try {
     return await withLock("sync", () => run(options));
   } catch (error) {
@@ -49,9 +51,20 @@ export async function withAgentSyncLock<T>(
         });
         const raw =
           cached === undefined
-            ? await runAgentResolver(ctx, request.evidence, validate, options.signal)
+            ? await runAgentResolver(
+                ctx,
+                request.evidence,
+                validate,
+                options.signal,
+                background ? () => background.reserve(request.key) : undefined,
+              )
             : JSON.stringify(cached);
-        const candidate = parseAgentCandidate(raw, request.evidence);
+        let candidate: ReturnType<typeof parseAgentCandidate>;
+        try {
+          candidate = parseAgentCandidate(raw, request.evidence);
+        } catch {
+          throw new ContinuousError("model", "Agent mode paused: invalid resolver output; evidence retained.");
+        }
         await validate();
         await withLock("agent-cache-save", async () => {
           await assertOwner();
@@ -69,7 +82,7 @@ export async function withAgentSyncLock<T>(
           request = error;
         }
       }
-      throw new Error("Agent mode paused: content changed repeatedly; retry later.");
+      throw new ContinuousError("stale", "Agent mode paused: content changed repeatedly; retry later.");
     } finally {
       options.signal?.removeEventListener("abort", onAbort);
       if (!options.signal?.aborted) clearStatus();

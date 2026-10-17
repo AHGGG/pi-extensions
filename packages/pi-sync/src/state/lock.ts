@@ -58,8 +58,11 @@ export async function withLock<T>(
       inspection = { status: "missing" };
     }
     if (inspection.status === "valid") {
-      throw new Error(
-        `pi-sync is already running (${inspection.lock.command}, pid ${inspection.lock.pid}, started ${inspection.lock.startedAt}).`,
+      throw Object.assign(
+        new Error(
+          `pi-sync is already running (${inspection.lock.command}, pid ${inspection.lock.pid}, started ${inspection.lock.startedAt}).`,
+        ),
+        { code: "ELOCKED" },
       );
     }
     if (inspection.status === "unreadable") {
@@ -257,11 +260,15 @@ async function describeHeldLock() {
     return new Error("pi-sync lock owner exited; retry shortly while the lock guard expires.");
   }
   if (current) {
-    return new Error(
-      `Pi-sync is currently running (${current.command}, pid ${current.pid}, started ${current.startedAt}).`,
+    return Object.assign(
+      new Error(`Pi-sync is currently running (${current.command}, pid ${current.pid}, started ${current.startedAt}).`),
+      { code: "ELOCKED" },
     );
   }
-  return new Error("Pi-sync is currently running (lock metadata is unreadable or still being written).");
+  return Object.assign(
+    new Error("Pi-sync is currently running (lock metadata is unreadable or still being written)."),
+    { code: "ELOCKED" },
+  );
 }
 
 function isLockHeldError(error: unknown) {

@@ -7,6 +7,7 @@
 - [Status display](#status-display)
 - [Secret scanning](#secret-scanning)
 - [Experimental Agent mode](#experimental-agent-mode)
+- [Experimental Continuous sync](#experimental-continuous-sync)
 - [Included content](#included-content)
 - [Unsupported old settings and recovery](#unsupported-old-settings-and-recovery)
 
@@ -135,7 +136,7 @@ This check does not contact the server or discover setups configured only on oth
 
 Every setup requires `sync.include` and explicit `sync.automatic`. Setup asks for automatic sync with Off first; existing values are not rewritten. When enabled, the current setup receives one background startup check in TUI/RPC, including reload/new/resume/fork. Startup no longer performs automatic transfers or opens dialogs; review changes through `/sync`. Print/JSON skip startup checks. Checks compare local hashes and remote metadata against the last sync baseline, so revision changes and missing baselines require review rather than proving a file conflict.
 
-The setting still permits automatic shutdown pushes of selected content when `sessions` is included, in all modes; this is not limited to uploading session files. Reload skips shutdown push. Settings changes apply to subsequent operations; changing this setting does not schedule another startup check until the next session start. Foreground `/sync` cancels a pending check before opening Settings. The check deadline is 30 seconds plus bounded cleanup, with manual retry through `/sync status`; there is no polling. See [Background startup checks](../README.md#background-startup-checks) for recovery and Git cache exceptions.
+The setting still permits automatic shutdown pushes of selected content when `sessions` is included, in all modes; this is not limited to uploading session files. Reload skips shutdown push. Settings changes apply to subsequent operations; changing this setting does not schedule another startup check until the next session start. Foreground `/sync` cancels a pending check before opening Settings. The check deadline is 30 seconds plus bounded cleanup, with manual retry through `/sync status`; this one-shot policy has no polling. Continuous sync is a separate opt-in. See [Background startup checks](../README.md#background-startup-checks) for recovery and Git cache exceptions.
 
 Recommended includes the nine non-session Pi roots listed below; Minimal includes `settings.json` and `AGENTS.md`. The save review lists every selected path and the full backend destination. R2/S3 requires an explicitly entered existing bucket and never creates one. Saving setup or connection settings does not contact remote storage.
 
@@ -260,7 +261,7 @@ Turning **Startup transfer** off does not revert transfers or remove backups/jou
 
 `sync.agentMode` is an optional per-setup boolean, default `false`, in settings versions 3, 4, and 5. Open **Settings → Sync behavior → Agent mode (experimental)** and review the setup, destination, selected paths, model disclosure, costs, and autonomous writes before enabling. RPC users can explicitly set the same field in the private settings file. Setting it to `true` is authorization, not just a display preference.
 
-Agent mode authorizes one eligible merged sync at the next session start and the same autonomous flow from **Sync now** or `/sync sync`. It can publish and replace/delete selected content without another transfer confirmation. It is independent of `sync.automatic` and `sync.automaticTransfer`; neither existing preference is changed. Disabling Startup transfer alone does not disable Agent mode. Saving never starts a transfer from Settings. The atomic write cannot be cancelled after its final cancellation check. A completed save remains in effect after cancellation or session replacement; reopen Settings to read the saved value. TUI/RPC are supported; print/JSON and shutdown do not start a resolver. There is no polling, daemon, or work after all owning Pi processes exit.
+Agent mode authorizes one eligible merged sync at the next session start and the same autonomous flow from **Sync now** or `/sync sync`. It can publish and replace/delete selected content without another transfer confirmation. It is independent of `sync.automatic` and `sync.automaticTransfer`; neither existing preference is changed. Disabling Startup transfer alone does not disable Agent mode. Saving never starts a transfer from Settings. The atomic write cannot be cancelled after its final cancellation check. A completed save remains in effect after cancellation or session replacement; reopen Settings to read the saved value. TUI/RPC are supported; print/JSON and shutdown do not start a resolver. Agent mode alone adds no polling or daemon. Separately enabled Continuous sync provides recurring work while Pi remains open.
 
 An accepted baseline, matching included-content/local-field policies, and conditional or lease-protected publication remain required. First-source selection, policy migrations, explicit push/pull, and rollback keep their existing reviewed flows. `--yes` does not enable Agent mode or authorize model disclosure. Completed transfers never reload resources automatically.
 
@@ -281,6 +282,61 @@ Private claim and content-keyed candidate records reside under `<state-root>/age
 Pi-sync's cross-process operation lock excludes other pi-sync transfers, not arbitrary writers. Pi file mutation queues coordinate participating writers only within one process. Checks near rename reduce stale writes but do not provide an atomic compare-and-swap against another Pi process or editor. Session JSONL is not rewritten by the model; other active session writers remain subject to the existing protection limitations. Do not use Agent mode as a guarantee of lossless live editing.
 
 Turn Agent mode Off to prevent subsequent requests and invalidate pending authorization. Keep backups, snapshots, conflicts and pending journals; disabling does not undo completed work or erase history. Unknown publication outcomes use the existing journal reconciliation and never authorize blind republishing. Pending journals can be reconciled on a read/check/write/verify backend because recovery does not publish. New autonomous transfers still require conditional or lease-protected publication; turn Agent mode Off before a reviewed manual transfer on a weaker backend. If recovery is blocked, retain evidence and use the existing reviewed recovery routes. Finish/reconcile pending merge journals before a downgrade. No Pi core changes or other extension are required.
+
+### Experimental Continuous sync
+
+`sync.continuous` is an optional per-setup boolean, default `false`, in settings versions 3, 4 and 5. Open **Settings → Sync behavior → Continuous sync (experimental)** after enabling Agent mode. RPC users can set the field explicitly in the private settings file. Existing Agent mode consent does not enable recurring requests.
+
+The separate review names the setup, storage connection, destination, included paths, recurring costs and automatic writes. An elected idle session uses its selected Pi model; a different session can use a different provider/model. The save uses the existing atomic settings writer. Cancellation after the final publication check cannot undo a committed save. Reopen Settings to read the saved value.
+
+#### Activation and ownership
+
+Monitoring starts at an eligible TUI/RPC session startup, after awaited local transaction recovery, or after a foreground `/sync` command or manager closes. It replaces the duplicate one-shot startup transfer, not the legacy shutdown policy. Turning Continuous sync off stops its work without disabling Agent mode. Turning Agent mode off also stops monitoring; a saved Continuous sync On value remains ineffective until Agent mode is enabled again.
+
+A control-file change during monitoring is detected by a watcher or the five-second local control check. If monitoring is already off, external enablement requires the next session start or a foreground `/sync` command. Print/JSON create no continuous resources. No daemon remains after Pi exits.
+
+Upgrade all Pi processes sharing an agent directory before enabling Continuous sync. Older releases do not implement its election or automatic accounting. One scheduler lease coordinates participating sessions/processes sharing the same canonical agent directory. Standbys only check local eligibility/ownership; they do not duplicate remote polling, watchers or inference. Each computer has a separate scheduler. Remote conditional publication and revision checks remain authoritative across computers. The lease does not exclude arbitrary editors or writers in other Pi processes.
+
+Agent work, foreground commands, replacement, reload and shutdown cancel and drain owned work before handoff. Idle work resumes through `agent_settled` or a later eligible check. A busy session does not retain leadership indefinitely. Completed atomic writes or remote commits remain committed even when cancellation occurs later.
+
+#### Detection, retries and safety blocks
+
+Local hints wait for one quiet second. Remote and local snapshots are checked every 60–66 seconds. Missing roots, atomic replacement, unsupported recursive watching and watcher errors retain periodic fallback. Only selected content and control settings generate hints; private caches, backups and scheduler state are excluded.
+
+Local changes and retries can cause extra remote requests between polls. Cycles do not overlap. Each cycle has a 30-second deadline plus underlying cleanup. Changes during a cycle coalesce into one later fresh inspection rather than a queue of stale commands.
+
+Known transient network/server errors and rate limits retry from five seconds with exponential backoff, bounded jitter and a five-minute cap. Valid server Retry-After delays are capped at five minutes. Backoff survives restart and is reset by successful work or relevant configuration changes, not every file event.
+
+Authentication, permissions, disk errors, invalid settings, unsafe evidence and unknown errors stop automatic transfer. Relevant repair, changed evidence or an explicit Sync now action can permit a fresh attempt. Corrupt private records are retained, not replaced with defaults. Local prerequisite checks can detect a repair without network/model work.
+
+Blocked conflicts are inspected for changed evidence, but unchanged refusal/invalid output does not spend another model request. Opaque Pi assistant errors and Git failures without structured transport evidence are not classified from text. Select an available model, repair access, or use the existing review routes as needed.
+
+Missing baselines, changed selection/local-field rules, unsupported conflicts and weak publication capability remain safety blocks. Code, session histories, deletion conflicts and path collisions are not model-resolved. Existing explicit partial-sync policy alone permits independent progress. No background confirmation dialog or automatic resource reload is added.
+
+#### Request limits and private records
+
+The existing per-flow candidate limit, 20-second resolver deadline, input/output bounds, tool/resource isolation and mandatory disclosure scan still apply. Cached candidates must pass current evidence checks before reuse.
+
+Before each automatic provider dispatch, Pi Sync reserves a request in private durable state. Timeouts, cancellation after reservation and uncertain dispatch outcomes consume that reservation. Automatic requests are limited to:
+
+- Two for the same candidate evidence/model contract, across process restart and ownership handoff.
+- Two per replica binding in a rolling 15-minute window, including requests for different candidate keys.
+
+A refusal or invalid output blocks unchanged evidence rather than requesting another completion each poll. When the rolling window is full, Status shows the next eligible attempt. Checks, conflict-free transfers and journal recovery can continue without another model request. When the candidate's two attempts are spent, use changed evidence or an explicit retry. The explicit **Sync now** / `/sync sync` path retains its existing per-flow limits; it does not erase automatic accounting. Opening Status never reserves requests or clears limits.
+
+These limits are not a currency spending cap or an exactly-once billing guarantee. Candidate accounting has a 128 KiB storage bound. A full record blocks work instead of pruning counts and silently granting more requests.
+
+Private records under `<state-root>/continuous/` hold versioned owner/binding metadata, coalesced intent, hashes, safe error categories, timestamps and request counts. They contain no raw credentials, provider errors, reasoning or duplicate conflict text. The binding uses the canonical agent root and setup/destination identity; state-directory migration does not reset accounting. POSIX records are private and use temporary-file-plus-rename publication. Keep the directory as private evidence; do not delete it to repair a transfer.
+
+#### Status, recovery and downgrade
+
+The existing status key shows waiting, checking/syncing, scheduled retry, another local owner, or a stable blocked reason. **Check remote status** and the manager show advisory ownership, the last successful background check/transfer and safe next actions. Notifications are deduplicated by error/evidence/configuration. Status may itself need network access for its existing remote check, but does not call the model.
+
+Pending journals are reconciled before new work, including a newly uncertain publication. Recovery never blindly republishes. An unchanged recovery block is not repeatedly applied. Preserve journals, backups and unresolved versions when proof is unavailable.
+
+Turn Continuous sync off and drain its owner before downgrade. Reconcile pending transfers with the current release. Existing Agent mode and shutdown preferences remain separately effective. Private scheduler records are separate from baseline/journal formats and remain retained; no automatic filesystem rollback or state migration is performed.
+
+For implementation evidence and test scope, see [Continuous sync verification](continuous-sync-verification.md).
 
 ### Settings field merge and machine-local fields
 

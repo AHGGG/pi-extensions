@@ -15,6 +15,8 @@ export interface CommandOptions {
   startupTimings?: StartupTimings;
   /** Internal validated resolver result; never parsed from command arguments. */
   agentAcceptance?: AgentAcceptance;
+  /** Internal continuous ownership and durable request reservation; never command arguments. */
+  background?: { validate(): void; reserve(key: string): Promise<void> };
   args: string[];
 }
 

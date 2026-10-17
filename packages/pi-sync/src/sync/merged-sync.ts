@@ -83,7 +83,11 @@ export async function mergeSync(
   resolution?: ConflictResolution,
 ) {
   const timings = options.startupTimings ?? createStartupTimings();
-  const validateOwner = captureMutationOwner(ctx, options.signal);
+  const sessionOwner = captureMutationOwner(ctx, options.signal);
+  const validateOwner = () => {
+    sessionOwner();
+    options.background?.validate();
+  };
   const isCurrent = () => {
     try {
       validateOwner();
@@ -127,7 +131,17 @@ export async function mergeSync(
   await validate();
   if (pending) {
     const recovered = await timings.measure("transfer journal recovery", () =>
-      completeJournal(ctx, config, backend, pending, validate, timings, options.signal, options.auto),
+      completeJournal(
+        ctx,
+        config,
+        backend,
+        pending,
+        validate,
+        timings,
+        options.signal,
+        options.auto,
+        options.background?.validate,
+      ),
     );
     if (!recovered) {
       if ((options.auto || !options.silent) && !options.signal?.aborted)
@@ -616,7 +630,17 @@ export async function mergeSync(
         throw mergeTransferError(error, config.backend);
       }
       const completed = await timings.measure("transfer journal recovery", () =>
-        completeJournal(ctx, config, backend, journal, validate, timings, options.signal, options.auto),
+        completeJournal(
+          ctx,
+          config,
+          backend,
+          journal,
+          validate,
+          timings,
+          options.signal,
+          options.auto,
+          options.background?.validate,
+        ),
       );
       if (!completed) {
         if (!options.signal?.aborted && (options.auto || !options.silent))
@@ -655,6 +679,7 @@ async function completeJournal(
   timings: StartupTimings,
   signal?: AbortSignal,
   auto = false,
+  validateBackground?: () => void,
 ) {
   if (
     journal.identity !== mergeJournalIdentity(config, backend.identity) ||
@@ -765,6 +790,7 @@ async function completeJournal(
   const validateOwner = captureMutationOwner(ctx, signal);
   const validateMutation = () => {
     validateOwner();
+    validateBackground?.();
     if (auto && !ctx.isIdle()) throw new Error("Automatic file apply is no longer idle; evidence retained.");
   };
   await timings.measure("transfer local apply", () =>

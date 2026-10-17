@@ -81,6 +81,7 @@ export async function loadPartialConfig(setupName?: string): Promise<PartialConf
     automatic: config.automatic,
     automaticTransfer: config.automaticTransfer ?? false,
     agentMode: config.agentMode ?? false,
+    continuous: config.continuous ?? false,
     onSwitch: config.onSwitch,
     showStatus: config.showStatus,
   };
@@ -121,6 +122,8 @@ export function syncConfigReviewIdentity(config: AnySyncConfig) {
     config.mergeSettings ?? false,
     config.mergeContent ?? false,
     config.partialSync ?? false,
+    // Preserve existing Off identities and cached candidates across the upgrade.
+    ...(config.continuous ? ["continuous"] : []),
   ]);
 }
 
@@ -169,6 +172,7 @@ function resolveSyncConfig(
     automatic: setup.sync.automatic,
     automaticTransfer: setup.sync.automaticTransfer ?? false,
     agentMode: setup.sync.agentMode ?? false,
+    continuous: setup.sync.continuous ?? false,
     localFields: setup.sync.localFields === undefined ? undefined : normalizeLocalFields(setup.sync.localFields),
     mergeSettings: setup.sync.mergeSettings ?? false,
     mergeContent: setup.sync.mergeContent ?? false,

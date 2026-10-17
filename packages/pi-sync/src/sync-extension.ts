@@ -1,4 +1,4 @@
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { completeSyncArguments, splitArgs } from "./commands/command.js";
 import { handleCommand } from "./commands/command-handler.js";
 import type { AnySyncConfig } from "./settings/settings-types.js";
@@ -19,6 +19,31 @@ export default function sync(pi: ExtensionAPI, dependencies: Partial<SyncDepende
   let sessionAbort = new AbortController();
   let shutdownAbort: AbortController | undefined;
   let initialization = Promise.resolve<AnySyncConfig | false | undefined>(undefined);
+  let continuous: ReturnType<typeof import("./sync/continuous-sync.js")["createContinuousSync"]> | undefined;
+  let owner: ExtensionContext["sessionManager"] | undefined;
+  let continuousPossible = false;
+  const foreground = new Map<ExtensionContext["sessionManager"], number>();
+  async function resumeContinuous(ctx: ExtensionContext, signal: AbortSignal, retry?: { setup?: string }) {
+    const isCurrent = () => !signal.aborted && !foreground.has(ctx.sessionManager) && owner === ctx.sessionManager;
+    if (!isCurrent() || !ctx.hasUI) return;
+    try {
+      const { loadConfigForCheck } = await import("./settings/config.js");
+      if (!isCurrent()) return;
+      const config = await loadConfigForCheck();
+      if (!isCurrent()) return;
+      continuousPossible = Boolean(config.continuous && config.agentMode);
+      if (!continuousPossible) {
+        await continuous?.stop(ctx.sessionManager);
+        return;
+      }
+      const { createContinuousSync } = await import("./sync/continuous-sync.js");
+      if (!isCurrent()) return;
+      continuous ??= createContinuousSync(loaders);
+      continuous.start(ctx, signal, Boolean(retry && (retry.setup === undefined || retry.setup === config.setupName)));
+    } catch {
+      /* Existing initialization/command paths report settings errors. */
+    }
+  }
 
   pi.registerCommand("sync", {
     description: "Sync Pi settings through Git, WebDAV, R2, or S3-compatible storage",
@@ -28,23 +53,39 @@ export default function sync(pi: ExtensionAPI, dependencies: Partial<SyncDepende
         throw new Error("/sync requires TUI or RPC mode so results and safety prompts are observable.");
       }
       const signal = sessionAbort.signal;
-      const ready = await initialization;
-      if (signal.aborted) return;
-      await check.stop();
-      if (signal.aborted) return;
+      const manager = ctx.sessionManager;
       const command = splitArgs(args)[0];
-      if (ready === false && command !== "help" && command !== "unlock" && command !== "migrate-state") {
-        ctx.ui.notify(
-          "pi-sync recovery required. Repair the startup error, then /reload before syncing. Use /sync help for recovery guidance.",
-          "error",
-        );
-        return;
+      let retry: { setup?: string } | undefined;
+      let mayResume = false;
+      foreground.set(manager, (foreground.get(manager) ?? 0) + 1);
+      try {
+        const ready = await initialization;
+        mayResume = ready !== false;
+        if (signal.aborted) return;
+        await continuous?.stop(manager);
+        if (signal.aborted) return;
+        await check.stop();
+        if (signal.aborted) return;
+        if (ready === false && command !== "help" && command !== "unlock" && command !== "migrate-state") {
+          ctx.ui.notify(
+            "pi-sync recovery required. Repair the startup error, then /reload before syncing. Use /sync help for recovery guidance.",
+            "error",
+          );
+          return;
+        }
+        const run = () =>
+          handleCommand(args, ctx, signal, loaders, attention, (setup) => {
+            retry = { setup };
+          });
+        // Drain background children before foreground guards. Help remains reachable during repair.
+        if (command === "migrate-state" || command === "help") await run();
+        else await withStateDirectoryAccess(run);
+      } finally {
+        const count = (foreground.get(manager) ?? 1) - 1;
+        if (count) foreground.set(manager, count);
+        else foreground.delete(manager);
+        if (mayResume) await resumeContinuous(ctx, signal, retry);
       }
-      const run = () => handleCommand(args, ctx, signal, loaders, attention);
-      // Drain background cache/child cleanup before entering any foreground guard.
-      // Help must remain reachable when the state roots themselves need repair.
-      if (command === "migrate-state" || command === "help") await run();
-      else await withStateDirectoryAccess(run);
     },
   });
 
@@ -54,10 +95,14 @@ export default function sync(pi: ExtensionAPI, dependencies: Partial<SyncDepende
     sessionAbort.abort(new DOMException("Session replaced", "AbortError"));
     sessionAbort = new AbortController();
     const signal = sessionAbort.signal;
+    owner = ctx.sessionManager;
+    continuousPossible = false;
     attention.reset(ctx);
     const previous = initialization;
     initialization = (async () => {
       await previous;
+      if (signal.aborted) return false;
+      await continuous?.stop();
       if (signal.aborted) return false;
       await check.stop();
       if (signal.aborted) return false;
@@ -72,18 +117,27 @@ export default function sync(pi: ExtensionAPI, dependencies: Partial<SyncDepende
       }
     })();
     const ready = await initialization;
-    if (ready && !signal.aborted) check.start(ctx, signal, ready);
+    if (ready && !signal.aborted) {
+      if (ready.continuous && ready.agentMode) await resumeContinuous(ctx, signal);
+      else check.start(ctx, signal, ready);
+    }
   });
 
   pi.on("agent_start", async (_event, ctx) => {
+    await continuous?.stop(ctx.sessionManager);
     await check.interrupt(ctx);
   });
 
-  pi.on("agent_settled", (_event, ctx) => {
-    if (!sessionAbort.signal.aborted) check.settled(ctx);
+  pi.on("agent_settled", async (_event, ctx) => {
+    const signal = sessionAbort.signal;
+    if (!signal.aborted) {
+      check.settled(ctx);
+      if (continuousPossible) await resumeContinuous(ctx, signal);
+    }
   });
 
   pi.on("session_shutdown", async (event, ctx) => {
+    if (continuous && owner && owner !== ctx.sessionManager) return;
     sessionAbort.abort(new DOMException("Session shut down", "AbortError"));
     attention.reset(ctx);
     shutdownAbort?.abort(new DOMException("Session shut down again", "AbortError"));
@@ -93,6 +147,8 @@ export default function sync(pi: ExtensionAPI, dependencies: Partial<SyncDepende
     const reason = typeof event === "object" && event ? (event as { reason?: string }).reason : undefined;
     try {
       const ready = await initialization;
+      if (signal.aborted) return;
+      await continuous?.stop(ctx.sessionManager);
       if (signal.aborted) return;
       await check.stop();
       if (signal.aborted) return;

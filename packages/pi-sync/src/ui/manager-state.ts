@@ -164,6 +164,7 @@ export async function describeManagerState(
       `Automatic sync: ${automaticSyncSummary(config.automatic)}`,
       `Startup transfer: ${startupTransferSummary(config)}`,
       `Agent mode: ${config.agentMode ? "On (experimental; autonomous merged sync)" : "Off"}`,
+      ...(config.continuous ? await (await import("../sync/continuous-record.js")).continuousStatusLines(config) : []),
       `Last applied: ${lastAppliedSnapshot}`,
       ...(noSyncedContent
         ? ["", "No included content is selected. Choose included content in Settings before syncing."]
