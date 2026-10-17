@@ -8,7 +8,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { Coordinator } from "../src/coordinator.js";
 import { showNotifyMenu } from "../src/menu.js";
 import { SettingsStore, saveDestination, savePolicy } from "../src/settings.js";
-import { providers } from "../src/telegram.js";
+import { createTelegramProvider, providers } from "../src/telegram.js";
 
 let directory: string;
 let store: SettingsStore;
@@ -297,27 +297,49 @@ it("selects destinations immediately and restores project inheritance", async ()
   h.tui.press("ctrl+c");
   await running;
 });
-it("requires confirmation before a test and sends no transcript", async () => {
+it("previews literal text without rich rendering and sends the same text only after confirmation", async () => {
   await saveDestination(
     store,
     "one",
     { provider: "telegram", label: "Personal", botToken: token, chatId: "123" },
     owner.signal,
   );
-  const sending = vi.spyOn(coordinator, "send").mockResolvedValue({ state: "accepted" });
+  const fetcher = vi.fn<typeof fetch>().mockResolvedValue(new Response('{"ok":true,"result":{}}'));
+  const provider = providers.get("telegram");
+  if (!provider) throw new Error("Missing Telegram provider");
+  vi.spyOn(provider, "send").mockImplementation(createTelegramProvider(fetcher).send);
+  const sending = vi.spyOn(coordinator, "send");
   const h = harness();
+  vi.spyOn(h.ctx.sessionManager, "getSessionName").mockReturnValue("😀中文e\u0301 <b>_literal_</b>\x1b[31m@person");
   const running = h.run();
   await h.tui.waitForOpen();
   await h.choose(1);
   await h.choose(0);
-  expect(sending).not.toHaveBeenCalled();
-  expect(h.tui.render().join("\n")).toContain("Pi notification test");
-  expect(h.tui.render().join("\n")).not.toContain(token);
+  const preview = h.tui.resize({ width: 512, rows: 50 }).join("\n");
+  const sentBeforeConfirmation = fetcher.mock.calls.length;
   await h.transition(() => h.tui.press("tui.select.confirm"));
   await vi.waitFor(() => expect(sending).toHaveBeenCalledTimes(1), { interval: 1 });
   await vi.waitFor(() => expect(h.tui.render().join("\n")).toContain("Telegram destinations"), { interval: 1 });
   h.tui.press("ctrl+c");
   await running;
+  expect(sentBeforeConfirmation).toBe(0);
+  expect(fetcher).toHaveBeenCalledTimes(1);
+  const payload = JSON.parse(String(fetcher.mock.calls[0]?.[1]?.body));
+  expect(preview).toContain(payload.text);
+  expect(preview).toContain("Session: 😀中文e\u0301 <b>_literal_</b>＠person (session)");
+  expect(payload.text).toMatch(/^Pi notification test\nComputer:/);
+  expect(payload.entities[0]).toEqual({ type: "bold", offset: 0, length: "Pi notification test".length });
+  expect(
+    payload.entities
+      .slice(1)
+      .map((entity: { offset: number; length: number }) =>
+        payload.text.slice(entity.offset, entity.offset + entity.length),
+      ),
+  ).toEqual(["session", directory]);
+  expect(preview).not.toContain(token);
+  expect(payload.text).not.toContain(token);
+  expect(payload).not.toHaveProperty("parse_mode");
+  expect(payload.text).not.toContain("\x1b");
 });
 it("edits User selection independently from an active Project override", async () => {
   await saveDestination(

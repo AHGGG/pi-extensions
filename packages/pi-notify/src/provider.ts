@@ -8,10 +8,18 @@ export interface TelegramDestination {
 
 export type Destination = TelegramDestination;
 
+export interface BodyEmphasis {
+  style: "bold" | "monospace";
+  /** Offset and length in UTF-16 code units of the sanitized body. */
+  offset: number;
+  length: number;
+}
+
 export interface Notification {
   id: string;
   title: string;
   body: string;
+  bodyEmphasis?: BodyEmphasis[];
   settledAt: number;
 }
 
