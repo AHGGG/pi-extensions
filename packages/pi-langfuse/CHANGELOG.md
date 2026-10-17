@@ -1,5 +1,15 @@
 # @narumitw/pi-langfuse
 
+## 0.53.0
+
+### Minor Changes
+
+- 1dabb0b: Upgrade the experimental durable adapter contract to pi-durable 1.2.0 and Chord ^1.2.0. Update durable tool test results to the public `output` field and keep compatibility guidance aligned with the tested host versions.
+
+### Patch Changes
+
+- fe6e621: Support Pi's user and custom `before_agent_start` events, capturing custom message content with existing trace sanitization.
+
 ## 0.52.0
 
 ### Minor Changes

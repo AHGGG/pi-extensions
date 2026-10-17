@@ -1,5 +1,12 @@
 # @narumitw/pi-starship
 
+## 0.59.1
+
+### Patch Changes
+
+- 2e333f1: Rename the bundled configuration skill to `configure-pi-starship`.
+  Use `/skill:configure-pi-starship` instead of `/skill:configuring-pi-starship`.
+
 ## 0.59.0
 
 ### Minor Changes
