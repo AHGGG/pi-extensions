@@ -39,7 +39,7 @@ The rolling model window does not prevent read-only checks, conflict-free progre
 
 ## Deterministic verification
 
-The new `test/continuous-*.test.ts` files cover consent/settings, typed failures, leases and native exit, durable accounting, lifecycle ownership, detection/debounce, fallback, deadlines, restart/backoff, refusal/partial deduplication, journal recovery, explicit retry routing and Status reads. Existing Agent mode, backend, settings, session-protection and recovery tests also pass. Every Vitest test retains the normal 5,000 ms limit.
+The new `test/continuous-*.test.ts` files cover consent/settings, typed failures, leases and native exit, durable accounting, lifecycle ownership, detection/debounce, fallback, deadlines, restart/backoff, refusal/partial deduplication, journal recovery, explicit retry routing and Status reads. Existing Agent mode, backend, settings, session-protection and recovery tests also pass. Every Vitest test retains the normal 5,000 ms limit. Settings tests check that On and Off saves report the saved state, including consent on enablement and non-default navigation keys.
 
 Authorization regression tests also replace settings or the selected model after inspection, both before `syncBoth` reads settings and between its read and `mergeSync` initialization. Sixteen cases cover Continuous sync disablement, Agent mode disablement while Startup transfer stays enabled, credential replacement, and model replacement, with conflict-free and conflicting content. Watcher hints are suppressed and scheduler time does not advance. Each stale cycle must abort without a provider reservation, dispatch, publication, local apply, baseline change, or retained lease/claim. Fresh transfer settings are checked against the cycle's configuration; the periodic guard remains responsible for cancelling active requests.
 
@@ -50,8 +50,8 @@ Final verification:
 | Check | Result |
 | --- | --- |
 | `npm run check` | Builds, Biome, package boundaries and workspace typechecks passed. Existing informational lint notices remain. |
-| `npm test` | 637 files passed, one skipped; 9,205 tests passed, two skipped. |
-| Continuous regression suite | 98 tests across 12 files, included in the full gate; all 16 authorization regression cases failed before the fix and passed afterward. |
+| `npm test` | 637 files passed, one skipped; 9,206 tests passed, two skipped. |
+| Continuous regression suite | 99 tests across 12 files, included in the full gate; all 16 authorization regression cases failed before the fix and passed afterward. |
 | Generated Jiti/build tests | Command, startup and continuous paths passed against conditional loopback storage. |
 | README heading audit | Required headings/order checked across all 36 active package READMEs. |
 | Package build, RPC and archive | Passed as described below. |

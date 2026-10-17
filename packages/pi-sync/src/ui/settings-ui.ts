@@ -476,7 +476,9 @@ export async function showSyncSettings(
           try {
             validate();
             ctx.ui.notify(
-              "Continuous sync saved. Monitoring starts after the /sync command or manager closes; completed work is not undone.",
+              value === "On"
+                ? "Continuous sync enabled. Monitoring starts after the /sync command or manager closes; completed work is not undone."
+                : "Continuous sync disabled. Completed work is not undone.",
               "info",
             );
           } catch {

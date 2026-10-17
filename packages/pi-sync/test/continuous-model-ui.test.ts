@@ -123,52 +123,73 @@ test("failed continuous save retains bytes and request to enable can be retried"
     assert.equal((await loadConfig()).continuous, true);
   }));
 
-test("Continuous sync stays searchable and shows the saved value with non-default keys", async () =>
-  withTempHome(async (agentDir) => {
-    await fs.mkdir(agentDir, { recursive: true });
-    const settings = v3S3Settings();
-    Object.assign(settings.syncSetups.home.sync, { agentMode: false, continuous: true });
-    await fs.writeFile(localConfigPath(), JSON.stringify(settings));
-    const keys: Record<string, string> = {
-      "tui.select.confirm": "x",
-      "tui.select.cancel": "q",
-      "tui.select.down": "j",
-      "tui.select.up": "k",
-    };
-    const tui = createTuiHarness({
-      width: 40,
-      rows: 24,
-      keybindings: {
-        matches: (data, action) => data === keys[action],
-        getKeys: (action) => {
-          const key = keys[action];
-          return key ? ([key] as never) : [];
+for (const enabled of [false, true])
+  test(`Continuous sync ${enabled ? "On" : "Off"} shows the saved value and message with non-default keys`, async () =>
+    withTempHome(async (agentDir) => {
+      await fs.mkdir(agentDir, { recursive: true });
+      const settings = v3S3Settings();
+      Object.assign(settings.syncSetups.home.sync, { agentMode: enabled, continuous: !enabled });
+      await fs.writeFile(localConfigPath(), JSON.stringify(settings));
+      const keys: Record<string, string> = {
+        "tui.select.confirm": "x",
+        "tui.select.cancel": "q",
+        "tui.select.down": "j",
+        "tui.select.up": "k",
+      };
+      const tui = createTuiHarness({
+        width: 40,
+        rows: 24,
+        keybindings: {
+          matches: (data, action) => data === keys[action],
+          getKeys: (action) => {
+            const key = keys[action];
+            return key ? ([key] as never) : [];
+          },
         },
-      },
-    });
-    const mock = createMockContext({ mode: "tui", hasUI: true, custom: tui.custom });
-    const owner = new AbortController();
-    try {
-      const running = showSyncSettings(mock.ctx, async () => undefined, owner.signal);
-      await tui.waitForOpen();
-      for (let index = 0; index < 4; index++) tui.send("j");
-      tui.send("x");
-      await tui.waitForPending();
-      await tui.waitForOpen();
-      tui.send("\u001b[200~Continuous sync\u001b[201~");
-      assert.match(tui.render().join("\n"), /Continuous sync.*On/);
-      tui.send("x");
-      await tui.waitForPending();
-      await tui.waitForOpen();
-      assert.match(tui.render().join("\n"), /Continuous sync.*Off/);
-      assert.equal((await loadConfig()).continuous, false);
-      tui.send("q");
-      await tui.waitForPending();
-      await tui.waitForOpen();
-      tui.send("q");
-      await running;
-    } finally {
-      owner.abort();
-      tui.dispose();
-    }
-  }));
+      });
+      const confirmation = createTuiHarness({ width: 100, rows: 200 });
+      const custom: typeof tui.custom = (factory, options) =>
+        tui.isOpen ? confirmation.custom(factory, options) : tui.custom(factory, options);
+      const mock = createMockContext({ mode: "tui", hasUI: true, custom });
+      const owner = new AbortController();
+      try {
+        const running = showSyncSettings(mock.ctx, async () => undefined, owner.signal);
+        await tui.waitForOpen();
+        for (let index = 0; index < 4; index++) tui.send("j");
+        tui.send("x");
+        await tui.waitForPending();
+        await tui.waitForOpen();
+        tui.send("\u001b[200~Continuous sync\u001b[201~");
+        assert.match(tui.render().join("\n"), new RegExp(`Continuous sync.*${enabled ? "Off" : "On"}`));
+        tui.send("x");
+        if (enabled) {
+          await confirmation.waitForOpen();
+          assert.match(confirmation.render().join("\n"), /Enable experimental Continuous sync/);
+          confirmation.press("tui.select.down");
+          confirmation.press("tui.select.confirm");
+        }
+        await tui.waitForPending();
+        await tui.waitForOpen();
+        assert.match(tui.render().join("\n"), new RegExp(`Continuous sync.*${enabled ? "On" : "Off"}`));
+        assert.equal((await loadConfig()).continuous, enabled);
+        assert.ok(
+          mock.notifications.some((item) =>
+            enabled
+              ? /Continuous sync enabled\. Monitoring starts after the \/sync command or manager closes/.test(
+                  item.message,
+                )
+              : item.message === "Continuous sync disabled. Completed work is not undone.",
+          ),
+        );
+        if (!enabled) assert.ok(mock.notifications.every((item) => !item.message.includes("Monitoring starts")));
+        tui.send("q");
+        await tui.waitForPending();
+        await tui.waitForOpen();
+        tui.send("q");
+        await running;
+      } finally {
+        owner.abort();
+        confirmation.dispose();
+        tui.dispose();
+      }
+    }));
