@@ -123,11 +123,6 @@ export async function mergeSync(
   await validate();
   const backend = await timings.measure("transfer backend initialization", () => factory(config));
   await validate();
-  if ((options.auto || config.agentMode) && backend.capability === "read-check-write-verify") {
-    throw new Error(
-      "Automatic transfer requires conditional publication or a lease; this backend supports only read/check/write/verify. Use manual sync.",
-    );
-  }
   const pending = await timings.measure("transfer journal read", () => readMergeJournal(config));
   await validate();
   if (pending) {
@@ -145,6 +140,12 @@ export async function mergeSync(
     if ((options.auto || !options.silent) && !options.signal?.aborted)
       ctx.ui.notify("Recovered the committed merged transfer. Run sync again to inspect newer changes.", "info");
     return "applied" as const;
+  }
+  // Recovery above never publishes. This gate applies only to new autonomous transfers.
+  if ((options.auto || config.agentMode) && backend.capability === "read-check-write-verify") {
+    throw new Error(
+      "Automatic transfer requires conditional publication or a lease; this backend supports only read/check/write/verify. Disable Agent mode and use manual sync.",
+    );
   }
   const textBudget = { remaining: TEXT_MERGE_WORK_LIMIT };
   const createdArtifacts: CreatedConflictArtifact[] = [];

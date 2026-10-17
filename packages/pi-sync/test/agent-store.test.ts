@@ -84,6 +84,43 @@ test("claim owns private atomic candidates and releases after failures", async (
     assert.equal((await fs.stat(path.join(agentDir, "pi-sync/agent-resolver", `${key}.json`))).mode & 0o077, 0);
   }));
 
+for (const failed of [false, true])
+  test(`claim cleanup does not wait for an ordinary operation lock (failed=${failed})`, async () =>
+    withTempHome(async (agentDir) => {
+      let release!: () => void;
+      const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      let ready!: () => void;
+      const held = new Promise<void>((resolve) => {
+        ready = resolve;
+      });
+      let operation: Promise<void> | undefined;
+      try {
+        await withStateDirectoryAccess(async () => {
+          const result = withAgentClaim(async () => {
+            operation = withLock("other-foreground-sync", async () => {
+              ready();
+              await gate;
+            });
+            await held;
+            if (failed) throw new Error("original transfer failure");
+            return "committed";
+          });
+          if (failed) await assert.rejects(result, /original transfer failure/);
+          else assert.equal(await result, "committed");
+          // The other transfer still holds its lock. Cleanup must already be complete.
+          await assert.rejects(fs.stat(path.join(agentDir, "pi-sync/agent-resolver/claim.json")), /ENOENT/);
+          release();
+          await operation;
+          await withAgentClaim(async (assertOwner) => assertOwner());
+        });
+      } finally {
+        release();
+        await operation;
+      }
+    }));
+
 test("old owner cannot erase successor claim", async () =>
   withTempHome(async (agentDir) => {
     const claimPath = path.join(agentDir, "pi-sync/agent-resolver/claim.json");

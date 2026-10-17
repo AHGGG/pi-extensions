@@ -425,16 +425,28 @@ export async function showSyncSettings(
       },
       "agent-mode": async ({ value, signal: actionSignal }) => {
         const mutationSignal = signal ? AbortSignal.any([signal, actionSignal]) : actionSignal;
+        const validate = captureMutationOwner(ctx, mutationSignal);
         try {
           const saved = await saveAgentMode(ctx, setupName, value === "On", mutationSignal);
-          if (!saved || mutationSignal.aborted) return { kind: "rejected" };
-          ctx.ui.notify(
-            "Agent mode saved. Applies to subsequent sync and the next session start; no transfer started.",
-            "info",
-          );
+          if (!saved) return { kind: "rejected" };
+          try {
+            validate();
+            ctx.ui.notify(
+              "Agent mode saved. Applies to subsequent sync and the next session start; no transfer started.",
+              "info",
+            );
+          } catch {
+            // The save committed. A closed or replaced UI must not report a failed save.
+            // The next Settings read shows the persisted value.
+          }
           return { kind: "stay" };
         } catch (error) {
-          if (!mutationSignal.aborted) notifySaveFailure(ctx, error);
+          try {
+            validate();
+          } catch {
+            return { kind: "rejected" };
+          }
+          notifySaveFailure(ctx, error);
           return { kind: "rejected" };
         }
       },

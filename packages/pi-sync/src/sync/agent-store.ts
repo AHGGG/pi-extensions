@@ -1,9 +1,11 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { setTimeout as delay } from "node:timers/promises";
+import lockfile from "proper-lockfile";
 import { writeJson } from "../state/json-file.js";
 import { withLock } from "../state/lock.js";
+import { LOCK_GUARD_STALE_MS, LOCK_GUARD_UPDATE_MS } from "../state/lock-policy.js";
+import { LOCKFILE_FS_ADAPTER } from "../state/lockfile-fs.js";
 import { stateDir } from "../state/state-directory.js";
 import { AGENT_OUTPUT_BYTES } from "./agent-policy.js";
 
@@ -68,7 +70,7 @@ function alive(pid: number) {
   }
 }
 
-/** Caller retains the state-directory migration guard; all record operations take the sync lock. */
+/** Caller retains the state-directory migration guard; claim changes use a separate short-lived guard. */
 export async function withAgentClaim<T>(fn: (assertOwner: () => Promise<void>) => Promise<T>): Promise<T> {
   const claim: Claim = { version: 1, id: randomUUID(), pid: process.pid };
   let armed = false;
@@ -85,11 +87,13 @@ export async function withAgentClaim<T>(fn: (assertOwner: () => Promise<void>) =
         if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
       }
       await checkDirectory();
-      const existing = await readClaim();
-      if (existing && alive(existing.pid)) throw new Error("Agent mode deferred: another local resolver is running.");
-      // A durability failure can occur after rename: cleanup must own partial initialization too.
-      armed = true;
-      await writeJson(paths().claim, claim);
+      await withClaimGuard(async () => {
+        const existing = await readClaim();
+        if (existing && alive(existing.pid)) throw new Error("Agent mode deferred: another local resolver is running.");
+        // A durability failure can occur after rename: cleanup must own partial initialization too.
+        armed = true;
+        await writeJson(paths().claim, claim);
+      });
     });
     return await fn(assertOwner);
   } finally {
@@ -97,20 +101,32 @@ export async function withAgentClaim<T>(fn: (assertOwner: () => Promise<void>) =
   }
 }
 async function releaseClaim(claim: Claim) {
-  // Another foreground operation can start after our commit releases its lock.
-  // Retry only contention before our cleanup callback enters; do not retry IO failures.
-  for (let attempt = 0; ; attempt++) {
-    let entered = false;
-    try {
-      await withLock("agent-release", async () => {
-        entered = true;
-        if ((await readClaim())?.id === claim.id) await fs.rm(paths().claim);
-      });
-      break;
-    } catch (error) {
-      if (entered || attempt >= 49) throw error;
-      await delay(20);
-    }
+  // Ordinary transfers may hold the operation lock for an arbitrary time.
+  // Cleanup needs only the claim guard; it never waits for that operation lock.
+  await withClaimGuard(async () => {
+    const current = await readClaim();
+    if (current?.id === claim.id && current.pid === claim.pid) await fs.rm(paths().claim);
+  });
+}
+async function withClaimGuard<T>(run: () => Promise<T>): Promise<T> {
+  await checkDirectory();
+  let compromisedError: Error | undefined;
+  const release = await lockfile.lock(paths().claim, {
+    fs: LOCKFILE_FS_ADAPTER,
+    realpath: false,
+    stale: LOCK_GUARD_STALE_MS,
+    update: LOCK_GUARD_UPDATE_MS,
+    retries: { retries: 100, factor: 1.2, minTimeout: 10, maxTimeout: 100 },
+    onCompromised: (error) => {
+      compromisedError = error;
+    },
+  });
+  try {
+    const result = await run();
+    if (compromisedError) throw compromisedError;
+    return result;
+  } finally {
+    await release();
   }
 }
 function candidatePath(key: string) {

@@ -38,6 +38,10 @@ export async function runAgentResolver(
 ): Promise<string> {
   const model = ctx.model;
   if (!model) throw new Error("Agent mode paused: select an available model first.");
+  if (!Number.isSafeInteger(model.maxTokens) || model.maxTokens < 0)
+    throw new Error("Agent mode paused: selected model has an invalid output limit.");
+  // Pi uses zero for unknown limits, including virtual models. Its registry caps routed requests.
+  const maxTokens = model.maxTokens > 0 ? Math.min(AGENT_MAX_TOKENS, model.maxTokens) : AGENT_MAX_TOKENS;
   const controller = new AbortController();
   const ownedSignal = signal ? AbortSignal.any([signal, controller.signal]) : controller.signal;
   const timer = setTimeout(
@@ -103,7 +107,7 @@ export async function runAgentResolver(
       return ctx.modelRegistry.streamSimple(model, context, {
         ...options,
         signal: ownedSignal,
-        maxTokens: AGENT_MAX_TOKENS,
+        maxTokens,
         maxRetries: 0,
       });
     };

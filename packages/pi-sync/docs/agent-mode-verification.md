@@ -28,14 +28,29 @@ Final local verification passed:
 | Check | Result |
 | --- | --- |
 | `npm run check` | Builds, Biome, boundaries and all workspace typechecks passed; eight pre-existing informational lint notices remain. |
-| `npm test` | 623 test files passed, one skipped; 9,072 tests passed and two existing tests skipped. |
-| Agent-specific deterministic suite | 92 tests across seven files, included in the full gate. |
+| `npm test` | 625 test files passed, one skipped; 9,106 tests passed and two existing tests skipped. |
+| Agent-specific deterministic suite | 126 tests across nine files, included in the full gate. |
 | README heading audit | All 36 active package READMEs retain the required sections. |
 | Package build, Jiti, CLI and pack | Passed as described below. |
 
 Repository gates and runtime smokes are also recorded in the change handoff. The full root test suite includes existing backend contracts, session protection, transaction recovery, settings persistence, command modes and confirmation behavior. The README heading audit ignores fenced code and checks the required sections across 36 active packages.
 
 Generated-runtime tests reject eager resolver inputs and bundled dependencies, validate every emitted relative import and trigger actual resolution through Pi's Jiti loader against a local conditional WebDAV server. Both direct `/sync sync` and Agent-mode-only startup succeed with Automatic sync and Startup transfer left off. Lifecycle tests cover replacement and reload/shutdown ownership.
+
+## PR review regression checks
+
+All four findings in PR #1594 were verified against the implementation and fixed:
+
+| Finding | Fix and evidence |
+| --- | --- |
+| A committed consent save could be reported as rejected after cancellation. | The atomic writer's success is the commit boundary. The handler retains that result and skips stale UI work. `agent-setting-commit.test.ts` covers enabling/disabling, cancellation, session replacement, notification failure and authoritative Settings reads after save. |
+| Ordinary operation-lock contention could strand a completed resolver claim. | Creation and cleanup share a separate short-lived cross-process claim guard. Only creation takes the operation lock first; cleanup never takes it, so there is no reverse lock order. `agent-store.test.ts` holds another operation lock until cleanup finishes, for both committed and failed transfers. Existing tests cover live/dead processes, partial initialization and successor ownership. |
+| A fixed output budget could exceed a selected model's limit. | The request uses the smaller positive model limit and resolver cap. Pi's unknown-limit value of zero retains the cap; invalid limits stop before disclosure. `agent-runner.test.ts` covers unknown, smaller, equal, larger and invalid limits. The installed Pi registry forwards explicit budgets on ordinary provider requests and caps routed virtual requests. |
+| The new-transfer capability check could block pending journal recovery. | Recovery runs first and never republishes. `agent-recovery.test.ts` covers manual/startup recovery of published, uncertain, apply-only, inactive and already accepted journals on a weak backend. It also proves that newer local edits remain protected and new autonomous transfers remain blocked without model requests or publication. |
+
+Review covered every changed settings publication and notification boundary, claim mutation and cleanup path, model-limit branch and journal recovery branch. Consent, settings ordering, private evidence, session ownership, remote revisions and baseline checks remain unchanged. No new setting, dependency, public API or Pi core change was added. The existing Changeset covers these fixes.
+
+The final gates include these regressions. The generated Jiti/WebDAV tests still exercise the lazy resolver and both command/startup entry paths. The package RPC load smoke was repeated without provider requests. The earlier live-provider result below was reused; no extra paid request was needed for these control-flow fixes. Platform and live-service limits remain as listed below.
 
 ## Live provider smoke
 

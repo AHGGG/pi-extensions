@@ -62,6 +62,6 @@ export async function saveAgentMode(
       syncSetups: { ...current.syncSetups, [setupName]: { ...setup, sync: { ...setup.sync, agentMode: enabled } } },
     };
   }, signal);
-  validate();
+  // The atomic writer has committed. Later cancellation cannot undo this save.
   return true;
 }

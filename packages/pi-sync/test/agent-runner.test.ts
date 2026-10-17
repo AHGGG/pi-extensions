@@ -5,7 +5,7 @@ import { test, vi } from "vitest";
 import type { AgentEvidence } from "../src/sync/agent-candidate.js";
 import { AGENT_MAX_TOKENS, AGENT_TIMEOUT_MS } from "../src/sync/agent-policy.js";
 import { resolverResources, runAgentResolver } from "../src/sync/agent-runner.js";
-import { agentContext, selectRemote } from "./agent-test-helpers.js";
+import { agentContext, agentTestModel, selectRemote } from "./agent-test-helpers.js";
 import { withTempHome } from "./helpers.js";
 
 const evidence: AgentEvidence = {
@@ -50,6 +50,27 @@ test("SDK runner has no discovered resources/tools, one request and no disk sess
     assert.deepEqual(resources.getAgentsFiles().agentsFiles, []);
     assert.deepEqual(resources.getAppendSystemPrompt(), []);
   }));
+
+for (const limit of [0, 1, 1024, AGENT_MAX_TOKENS, AGENT_MAX_TOKENS * 2])
+  test(`resolver caps output to selected model limit ${limit}`, async () => {
+    const mock = agentContext(selectRemote, { model: { ...agentTestModel, maxTokens: limit } });
+    await runAgentResolver(mock.ctx, evidence, async () => {});
+    assert.equal(mock.requests.length, 1);
+    assert.equal(
+      (mock.requestOptions[0] as { maxTokens: number }).maxTokens,
+      limit > 0 ? Math.min(limit, AGENT_MAX_TOKENS) : AGENT_MAX_TOKENS,
+    );
+  });
+
+for (const limit of [-1, 0.5, Number.NaN, Number.POSITIVE_INFINITY, Number.MAX_SAFE_INTEGER + 1, undefined])
+  test(`invalid model output limit ${limit} prevents disclosure`, async () => {
+    const mock = agentContext(selectRemote, { model: { ...agentTestModel, maxTokens: limit } });
+    await assert.rejects(
+      runAgentResolver(mock.ctx, evidence, async () => {}),
+      /invalid output limit/,
+    );
+    assert.equal(mock.requests.length, 0);
+  });
 
 test("authorization failure prevents model disclosure", async () => {
   const mock = agentContext(selectRemote);
