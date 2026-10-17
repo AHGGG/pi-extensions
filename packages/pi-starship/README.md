@@ -50,13 +50,14 @@ Start Pi with the extension to use the built-in footer without creating a settin
 Run `/starship` to inspect the footer, choose a preset, or customize the configuration.
 
 The bundled configuration skill is manual-only and is not available for automatic model invocation.
-Run `/skill:configuring-pi-starship` before asking Pi to explain or edit `pi-starship.toml`:
+Run `/skill:configure-pi-starship` before asking Pi to explain or edit `pi-starship.toml`:
 
 ```text
-/skill:configuring-pi-starship explain the aws module
-/skill:configuring-pi-starship enable the directory and git_branch modules
+/skill:configure-pi-starship explain the aws module
+/skill:configure-pi-starship enable the directory and git_branch modules
 ```
 
+The skill was renamed from `configuring-pi-starship`; use `/skill:configure-pi-starship` instead of the old invocation.
 The skill loads the relevant reference and validates file edits.
 It does not cover general TOML, shell Starship configuration, extension source development, or unrelated footer work.
 
@@ -76,16 +77,16 @@ Restoring built-in configuration requires an existing settings document to repla
 
 ## ⚙️ Settings
 
-The package bundles the `configuring-pi-starship` skill as the authoritative configuration guide for users and agents.
-Invoke `/skill:configuring-pi-starship` before asking Pi how to configure the footer or edit `pi-starship.toml`.
+The package bundles the `configure-pi-starship` skill as the authoritative configuration guide for users and agents.
+Invoke `/skill:configure-pi-starship` before asking Pi how to configure the footer or edit `pi-starship.toml`.
 The skill answers from its references and consults the bundled source only when the public documentation does not cover a question.
 
 Read the references directly when preferred:
 
-- [Configuration and format](./skills/configuring-pi-starship/references/configuration.md) — settings schema, validation and fallback behavior, presets, examples, format grammar, styles, palettes, and display thresholds.
-- [Complete module catalog](./skills/configuring-pi-starship/references/module-catalog.md) — exact variables, default formats, symbols, enabled state, style fields, display defaults, option types, ranges, and enum values.
-- [Module behavior](./skills/configuring-pi-starship/references/modules.md) — reachability, exact detection defaults, command gates, output semantics, aliases, truncation, and module-specific behavior.
-- [Runtime and security](./skills/configuring-pi-starship/references/runtime-and-security.md) — network and command execution, local metadata, cloud and deployment context, fill layout, refresh behavior, and limitations.
+- [Configuration and format](./skills/configure-pi-starship/references/configuration.md) — settings schema, validation and fallback behavior, presets, examples, format grammar, styles, palettes, and display thresholds.
+- [Complete module catalog](./skills/configure-pi-starship/references/module-catalog.md) — exact variables, default formats, symbols, enabled state, style fields, display defaults, option types, ranges, and enum values.
+- [Module behavior](./skills/configure-pi-starship/references/modules.md) — reachability, exact detection defaults, command gates, output semantics, aliases, truncation, and module-specific behavior.
+- [Runtime and security](./skills/configure-pi-starship/references/runtime-and-security.md) — network and command execution, local metadata, cloud and deployment context, fill layout, refresh behavior, and limitations.
 
 The only configuration source remains `<getAgentDir()>/pi-starship.toml`.
 A minimal custom document can select and style only the modules it needs:
@@ -99,7 +100,7 @@ style = "bold blue"
 
 Provider, model, and thinking modules also accept ordered exact-match `style_rules`.
 For per-extension status colors, add `[extension_status.styles]` entries using raw Pi status keys (or `namespace:*`); unmatched statuses keep the module style.
-See [Configuration and format](./skills/configuring-pi-starship/references/configuration.md) for examples and matching rules.
+See [Configuration and format](./skills/configure-pi-starship/references/configuration.md) for examples and matching rules.
 Use `/starship` for interactive configuration, preview, diagnostics, presets, and recovery.
 Manual file edits load at the next `session_start`, including `/reload`.
 
@@ -127,12 +128,12 @@ Cancelling or losing an upload response cannot undo a Gist already created on Gi
 ## 🔒 Security and privacy
 
 Some opt-in modules read local development, deployment, cloud, host, or user metadata, run bounded local commands, or query GitHub through `gh`.
-Review [Runtime and security](./skills/configuring-pi-starship/references/runtime-and-security.md) before enabling them.
+Review [Runtime and security](./skills/configure-pi-starship/references/runtime-and-security.md) before enabling them.
 
 ## 🚧 Limitations
 
 pi-starship is Starship-inspired rather than fully compatible with shell Starship.
-The complete supported and intentionally omitted behavior is documented in [Runtime and security](./skills/configuring-pi-starship/references/runtime-and-security.md).
+The complete supported and intentionally omitted behavior is documented in [Runtime and security](./skills/configure-pi-starship/references/runtime-and-security.md).
 
 ## ➕ Adding a module
 
@@ -150,7 +151,7 @@ packages/pi-starship/
 │   └── pi-starship.ts                 # Footer lifecycle and cached refresh
 ├── dist/                              # Generated Jiti runtime
 ├── scripts/build-runtime.mjs          # Runtime builder
-├── skills/configuring-pi-starship/    # Authoritative configuration skill and references
+├── skills/configure-pi-starship/      # Authoritative configuration skill and references
 └── test/                              # Behavior and lifecycle coverage
 ```
 
