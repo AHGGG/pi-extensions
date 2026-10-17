@@ -626,7 +626,8 @@ export async function registerFileQuoteExtension(
     }
   });
 
-  pi.on("before_agent_start", (_event, ctx) => {
+  pi.on("before_agent_start", (event, ctx) => {
+    if (event.messageType === "custom") return;
     if (ctx.sessionManager !== activeSessionManager || pendingQuotes.length === 0) return;
     const quotes = pendingQuotes.map((item) => item.quote);
     clearPending(ctx);
