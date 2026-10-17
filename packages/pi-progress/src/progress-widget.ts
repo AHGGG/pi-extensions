@@ -331,6 +331,8 @@ export default function progressWidgetExtension(pi: ExtensionAPI, dependencies: 
     widgetHidden = false;
     settings = cloneDefaultSettings();
     restoreBranchState(ctx);
+    // The completion summary is a live transition. Do not reopen a finished snapshot.
+    if (allProgressCompleted(steps)) widgetHidden = true;
 
     let loaded: ProgressSettingsLoadResult;
     try {

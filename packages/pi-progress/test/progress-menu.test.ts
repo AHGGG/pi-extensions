@@ -56,6 +56,7 @@ test("TUI opens a Kit main menu and read-only Status and Help views", async () =
   const help = frame(tui);
   assert.match(help, /Progress Help/u);
   assert.match(help, /\/progress settings/u);
+  assert.match(help, /show incomplete progress again/u);
   assert.doesNotMatch(help, /^→/mu);
   tui.press("ctrl+c");
   await running;
