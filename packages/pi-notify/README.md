@@ -13,6 +13,8 @@ Send Telegram reminders when Pi stops automatic work, so you can return to revie
 - Choose immediate notifications or reminders after terminal inactivity.
 - Configure and test destinations through a masked, menu-first setup flow.
 
+Telegram uses bold titles and repository names, with inline monospace for branches, paths, and session IDs. Entity-based formatting keeps punctuation literal without Markdown or HTML parsing. Confirmation previews remain plain text.
+
 ## 📦 Install
 
 Extensions run with Pi's permissions. Enable this extension only if the notification metadata may leave your computer. Bot credentials are stored in a private user settings file, not project settings.
@@ -75,11 +77,13 @@ See the bundled [settings and behavior reference](./docs/settings.md) for accept
 
 Notifications send the operating-system hostname, session name and ID, working directory, available Git repository/worktree/branch, elapsed time, and settlement timestamp to the selected Telegram chats. Paths shorten the home prefix to `~` when possible, but names and paths can still disclose private information. They describe the host running Pi, which can differ from your SSH client computer.
 
-No prompts, assistant answers, code, tool output, Git remotes, or raw provider errors are sent. Dynamic metadata is bounded and terminal controls are removed; `@` is replaced with `＠` to avoid accidental mentions. Messages use plain text with link previews disabled. Credential values never appear in preview, status, or error output. POSIX settings writes use `0600` permissions and temporary-file-plus-rename publication. JavaScript memory is not secure credential storage; revoke an exposed bot token through BotFather.
+No prompts, assistant answers, code, tool output, Git remotes, or raw provider errors are sent. Dynamic metadata is bounded and terminal controls are removed; `@` is replaced with `＠` to avoid accidental mentions. Link previews are disabled. Credential values never appear in preview, status, or error output. POSIX settings writes use `0600` permissions and temporary-file-plus-rename publication. JavaScript memory is not secure credential storage; revoke an exposed bot token through BotFather.
 
 ## 🚧 Limitations
 
 Only Telegram is implemented. The provider boundary separates transport from notification policy, but it does not load third-party plugins.
+
+Messages are limited to 4,096 UTF-16 code units without splitting a Unicode code point; longer messages end with an unformatted ellipsis.
 
 Inactivity means no input reached this extension, not proof that you are away. Pi handles fullscreen focus, mouse, scrolling, and search before extension input listeners. Those actions do not reliably cancel a reminder. Reading without typing can still produce one. Type a key that reaches the editor to cancel a pending reminder. Focus or mouse events count only if Pi forwards them; terminal support alone is not sufficient. This extension does not change Pi's listener order, enable focus reporting, or detect screen locks. RPC, print, and JSON cannot observe terminal input, so inactivity mode delivers at settlement instead.
 
