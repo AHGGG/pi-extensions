@@ -4,7 +4,7 @@ import type { Snapshot } from "../snapshot/snapshot-types.js";
 import { readMergeAncestor } from "../state/merge-baseline-store.js";
 import type { SyncState } from "../state/state-types.js";
 import type { FileMergePlan } from "./file-merge-planner.js";
-import { mergeSettingsJson } from "./settings-merge.js";
+import { mergeAcceptedSettingsPackages, mergeSettingsJson } from "./settings-merge.js";
 
 export async function resolveSettingsConflicts(
   config: AnySyncConfig,
@@ -25,16 +25,26 @@ export async function resolveSettingsConflicts(
     if (!left || !right) continue; // File deletion/addition is not a JSON field merge.
     const ancestor = await readMergeAncestor(config, state, decision.path);
     if (!ancestor) continue;
-    const merged = mergeSettingsJson(
-      ancestor,
-      Buffer.from(left.contentBase64, "base64"),
-      Buffer.from(right.contentBase64, "base64"),
-      undefined,
-      Boolean(config.agentMode),
-    );
-    if (merged.kind === "review") {
-      fields.push(...merged.fields);
-      continue;
+    const leftBytes = Buffer.from(left.contentBase64, "base64");
+    const rightBytes = Buffer.from(right.contentBase64, "base64");
+    let content: Buffer;
+    if (decision.kind === "accepted") {
+      if (!decision.file) continue;
+      const patched = mergeAcceptedSettingsPackages(
+        ancestor,
+        leftBytes,
+        rightBytes,
+        Buffer.from(decision.file.contentBase64, "base64"),
+      );
+      if (!patched) continue;
+      content = patched;
+    } else {
+      const merged = mergeSettingsJson(ancestor, leftBytes, rightBytes, undefined, Boolean(config.agentMode));
+      if (merged.kind === "review") {
+        fields.push(...merged.fields);
+        continue;
+      }
+      content = merged.content;
     }
     decisions[index] = {
       kind: "accepted",
@@ -42,8 +52,8 @@ export async function resolveSettingsConflicts(
       source: "merged",
       file: {
         path: decision.path,
-        contentBase64: merged.content.toString("base64"),
-        sha256: createHash("sha256").update(merged.content).digest("hex"),
+        contentBase64: content.toString("base64"),
+        sha256: createHash("sha256").update(content).digest("hex"),
       },
     };
   }

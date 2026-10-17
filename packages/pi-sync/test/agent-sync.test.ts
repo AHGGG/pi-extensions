@@ -151,6 +151,61 @@ for (const [name, base, local, remote, expected, requests] of [
     }));
 }
 
+for (const [name, base, changed, expected] of [
+  ["root order", '{"packages":["npm:x@2.0.0"],"number":1}', '{"number":1,"packages":["npm:x@2.0.0"]}', undefined],
+  [
+    "whitespace and line endings",
+    '{"packages":["npm:x@2.0.0"]}',
+    '{\r\n  "packages" : [ "npm:x@2.0.0" ]\r\n}\r\n',
+    undefined,
+  ],
+  ["numeric spelling without packages", '{"number":1}', '{"number":1.00e0}', undefined],
+  ["escaped key and source", '{"packages":["npm:x@2.0.0"]}', '{"\\u0070ackages":["\\u006epm:x@2.0.0"]}', undefined],
+  [
+    "non-exact package versions",
+    '{"packages":["npm:x@latest"],"number":1}',
+    '{"number":1.0,"packages" : [ "npm:x@latest" ]}',
+    undefined,
+  ],
+  [
+    "package upgrade with other spelling",
+    '{"packages":["npm:x@2.0.0"],"number":1}',
+    '{"number":1.00e0,"packages" : [ "npm:x@3.0.0" ]}',
+    undefined,
+  ],
+  [
+    "package downgrade with other spelling",
+    '{"packages":["npm:x@2.0.0"],"number":1}',
+    '{"number":1.00e0,"packages" : ["npm:x@1.0.0"]}',
+    '{"number":1.00e0,"packages" : ["npm:x@2.0.0"]}',
+  ],
+] as const) {
+  for (const side of ["local", "remote"] as const) {
+    test(`accepted ${side} settings keep document bytes: ${name}`, async () =>
+      withTempHome(async (agentDir) => {
+        const f = await createMergeFixture(agentDir);
+        const settingsPath = path.join(agentDir, "settings.json");
+        await fs.writeFile(settingsPath, base);
+        await push(f.ctx, mergeOptions, undefined, () => f.backend);
+        await enabled();
+        await fs.writeFile(settingsPath, side === "local" ? changed : base);
+        await f.remoteEdit("settings.json", side === "remote" ? changed : base);
+        const mock = agentContext(selectRemote);
+        await withStateDirectoryAccess(() =>
+          withAgentSyncLock(mock.ctx, mergeOptions, (current) => syncBoth(mock.ctx, current, () => f.backend)),
+        );
+        assert.equal(mock.requests.length, 0);
+        assert.equal(await fs.readFile(settingsPath, "utf8"), expected ?? changed);
+        const head = await f.backend.readHead();
+        assert.ok(head);
+        const published = await f.backend.readSnapshot(head.snapshotRef);
+        const file = published.files.find((file) => file.path === "settings.json");
+        assert.ok(file);
+        assert.equal(Buffer.from(file.contentBase64, "base64").toString(), expected ?? changed);
+      }));
+  }
+}
+
 test("unrelated sync preserves unchanged package bytes locally and remotely", async () =>
   withTempHome(async (agentDir) => {
     const f = await createMergeFixture(agentDir);
