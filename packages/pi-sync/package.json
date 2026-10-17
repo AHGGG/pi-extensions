@@ -18,18 +18,23 @@
     "git",
     "github",
     "gitlab",
-    "forgejo"
+    "forgejo",
+    "agent-skill"
   ],
   "files": [
     "src",
     "dist",
     "docs",
+    "skills",
     "README.md",
     "LICENSE"
   ],
   "pi": {
     "extensions": [
       "./dist/index.ts"
+    ],
+    "skills": [
+      "./skills"
     ]
   },
   "scripts": {
