@@ -105,14 +105,13 @@ async function activeFixture(agentDir: string, layout: ActiveLayout) {
     layout === "symlink-session" ? path.join(path.dirname(agentDir), "linked-sessions") : physicalRoot;
   if (sessionRoot !== physicalRoot) await fs.symlink(physicalRoot, sessionRoot, "dir");
   const currentFile = path.join(physicalRoot, "current.jsonl");
-  const original =
-    JSON.stringify({
-      type: "session",
-      version: CURRENT_SESSION_VERSION,
-      id: "c4e24029-95c3-4fd1-9dde-4b2ec8ceec8f",
-      timestamp: "2026-10-05T00:00:00.000Z",
-      cwd: agentDir,
-    }) + "\n";
+  const original = `${JSON.stringify({
+    type: "session",
+    version: CURRENT_SESSION_VERSION,
+    id: "c4e24029-95c3-4fd1-9dde-4b2ec8ceec8f",
+    timestamp: "2026-10-05T00:00:00.000Z",
+    cwd: agentDir,
+  })}\n`;
   await fs.writeFile(currentFile, original);
   const relative = layout === "ordinary" ? "current.jsonl" : "sessions/current.jsonl";
   const f = await fixture(
