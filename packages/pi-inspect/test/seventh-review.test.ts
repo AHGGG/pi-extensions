@@ -110,7 +110,7 @@ describe("R42: every stored system-message projection source", () => {
 });
 describe("R44: ordinary-message-only legacy content normalization", () => {
   for (const role of ["system", "user", "assistant", "toolResult"] as const) {
-    it.each(["absent", "undefined", "null"])("preserves native " + role + " normalization for %s", (variant) => {
+    it.each(["absent", "undefined", "null"])(`preserves native ${role} normalization for %s`, (variant) => {
       const f = fixture();
       const id =
         role === "system" ? f.system : role === "user" ? f.user : role === "assistant" ? f.assistant : f.result;
