@@ -328,6 +328,7 @@ test("configured bottom key skips conflicts and unsupported bindings before the 
       "alt+clear",
       "shift+f1",
       "bogus+ctrl+ctrl+x" as KeyId,
+      "ctrl+x",
       "x",
     ],
   });

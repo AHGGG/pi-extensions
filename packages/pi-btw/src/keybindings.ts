@@ -48,7 +48,7 @@ const LEGACY_INPUTS = [
   ...FUNCTION_INPUTS.map((suffix) => `\u001b${suffix}`),
 ];
 
-/** Strict settings syntax; Pi itself ignores unknown/duplicate modifier tokens. */
+/** Strict settings syntax; reject unknown and duplicate modifier tokens. */
 export function normalizeBtwKey(value: unknown): string | undefined {
   if (typeof value !== "string" || value.length > 80 || /[\s\p{Cc}]/u.test(value)) return undefined;
   const parts = value.toLowerCase().split("+");

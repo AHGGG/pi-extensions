@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
-import { stripVTControlCharacters } from "node:util";
 import { Key, type KeyId, matchesKey, visibleWidth } from "@earendil-works/pi-tui";
 import { resolveMenuScreen, runMenu } from "@narumitw/pi-tui-kit";
 import { createRpcHarness, createTuiHarness } from "@narumitw/pi-tui-kit/testing";
 import { test } from "vitest";
 import { createMockContext } from "../../../test/support.js";
+import { plainTuiText as stripVTControlCharacters } from "../../../test/tui-text.js";
 import { createRecallMenu, type RecallMenuSource, showRecallMenu } from "../src/menu.js";
 import type { MessageCandidate, RecallMessageRecord } from "../src/messages.js";
 
