@@ -43,7 +43,7 @@
   },
   "dependencies": {
     "@radix-ui/colors": "3.0.0",
-    "@radix-ui/react-collapsible": "1.1.21",
+    "@radix-ui/react-collapsible": "1.2.1",
     "@radix-ui/react-icons": "1.3.2",
     "@radix-ui/themes": "3.3.0",
     "esbuild": "0.28.2",
@@ -51,15 +51,15 @@
     "react-dom": "19.3.0"
   },
   "devDependencies": {
-    "@earendil-works/pi-ai": "1.1.0",
-    "@earendil-works/pi-coding-agent": "1.1.0",
-    "@playwright/test": "1.63.0",
-    "@types/node": "26.6.4",
+    "@earendil-works/pi-ai": "1.2.0",
+    "@earendil-works/pi-coding-agent": "1.2.0",
+    "@playwright/test": "1.64.0",
+    "@types/node": "26.6.5",
     "@types/react": "19.3.0",
     "@types/react-dom": "19.3.0",
-    "typebox": "1.3.36",
+    "typebox": "1.3.37",
     "typescript": "7.0.2",
-    "vitest": "5.0.3"
+    "vitest": "5.0.4"
   },
   "repository": {
     "type": "git",
