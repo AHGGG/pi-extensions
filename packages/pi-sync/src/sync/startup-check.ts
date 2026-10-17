@@ -9,6 +9,8 @@ import { readStateForConfig, syncStateFingerprint } from "../state/sync-state-st
 import type { SyncAttentionController } from "../ui/sync-attention.js";
 import { setSyncStatus } from "../ui/sync-status.js";
 import { safeTerminalText } from "../ui/terminal-text.js";
+import { startupTransferEnabled } from "./agent-policy.js";
+import { withAgentSyncLock } from "./agent-sync.js";
 import { combineSignals, throwIfAborted } from "./signals.js";
 import { createStartupTimings } from "./startup-timings.js";
 import { errorMessage } from "./sync-errors.js";
@@ -42,7 +44,7 @@ export function createStartupCheck(loaders: SyncLoaders, attention: SyncAttentio
     },
     start(ctx: ExtensionContext, sessionSignal: AbortSignal, initialConfig?: AnySyncConfig) {
       if (!ctx.hasUI || sessionSignal.aborted) return;
-      if (initialConfig?.automaticTransfer && !ctx.isIdle()) {
+      if (initialConfig && startupTransferEnabled(initialConfig) && !ctx.isIdle()) {
         pending = { ctx, signal: sessionSignal, config: initialConfig };
         return;
       }
@@ -54,7 +56,7 @@ export function createStartupCheck(loaders: SyncLoaders, attention: SyncAttentio
         controller,
         owner: ctx.sessionManager,
         promise: Promise.resolve(),
-        transfer: Boolean(initialConfig?.automaticTransfer),
+        transfer: Boolean(initialConfig && startupTransferEnabled(initialConfig)),
       };
       active = task;
       const isCurrent = () => !sessionSignal.aborted && active === task && task.owner === ctx.sessionManager;
@@ -71,9 +73,9 @@ export function createStartupCheck(loaders: SyncLoaders, attention: SyncAttentio
           try {
             throwIfAborted(signal);
             config = initialConfig ?? (await loadConfigForCheck());
-            task.transfer = Boolean(config.automaticTransfer);
+            task.transfer = startupTransferEnabled(config);
             throwIfAborted(signal);
-            if (!config.automatic && !config.automaticTransfer) return;
+            if (!config.automatic && !startupTransferEnabled(config)) return;
             const captured = config;
             const identity = syncCheckConfigFingerprint(captured);
             checking = true;
@@ -106,10 +108,10 @@ export function createStartupCheck(loaders: SyncLoaders, attention: SyncAttentio
               configIdentity: identity,
               checkedAt: new Date().toISOString(),
               inspection,
-              automaticTransfer: captured.automaticTransfer,
+              automaticTransfer: startupTransferEnabled(captured),
             });
             if (
-              captured.automaticTransfer &&
+              startupTransferEnabled(captured) &&
               !inspection.firstSync &&
               inspection.head &&
               inspection.selectionState?.kind === "same"
@@ -123,8 +125,9 @@ export function createStartupCheck(loaders: SyncLoaders, attention: SyncAttentio
               }
               await timings.measure("automatic transfer", () =>
                 withStateDirectoryAccess(() =>
-                  withLock("startup-transfer", () =>
-                    operations.syncBoth(ctx, {
+                  withAgentSyncLock(
+                    ctx,
+                    {
                       args: [],
                       yes: true,
                       force: false,
@@ -135,7 +138,8 @@ export function createStartupCheck(loaders: SyncLoaders, attention: SyncAttentio
                       signal,
                       startupTimings: timings,
                       onCommit: () => attention.clearObservation(),
-                    }),
+                    },
+                    (options) => operations.syncBoth(ctx, options),
                   ),
                 ),
               );
@@ -149,7 +153,7 @@ export function createStartupCheck(loaders: SyncLoaders, attention: SyncAttentio
               configIdentity: identity,
               checkedAt: new Date().toISOString(),
               inspection,
-              automaticTransfer: captured.automaticTransfer,
+              automaticTransfer: startupTransferEnabled(captured),
             });
             if (ctx.mode === "rpc") attention.notifyObservation(ctx);
           } catch (error) {
@@ -163,7 +167,7 @@ export function createStartupCheck(loaders: SyncLoaders, attention: SyncAttentio
               if (!latest || syncCheckConfigFingerprint(latest) !== syncCheckConfigFingerprint(config)) return;
             }
             ctx.ui.notify(
-              config?.automaticTransfer
+              config && startupTransferEnabled(config)
                 ? `pi-sync automatic transfer stopped: ${safeTerminalText(errorMessage(error))}. Run /sync to review or reconcile retained recovery evidence. No resources were reloaded.`
                 : `pi-sync startup check skipped: ${safeTerminalText(errorMessage(error))}. Run /sync status to retry. No startup transfer was performed.`,
               "warning",

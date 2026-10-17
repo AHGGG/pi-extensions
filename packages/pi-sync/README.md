@@ -13,6 +13,7 @@ Reusable storage connections hold credentials, while named sync setups define ex
 - Protects changes with immutable snapshots, secret scanning, locks, conflict checks, pull backups, transactional apply, and recovery journals.
 - Keeps snapshot selection portable and free of credentials.
 - Writes settings atomically, preserves unknown fields, rejects stale edits, and fails closed on unsafe configuration.
+- Offers default-off experimental Agent mode for autonomous, validated text/settings conflict resolution.
 - Loads a generated split runtime with lazy UI and backend chunks.
 
 ## 📦 Install
@@ -86,7 +87,7 @@ Opening the manager does not make another remote request.
 
 On secondary menus, **Back** and Escape return to the previous screen. In setup inputs and save reviews, cancellation (including Ctrl+C) discards the current unsaved draft and returns to its owning menu. Session replacement or shutdown closes the owning flow.
 Specialized operation and masked-credential prompts show the effective cancellation bindings and keep Ctrl+C as a hard-cancel input when Back is remapped.
-Destructive, credential-bearing, and externally visible operations show exact previews and confirmations.
+Destructive, credential-bearing, and externally visible operations show exact previews and confirmations, except transfers explicitly authorized by automatic-transfer policy or experimental Agent mode.
 
 ### Review transfer changes
 
@@ -176,7 +177,15 @@ Checks run once per session start, including `/reload`, new, resumed, and forked
 
 **Compatibility change:** the existing `sync.automatic` boolean and Off default are unchanged, but On no longer performs startup push/pull. Startup is not guaranteed to use the latest remote content. Local transaction recovery remains an awaited safety barrier and can restore interrupted file changes before use; existing legacy settings-file initialization is also retained.
 
-Shutdown behavior is unchanged: when **Automatic sync** is On and sessions are included, pi-sync can automatically push the selected content, not only session files. This also applies to headless modes; shutdown never opens a dialog, and `/reload` skips this push. Turning the setting Off disables both future startup checks and automatic shutdown pushes.
+Shutdown behavior is unchanged: when **Automatic sync** is On and sessions are included, pi-sync can automatically push the selected content, not only session files. This also applies to headless modes; shutdown never opens a dialog, and `/reload` skips this push. Turning the setting Off disables its startup checks and shutdown pushes; separate Startup transfer and Agent mode preferences retain their own authorization.
+
+### Experimental Agent mode
+
+**Settings → Sync behavior → Agent mode (experimental)** controls per-setup `sync.agentMode`, default **Off**. Enabling requires a one-time review. It authorizes one merged sync next startup and autonomous **Sync now** / `/sync sync`, independently of Automatic sync and Startup transfer. Saving does not start a transfer. TUI/RPC only; no polling, daemon, shutdown inference, or Pi core modification.
+
+**Warning:** eligible conflict text is sent to the selected Pi model and can incur costs. Accepted results can replace/delete selected local and remote content without another transfer prompt. The resolver has no tools or parent conversation, and validates candidate ownership and current versions before using the existing publication/backup/journal flow. Validation is not a guarantee of semantic correctness or lossless editing against other local processes.
+
+The first implementation resolves bounded overlapping `AGENTS.md` and prompt/skill Markdown/plain-text edits, and selects complete atomic global settings units. Verified ancestors are required. Code, session histories, deletion conflicts and path collisions are not model-resolved; unsupported/refused work pauses, unless existing partial-sync policy permits independent progress. No resources reload automatically. Disabling stops subsequent authorization, not completed writes or provider charges. Read [Agent mode settings, limits, privacy and recovery](./docs/settings.md#experimental-agent-mode) before enabling.
 
 ### Opt-in automatic transfer
 
@@ -258,7 +267,7 @@ Read the [settings reference](./docs/settings.md) for complete S3/R2, Git, and W
 | `/sync doctor` | Check configuration, connectivity, and backend safety. |
 | `/sync push` | Publish local content to remote storage. |
 | `/sync pull` | Back up local content, then apply the remote snapshot. |
-| `/sync sync` | Merge independent file changes, or require initial-source/policy/conflict review. |
+| `/sync sync` | Merge changes; enabled Agent mode resolves eligible conflicts autonomously, while initial-source/policy barriers retain review. |
 | `/sync history` | Browse remote snapshots and review a rollback. |
 | `/sync rollback <snapshot-id>` | Back up local content, apply a historical snapshot, and republish it remotely. |
 | `/sync migrate-state` | Migrate the legacy local state directory. |

@@ -80,6 +80,7 @@ export async function loadPartialConfig(setupName?: string): Promise<PartialConf
     include: [...config.include],
     automatic: config.automatic,
     automaticTransfer: config.automaticTransfer ?? false,
+    agentMode: config.agentMode ?? false,
     onSwitch: config.onSwitch,
     showStatus: config.showStatus,
   };
@@ -115,6 +116,7 @@ export function syncConfigReviewIdentity(config: AnySyncConfig) {
     config.include,
     config.automatic,
     config.automaticTransfer ?? false,
+    config.agentMode ?? false,
     config.localFields,
     config.mergeSettings ?? false,
     config.mergeContent ?? false,
@@ -166,6 +168,7 @@ function resolveSyncConfig(
     include,
     automatic: setup.sync.automatic,
     automaticTransfer: setup.sync.automaticTransfer ?? false,
+    agentMode: setup.sync.agentMode ?? false,
     localFields: setup.sync.localFields === undefined ? undefined : normalizeLocalFields(setup.sync.localFields),
     mergeSettings: setup.sync.mergeSettings ?? false,
     mergeContent: setup.sync.mergeContent ?? false,

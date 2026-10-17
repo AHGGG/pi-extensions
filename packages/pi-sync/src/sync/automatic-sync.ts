@@ -12,6 +12,7 @@ import { stateDirectoryMigrationNotice } from "../state/state-directory.js";
 import { ensureStateDir, readStateForConfig } from "../state/sync-state-store.js";
 import { configureSyncStatus, setSyncStatus } from "../ui/sync-status.js";
 import { safeTerminalText } from "../ui/terminal-text.js";
+import { startupTransferEnabled } from "./agent-policy.js";
 import { throwIfAborted } from "./signals.js";
 import { createStartupTimings } from "./startup-timings.js";
 import { errorMessage } from "./sync-errors.js";
@@ -69,7 +70,7 @@ export async function startSession(ctx: ExtensionContext, signal: AbortSignal) {
       throwIfAborted(signal);
       configureSyncStatus(ctx, config.showStatus);
       outcome = "completed";
-      return config.automatic || config.automaticTransfer ? config : undefined;
+      return config.automatic || startupTransferEnabled(config) ? config : undefined;
     } catch (error) {
       throwIfAborted(signal);
       if (!isMissingConfigError(error)) {

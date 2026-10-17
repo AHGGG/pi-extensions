@@ -5,6 +5,7 @@ import { localConfigTemplate, readLocalConfigObject } from "../settings/settings
 import type { AnySyncConfig } from "../settings/settings-types.js";
 import { unlock, withLock } from "../state/lock.js";
 import { migrateLegacyStateDirectory, stateDirectoryMigrationNotice } from "../state/state-directory.js";
+import { withAgentSyncLock } from "../sync/agent-sync.js";
 import { throwIfAborted } from "../sync/signals.js";
 import { syncErrorGuidance } from "../sync/sync-error-guidance.js";
 import { isSyncDecisionRequiredError, SetupPullRequiresUiError } from "../sync/sync-errors.js";
@@ -49,7 +50,7 @@ export async function executeRecoveryCommand(
       const outcome = await withLock("pull", () => operations.pull(ctx, options));
       return { kind: "completed", ...(outcome ? { outcome } : {}) };
     }
-    await withLock("sync", () => operations.syncBoth(ctx, options));
+    await withAgentSyncLock(ctx, options, (current) => operations.syncBoth(ctx, current));
     return { kind: "completed" };
   } catch (error) {
     if (signal?.aborted) return { kind: "failed" };
@@ -156,7 +157,7 @@ export async function executeCommand(
       case "sync": {
         const operations = await loaders.operations();
         throwIfAborted(options.signal);
-        await withLock("sync", () => operations.syncBoth(ctx, options));
+        await withAgentSyncLock(ctx, options, (current) => operations.syncBoth(ctx, current));
         return { kind: "completed" };
       }
       case "history": {
@@ -258,6 +259,7 @@ async function showConfig(ctx: ExtensionCommandContext, options: CommandOptions)
       `settings field merge: ${config.mergeSettings ? "On (experimental)" : "Off"}`,
       `machine-local settings.json fields: ${(config.localFields ?? []).map(safeTerminalText).join(", ") || "none"}`,
       `startup transfer: ${startupTransferSummary(config)}`,
+      `agent mode: ${config.agentMode ? "On (experimental)" : "Off"}`,
       `included content: ${config.include.join(", ") || "none"}`,
       `sessions: ${config.include.includes("sessions") ? "included" : "not included"}`,
       `settings file: ${localConfigPath()}`,

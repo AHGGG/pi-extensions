@@ -66,7 +66,7 @@ export async function stageMergeBaseline(
     return (
       !collisions.has(file.path) &&
       accepted.lastFileHashes[file.path] === file.sha256 &&
-      (file.path === "settings.json" || config.mergeContent) &&
+      (file.path === "settings.json" || config.mergeContent || (config.agentMode && isMergeTextPath(file.path))) &&
       eligible(file)
     );
   });
@@ -153,7 +153,7 @@ export async function hasCurrentMergeBaseline(config: AnySyncConfig, snapshot: S
     const hashes = new Map(ancestors.map((file) => [file.path, file.sha256]));
     return snapshot.files.every(
       (file) =>
-        !(file.path === "settings.json" || config.mergeContent) ||
+        !(file.path === "settings.json" || config.mergeContent || (config.agentMode && isMergeTextPath(file.path))) ||
         !eligible(file) ||
         hashes.get(file.path) === file.sha256,
     );

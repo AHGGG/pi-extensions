@@ -30,11 +30,11 @@ export function text(bytes: Buffer) {
     throw new Error("Unsupported text encoding.");
   return decoded;
 }
-type Hunk = { start: number; end: number; lines: string[] };
-function lines(value: string) {
+export type Hunk = { start: number; end: number; lines: string[] };
+export function lines(value: string) {
   return value.match(/[^\n]*\n|[^\n]+$/gu) ?? [];
 }
-function edits(base: string[], next: string[], signal?: AbortSignal): Hunk[] {
+export function edits(base: string[], next: string[], signal?: AbortSignal): Hunk[] {
   const width = next.length + 1;
   if ((base.length + 1) * width > 4_000_000) throw new Error("Text merge complexity bound exceeded.");
   // Intern once so each charged DP cell compares fixed-size IDs, not long line strings.
