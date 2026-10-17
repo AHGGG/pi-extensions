@@ -23,7 +23,14 @@ import { type CodexCompactSettingsRuntime, compactionSettingsKey } from "./setti
 type CompactionResult = Awaited<ReturnType<typeof compactRemotely>>;
 
 /** The immutable snapshot remains an ancestor; edits cannot rewrite its context. */
-export function captureWarmCompactionBranch(snapshot: SessionEntry[]): (entries: SessionEntry[]) => boolean {
+export function captureWarmCompactionBranch(
+  snapshot: SessionEntry[],
+  onInvalid?: (reason: string) => void,
+): (entries: SessionEntry[]) => boolean {
+  const invalid = (reason: string) => {
+    onInvalid?.(reason);
+    return false;
+  };
   const prefix = JSON.stringify(snapshot);
   const leafId = snapshot.at(-1)?.id ?? null;
   const snapshotIds = new Set(snapshot.map((entry) => entry.id));
@@ -31,23 +38,26 @@ export function captureWarmCompactionBranch(snapshot: SessionEntry[]): (entries:
     buildSessionProjection(snapshot, leafId).entries.map(({ sourceEntry, messages }) => [sourceEntry.id, messages]),
   );
   return (entries) => {
-    if (entries.length < snapshot.length || JSON.stringify(entries.slice(0, snapshot.length)) !== prefix) return false;
+    if (entries.length < snapshot.length) return invalid("session branch no longer contains the full snapshot");
+    if (JSON.stringify(entries.slice(0, snapshot.length)) !== prefix)
+      return invalid("persisted snapshot entries changed");
     const ids = new Set(snapshotIds);
     let parentId = leafId;
     for (const entry of entries.slice(snapshot.length)) {
-      if (entry.parentId !== parentId || ids.has(entry.id)) return false;
+      if (entry.parentId !== parentId) return invalid("appended session ancestry is discontinuous");
+      if (ids.has(entry.id)) return invalid("appended session entry ID is duplicated");
       ids.add(entry.id);
       // New turns and bookkeeping are safe; model/branch/compaction transitions are not.
       if (
         !["message", "custom_message", "custom", "usage", "label", "session_info", "context_edit"].includes(entry.type)
       )
-        return false;
+        return invalid("session transition invalidated the snapshot");
       parentId = entry.id;
     }
     const currentPrefix = buildSessionProjection(entries, parentId)
       .entries.filter(({ sourceEntry }) => snapshotIds.has(sourceEntry.id))
       .map(({ sourceEntry, messages }) => [sourceEntry.id, messages]);
-    return JSON.stringify(currentPrefix) === projected;
+    return JSON.stringify(currentPrefix) === projected || invalid("projected snapshot prefix changed");
   };
 }
 
@@ -70,6 +80,8 @@ export interface WarmCompactionJob {
   state: "Preparing" | "Ready" | "Failed";
   promptAndToolsTokens: number;
   isCurrent(): boolean;
+  /** Fixed diagnostic text only; never include session content or credentials. */
+  validationFailure?: string;
 }
 
 export function startWarmCompaction(
@@ -115,7 +127,10 @@ export function startWarmCompaction(
   const first = projection.entries.find(({ messages }) => messages.some((message) => message.role !== "system"));
   if (!snapshotLeafId || !first || !completeToolPairs(buildSessionContext(snapshot, snapshotLeafId).messages))
     return undefined;
-  const branchIsCurrent = captureWarmCompactionBranch(snapshot);
+  let branchFailure: string | undefined;
+  const branchIsCurrent = captureWarmCompactionBranch(snapshot, (reason) => {
+    branchFailure = reason;
+  });
   const settingsKey = compactionSettingsKey(settings);
   const modelKey = JSON.stringify(model);
   const systemPrompt = ctx.getSystemPrompt();
@@ -128,15 +143,27 @@ export function startWarmCompaction(
   const runSignal = ctx.signal;
   const cancelPreparing = () => controller.abort();
   runSignal?.addEventListener("abort", cancelPreparing, { once: true });
-  const isCurrent = () =>
-    !signal.aborted &&
-    ownerIsCurrent() &&
-    compactionSettingsKey(runtime.get().settings) === settingsKey &&
-    JSON.stringify(ctx.model) === modelKey &&
-    ctx.getSystemPrompt() === systemPrompt &&
-    JSON.stringify([pi.getActiveTools(), activeTools(pi)]) === toolsKey &&
-    pi.getThinkingLevel() === thinkingLevel &&
-    branchIsCurrent(ctx.sessionManager.getBranch());
+  const isCurrent = () => {
+    const reason = signal.aborted
+      ? "background job was cancelled"
+      : !ownerIsCurrent()
+        ? "session ownership changed"
+        : compactionSettingsKey(runtime.get().settings) !== settingsKey
+          ? "compaction settings changed"
+          : JSON.stringify(ctx.model) !== modelKey
+            ? "model configuration changed"
+            : ctx.getSystemPrompt() !== systemPrompt
+              ? "system prompt changed"
+              : JSON.stringify([pi.getActiveTools(), activeTools(pi)]) !== toolsKey
+                ? "active tools or tool definitions changed"
+                : pi.getThinkingLevel() !== thinkingLevel
+                  ? "thinking level changed"
+                  : !branchIsCurrent(ctx.sessionManager.getBranch())
+                    ? (branchFailure ?? "session snapshot changed")
+                    : undefined;
+    if (reason) job.validationFailure = reason;
+    return reason === undefined;
+  };
   const attempt: CompactionAttempt = {};
   const deadline = new AbortController();
   const timeout = setTimeout(
@@ -213,8 +240,23 @@ export async function adoptWarmCompaction(
 ): Promise<WarmCompactionAdoption> {
   const signal = AbortSignal.any([event.signal, operationSignal]);
   const adoptionBranchIsCurrent = captureCompactionBranch(event.branchEntries);
-  const valid = () =>
-    !signal.aborted && isCurrent() && job.isCurrent() && adoptionBranchIsCurrent(ctx.sessionManager.getBranch());
+  const stale = (reason: string): WarmCompactionAdoption => {
+    job.validationFailure = reason;
+    return { kind: "stale" };
+  };
+  const valid = () => {
+    if (signal.aborted) return false;
+    if (!isCurrent()) {
+      job.validationFailure ??= "application ownership or boundary changed";
+      return false;
+    }
+    if (!job.isCurrent()) return false;
+    if (!adoptionBranchIsCurrent(ctx.sessionManager.getBranch())) {
+      job.validationFailure = "session branch changed during application";
+      return false;
+    }
+    return true;
+  };
   if (signal.aborted) return { kind: "cancel" };
   if (!valid()) return { kind: "stale" };
   const cancel = () => {
@@ -228,49 +270,62 @@ export async function adoptWarmCompaction(
     try {
       result = await abortable(job.promise, signal);
     } catch {
-      return signal.aborted ? { kind: "cancel" } : { kind: "stale" };
+      return signal.aborted ? { kind: "cancel" } : stale("prepared checkpoint promise failed");
     }
     if (signal.aborted) return { kind: "cancel" };
-    if (!valid() || !ctx.model) return { kind: "stale" };
+    if (!valid()) return { kind: "stale" };
+    if (!ctx.model) return stale("active model is unavailable");
     let binding: Awaited<ReturnType<typeof resolveCompactionBinding>>;
     try {
       binding = await abortable(resolveCompactionBinding(ctx, ctx.model, runtime.get().settings, valid), signal);
     } catch {
-      return signal.aborted ? { kind: "cancel" } : { kind: "stale" };
+      return signal.aborted
+        ? { kind: "cancel" }
+        : stale(job.validationFailure ?? "authentication or provider lookup failed");
     }
     if (signal.aborted) return { kind: "cancel" };
-    if (!valid() || !sameCompactionBinding(job.attempt.binding, binding.binding)) return { kind: "stale" };
+    if (!valid()) return { kind: "stale" };
+    if (!sameCompactionBinding(job.attempt.binding, binding.binding))
+      return stale("authentication, route, or provider binding changed");
     if (job.attempt.failure) return { kind: "failed", attempt: job.attempt };
-    if (!result || !("compaction" in result) || !result.compaction) return { kind: "stale" };
+    if (!result || !("compaction" in result) || !result.compaction)
+      return stale("prepared checkpoint result is unavailable");
     const entries = event.branchEntries;
-    if (!completeToolPairs(buildSessionContext(entries).messages)) return { kind: "stale" };
+    if (!completeToolPairs(buildSessionContext(entries).messages))
+      return stale("session contains an unmatched tool call");
     const cutoffIndex = entries.findIndex((entry) => entry.id === job.snapshotLeafId);
-    if (cutoffIndex < 0) return { kind: "stale" };
+    if (cutoffIndex < 0) return stale("snapshot cutoff is absent from the session");
     const leafId = entries.at(-1)?.id ?? null;
     const projection = buildSessionProjection(entries, leafId);
     const suffixIds = new Set(entries.slice(cutoffIndex + 1).map((entry) => entry.id));
     const suffix = projection.entries.filter(({ sourceEntry }) => suffixIds.has(sourceEntry.id));
     const nativeCutIndex = entries.findIndex((entry) => entry.id === event.preparation.firstKeptEntryId);
-    if (nativeCutIndex < 0) return { kind: "stale" };
+    if (nativeCutIndex < 0) return stale("retained-message cut point is absent from the session");
     const firstSuffix = suffix.find(({ messages }) => messages.length > 0);
     const firstKeptEntryId =
       firstSuffix && entries.findIndex((entry) => entry.id === firstSuffix.sourceEntry.id) < nativeCutIndex
         ? firstSuffix.sourceEntry.id
         : event.preparation.firstKeptEntryId;
     const details = parseCheckpointDetails(result.compaction.details);
-    if (!details) return { kind: "stale" };
+    if (!details) return stale("prepared checkpoint details are invalid");
     // A large untouched tail can erase the benefit. Use the current-history foreground
     // path instead of truncating it or immediately overflowing the adopted checkpoint.
-    const estimatedTokens =
-      Math.ceil(JSON.stringify(details.replacementHistory).length / 4) +
-      suffix.flatMap(({ messages }) => messages).reduce((sum, message) => sum + estimateTokens(message), 0) +
-      job.promptAndToolsTokens;
-    if (estimatedTokens >= ctx.model.contextWindow - event.preparation.settings.reserveTokens) return { kind: "stale" };
+    const replacementTokens = Math.ceil(JSON.stringify(details.replacementHistory).length / 4);
+    const suffixTokens = suffix
+      .flatMap(({ messages }) => messages)
+      .reduce((sum, message) => sum + estimateTokens(message), 0);
+    const estimatedTokens = replacementTokens + suffixTokens + job.promptAndToolsTokens;
+    if (estimatedTokens >= ctx.model.contextWindow - event.preparation.settings.reserveTokens) {
+      const number = (value: number) => (Number.isFinite(value) ? String(value) : "unknown");
+      return stale(
+        `token budget exceeded (estimated=${number(estimatedTokens)}, replacement=${number(replacementTokens)}, suffix=${number(suffixTokens)}, prompt/tools=${number(job.promptAndToolsTokens)}, context=${number(ctx.model.contextWindow)}, reserve=${number(event.preparation.settings.reserveTokens)})`,
+      );
+    }
     let keptMessages: AgentMessage[];
     try {
       keptMessages = checkpointKeptMessages(entries, leafId, firstKeptEntryId, job.snapshotLeafId);
     } catch {
-      return { kind: "stale" };
+      return stale("retained-message ancestry or snapshot projection validation failed");
     }
     const adopted = createCheckpointDetails({ ...details, keptMessages, snapshotLeafId: job.snapshotLeafId });
     return {
@@ -298,7 +353,12 @@ export async function warmCompactionDraft(
   signal: AbortSignal,
   isCurrent: () => boolean,
 ): Promise<CompactionEntryDraft | undefined> {
-  if (job.state !== "Ready") return undefined;
+  const reject = (reason: string) => {
+    job.validationFailure = reason;
+    return undefined;
+  };
+  job.validationFailure = undefined;
+  if (job.state !== "Ready") return reject("checkpoint is not ready");
   const entries = JSON.parse(JSON.stringify(ctx.sessionManager.getBranch())) as SessionEntry[];
   // Keep the newest visible raw message as the native anchor. Adoption moves
   // this cut earlier if needed to retain every uncovered suffix message. Do not
@@ -312,7 +372,7 @@ export async function warmCompactionDraft(
       .map(({ sourceEntry }) => sourceEntry.id),
   );
   const first = [...entries].reverse().find((entry) => visible.has(entry.id));
-  if (!first) return undefined;
+  if (!first) return reject("no visible retained-message anchor");
   const branch = JSON.stringify(entries);
   const adoption = await adoptWarmCompaction(
     job,
@@ -347,12 +407,12 @@ export async function warmCompactionDraft(
     !("compaction" in adoption.result) ||
     !adoption.result.compaction
   )
-    return undefined;
+    return reject(job.validationFailure ?? "application cancelled or boundary changed");
   const { summary, firstKeptEntryId, details, usage } = adoption.result.compaction;
   // Verify Pi's own finalized projection before handing it a draft. In
   // particular, old summaries and system entries are folded during compaction.
   const header = ctx.sessionManager.getHeader();
-  if (!header) return undefined;
+  if (!header) return reject("session header is unavailable");
   const preview = SessionManager.inMemory(ctx.cwd, undefined, [header, ...entries]);
   preview.appendCompaction(summary, firstKeptEntryId, 0, details, true, usage);
   const checkpoint = latestCheckpoint(preview.getBranch());
@@ -360,6 +420,6 @@ export async function warmCompactionDraft(
     !checkpoint ||
     !projectSessionCheckpointContext(preview.buildSessionContext().messages, preview.getBranch(), checkpoint)
   )
-    return undefined;
+    return reject("finalized checkpoint projection did not validate");
   return { type: "compaction", summary, firstKeptEntryId, details, usage };
 }

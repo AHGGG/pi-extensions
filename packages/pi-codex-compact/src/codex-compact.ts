@@ -108,13 +108,13 @@ export function createCodexCompactExtension(
         ctx.ui.notify(`[codex-compact] ${message}`, "info");
     };
 
-    const cancelWarm = (ctx: ExtensionContext) => {
+    const cancelWarm = (ctx: ExtensionContext, reason?: string) => {
       const owner = owners.get(ctx.sessionManager);
       if (!owner?.warm) return;
       if (owner.warm.state !== "Failed")
         logCompaction(
           ctx,
-          owner.warm.state === "Ready" ? "Async compaction checkpoint discarded." : "Async compaction cancelled.",
+          `${owner.warm.state === "Ready" ? "Async compaction checkpoint discarded." : "Async compaction cancelled."} Reason: ${reason ?? owner.warm.validationFailure ?? "checkpoint is no longer current"}.`,
         );
       owner.warm.controller.abort();
       owner.warm = undefined;
@@ -244,7 +244,7 @@ export function createCodexCompactExtension(
           backgroundStatus: () => (owner.warm?.state === "Failed" ? undefined : owner.warm?.state),
           onSettingsChanged: () => {
             cancelOperation(ctx);
-            cancelWarm(ctx);
+            cancelWarm(ctx, "settings changed in the compaction menu");
           },
           hasCheckpoint: () => hasActiveCheckpointClaim(ctx.sessionManager.getBranch()),
           canReplayCheckpoint: () => {
@@ -418,7 +418,12 @@ export function createCodexCompactExtension(
       // Only plain manual compaction can reuse a finished snapshot. Pending work
       // and custom-instruction requests retain the existing foreground path.
       if (event.customInstructions?.trim() || (event.reason === "manual" && owner.warm?.state !== "Ready"))
-        cancelWarm(ctx);
+        cancelWarm(
+          ctx,
+          event.customInstructions?.trim()
+            ? "foreground compaction has custom instructions"
+            : "manual compaction replaced unfinished preparation",
+        );
       const warm = owner.warm;
       const operation = new AbortController();
       owner.operation = operation;
@@ -466,6 +471,15 @@ export function createCodexCompactExtension(
           // Switching automatic application off cancels the claim, not valid
           // prepared work: leave it available for a later manual compaction.
           if (autoApply && !settingsRuntime.get().settings.asyncAutoApply && warm.isCurrent()) return { cancel: true };
+          if (
+            owners.get(ctx.sessionManager) === owner &&
+            owner.warm === warm &&
+            (adoption.kind === "stale" || adoption.kind === "failed")
+          )
+            logCompaction(
+              ctx,
+              `Async checkpoint application rejected. Reason: ${warm.validationFailure ?? (adoption.kind === "failed" ? "background preparation failed" : "checkpoint is no longer current")}.`,
+            );
           if (owner.warm === warm) owner.warm = undefined;
           warm.controller.abort();
           if (adoption.kind === "cancel") return { cancel: true };
@@ -541,7 +555,7 @@ export function createCodexCompactExtension(
     });
 
     pi.on("session_compact", (event, ctx) => {
-      cancelWarm(ctx);
+      cancelWarm(ctx, "another compaction committed");
       const owner = owners.get(ctx.sessionManager);
       if (owner?.compactionPending) {
         logCompaction(ctx, "Actual compaction completed: checkpoint committed.");
@@ -675,7 +689,7 @@ export function createCodexCompactExtension(
 
     const beforeNavigation = (_event: unknown, ctx: ExtensionContext) => {
       cancelOperation(ctx);
-      cancelWarm(ctx);
+      cancelWarm(ctx, "session navigation or thinking-level selection");
       const owner = owners.get(ctx.sessionManager);
       if (owner) owner.run = undefined;
     };
@@ -686,14 +700,14 @@ export function createCodexCompactExtension(
 
     pi.on("session_tree", (_event, ctx) => {
       cancelOperation(ctx);
-      cancelWarm(ctx);
+      cancelWarm(ctx, "session tree changed");
       const owner = owners.get(ctx.sessionManager);
       if (owner) owner.run = undefined;
     });
 
     pi.on("model_select", (event, ctx) => {
       cancelOperation(ctx);
-      cancelWarm(ctx);
+      cancelWarm(ctx, "model selected");
       const owner = owners.get(ctx.sessionManager);
       if (owner) owner.run = undefined;
       if (!settingsRuntime.get().settings.enabled) return;
