@@ -233,6 +233,7 @@ export function createContinuousSync(loaders: SyncLoaders, clock: ContinuousCloc
           const force = explicitRetry || controlChanged;
           explicitRetry = false;
           const expectedModel = hashContinuous(ctx.model);
+          const expectedConfig = syncCheckConfigFingerprint(config);
           dirtyAt = undefined;
           cycle = new AbortController();
           const cancelDeadline = clock.schedule(30_000, () =>
@@ -241,6 +242,17 @@ export function createContinuousSync(loaders: SyncLoaders, clock: ContinuousCloc
           const guard = new AbortController();
           const guardSignal = AbortSignal.any([signal, cycle.signal, guard.signal]);
           const activeCycle = cycle;
+          // Transfer entrypoints supply each fresh settings read. Never let a new
+          // transfer adopt authorization that changed after this cycle's inspection.
+          const validateCycle = (latest?: AnySyncConfig) => {
+            validate();
+            if (
+              (latest && syncCheckConfigFingerprint(latest) !== expectedConfig) ||
+              hashContinuous(ctx.model) !== expectedModel
+            )
+              activeCycle.abort(new DOMException("Continuous authorization changed", "AbortError"));
+            activeCycle.signal.throwIfAborted();
+          };
           const guardTask = (async () => {
             while (!guardSignal.aborted) {
               await wait(clock, LOCAL_CHECK_MS, guardSignal, undefined, "authorization");
@@ -249,12 +261,7 @@ export function createContinuousSync(loaders: SyncLoaders, clock: ContinuousCloc
                 validate();
                 const latest = await loadConfigForCheck();
                 if (guardSignal.aborted) return;
-                validate();
-                if (
-                  syncCheckConfigFingerprint(latest) !== syncCheckConfigFingerprint(config) ||
-                  hashContinuous(ctx.model) !== expectedModel
-                )
-                  activeCycle.abort(new DOMException("Continuous authorization changed", "AbortError"));
+                validateCycle(latest);
               } catch {
                 activeCycle.abort(new DOMException("Continuous authorization unavailable", "AbortError"));
               }
@@ -267,7 +274,7 @@ export function createContinuousSync(loaders: SyncLoaders, clock: ContinuousCloc
               binding,
               lease,
               AbortSignal.any([signal, cycle.signal]),
-              validate,
+              validateCycle,
               configuration,
               force,
             );
@@ -346,13 +353,13 @@ export function createContinuousSync(loaders: SyncLoaders, clock: ContinuousCloc
     binding: string,
     lease: ContinuousLease,
     signal: AbortSignal,
-    validateOwner: () => void,
+    validateOwner: (config?: AnySyncConfig) => void,
     configuration: string,
     force: boolean,
   ) {
-    const validate = () => {
+    const validate = (latest?: AnySyncConfig) => {
       signal.throwIfAborted();
-      validateOwner();
+      validateOwner(latest);
     };
     validate();
     const current = await readContinuousRecord(binding);

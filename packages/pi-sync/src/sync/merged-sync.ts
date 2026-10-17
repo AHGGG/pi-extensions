@@ -84,9 +84,9 @@ export async function mergeSync(
 ) {
   const timings = options.startupTimings ?? createStartupTimings();
   const sessionOwner = captureMutationOwner(ctx, options.signal);
-  const validateOwner = () => {
+  const validateOwner = (config?: AnySyncConfig) => {
     sessionOwner();
-    options.background?.validate();
+    options.background?.validate(config);
   };
   const isCurrent = () => {
     try {
@@ -97,6 +97,7 @@ export async function mergeSync(
     }
   };
   const config = await loadConfig(options.setup);
+  validateOwner(config);
   const configToken = syncCheckConfigFingerprint(config);
   const modelToken = JSON.stringify(ctx.model);
   const sessionRoot = config.include.includes("sessions") ? await effectiveSessionRoot(ctx) : undefined;
@@ -110,7 +111,7 @@ export async function mergeSync(
     timings.measure("transfer authorization", async () => {
       validateOwner();
       const latest = await loadConfig(options.setup);
-      validateOwner();
+      validateOwner(latest);
       if (configToken !== syncCheckConfigFingerprint(latest))
         throw new Error("Sync setup or settings changed during transfer; reopen sync.");
       if (sessionRoot !== undefined) {
