@@ -21,7 +21,7 @@ export async function showUsageSettings(
   settingsRuntime: UsageSettingsRuntime,
   parentSignal: AbortSignal,
   isCurrent: () => boolean,
-  onApplied: (id: UsageSettingId) => void,
+  onApplied: (id: UsageSettingId, uiClosed: boolean) => void,
 ): Promise<boolean> {
   if (ctx.mode !== "tui") {
     if (ctx.hasUI) ctx.ui.notify(`Edit settings manually: ${settingsRuntime.get().path}`, "info");
@@ -104,7 +104,7 @@ export async function showUsageSettings(
         // durable save, but let the owner guard its session before touching UI.
         if (previous !== requested) {
           changed = true;
-          onApplied(id);
+          onApplied(id, signal.aborted);
         }
         if (signal.aborted || !isCurrent()) return;
         settingsList.updateValue(id, display);

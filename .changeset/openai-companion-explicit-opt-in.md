@@ -6,4 +6,4 @@ Make native OpenAI companion usage default to Off. Enable **Use Codex login for 
 
 The new `openaiUseCodexUsage` boolean defaults to `false`, including after upgrade. Historical `openaiCompanionUsage` values do not opt in. Native OpenAI shows authentication status and a usage-settings link until explicitly enabled; independent Codex usage, Fast mode, and reset redemption are unchanged.
 
-Disabling cancels pending companion queries, invalidates native quota caches, and prevents late responses from restoring old reports or status. This does not add reverse fallback or change Pi-owned OAuth renewal. Companion endpoints remain experimental and undocumented.
+Disabling cancels pending companion queries and auth waits, invalidates native quota caches, and prevents late results from restoring old reports or status. A successful save restores the active session status refresh even if the Settings screen closes or becomes stale during publication. This does not add reverse fallback or change Pi-owned OAuth renewal. Companion endpoints remain experimental and undocumented.

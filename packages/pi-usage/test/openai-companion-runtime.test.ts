@@ -3,7 +3,13 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Credential, CredentialStore } from "@earendil-works/pi-ai";
-import { type ExtensionCommandContext, initTheme, ModelRegistry, ModelRuntime } from "@earendil-works/pi-coding-agent";
+import {
+  type ExtensionAPI,
+  type ExtensionCommandContext,
+  initTheme,
+  ModelRegistry,
+  ModelRuntime,
+} from "@earendil-works/pi-coding-agent";
 import { afterEach, test, vi } from "vitest";
 import { createCustomSelectorHarness, createMockContext, createMockPi } from "../../../test/support.js";
 import { createUsageSettingsRuntime } from "../src/settings.js";
@@ -707,3 +713,109 @@ test("failed companion disable keeps its previous setting, report, and displayed
     await state.emit("session_shutdown");
   }
 });
+
+test("disable while companion readiness is pending stops late Codex credential reads", async () => {
+  const state = await setup("tui");
+  mockFetch();
+  let release!: () => void;
+  const wait = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  let ready!: () => void;
+  const entered = new Promise<void>((resolve) => {
+    ready = resolve;
+  });
+  const originalUpdate = state.runtime.update;
+  const auth = vi.spyOn(state.registry, "getProviderAuth");
+  let readsBeforeDisable = 0;
+  let readsAfterDisable = 0;
+  // Install the wait only for the background query that races the save.
+  let waiting = false;
+  const eventBus = (state.mock.pi as ExtensionAPI).events;
+  eventBus.on("oauth:credential-readiness:v1", (value) => {
+    const request = value as { provider: string; waitUntil(value: Promise<void>): void };
+    if (waiting && request.provider === "openai-codex") {
+      request.waitUntil(wait);
+      ready();
+    }
+  });
+  vi.spyOn(state.runtime, "update").mockImplementation(async (patch, signal) => {
+    if (patch.openaiUseCodexUsage === false) {
+      waiting = true;
+      await state.emit("turn_start");
+      await entered;
+      readsBeforeDisable = auth.mock.calls.filter(([provider]) => provider === "openai-codex").length;
+    }
+    return originalUpdate(patch, signal);
+  });
+  try {
+    await settingsCommand(state, async (harness) => {
+      harness.handleInput("\r");
+      await vi.waitFor(() => assert.equal(state.runtime.get().settings.openaiUseCodexUsage, false));
+      release();
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      readsAfterDisable = auth.mock.calls.filter(([provider]) => provider === "openai-codex").length;
+    });
+    assert.ok(readsBeforeDisable > 0);
+    assert.equal(readsAfterDisable, readsBeforeDisable);
+  } finally {
+    release();
+    await state.emit("session_shutdown");
+  }
+});
+
+for (const handoff of ["event", "cancel-after-publication", "dispose-after-publication"] as const) {
+  test(`Settings ${handoff} handoff restores native status and its scheduled refresh`, async () => {
+    const state = await setup("tui");
+    const requests = mockFetch();
+    let release!: () => void;
+    const response = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let ready!: () => void;
+    const entered = new Promise<void>((resolve) => {
+      ready = resolve;
+    });
+    const originalUpdate = state.runtime.update;
+    const lateFetch = vi.fn(async () => {
+      ready();
+      await response;
+      return new Response(JSON.stringify(apps));
+    });
+    let activeHarness: ReturnType<typeof createCustomSelectorHarness> | undefined;
+    vi.spyOn(state.runtime, "update").mockImplementation(async (patch, signal) => {
+      if (patch.openaiUseCodexUsage === false && handoff === "event") {
+        state.companion({ ...codex, access: access("rotated"), accountId: "rotated" });
+        vi.stubGlobal("fetch", lateFetch);
+        await state.emit("turn_start");
+        await entered;
+      }
+      const saved = await originalUpdate(patch, signal);
+      if (handoff === "cancel-after-publication") activeHarness?.handleInput("\u0003");
+      if (handoff === "dispose-after-publication") activeHarness?.dispose();
+      return saved;
+    });
+    try {
+      vi.useFakeTimers();
+      await state.emit("session_start");
+      await settingsCommand(state, async (harness) => {
+        activeHarness = harness;
+        harness.handleInput("\r");
+        await vi.waitFor(() => assert.equal(state.runtime.get().settings.openaiUseCodexUsage, false));
+        release();
+      });
+      await vi.waitFor(() => assert.equal(state.context.statuses.get("usage"), "chatgpt usage: web only"));
+      assert.equal(vi.getTimerCount(), 1);
+      const auth = vi.spyOn(state.registry, "getProviderAuth");
+      await vi.advanceTimersByTimeAsync(300_000);
+      assert.equal(state.context.statuses.get("usage"), "chatgpt usage: web only");
+      assert.ok(auth.mock.calls.length > 0);
+      assert.ok(auth.mock.calls.every(([provider]) => provider === "openai"));
+      assert.equal(lateFetch.mock.calls.length, handoff === "event" ? 1 : 0);
+      assert.ok(requests.length > 0);
+    } finally {
+      release();
+      await state.emit("session_shutdown");
+    }
+  });
+}

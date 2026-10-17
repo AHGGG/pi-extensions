@@ -101,17 +101,47 @@ export default function usageExtension(pi: ExtensionAPI, dependencies: UsageExte
     !policy ||
     (policy.generation === openaiUsageGeneration &&
       policy.enabled === settingsRuntime.get().settings.openaiUseCodexUsage);
-  const resolveUsageAuth: typeof resolveRuntimeUsageAuth = async (ctx, adapter, salt, reader, candidates) => {
+  const resolveUsageAuth: typeof resolveRuntimeUsageAuth = async (
+    ctx,
+    adapter,
+    salt,
+    reader,
+    candidates,
+    _obsolete,
+    options,
+  ) => {
     const policy = adapter.id === "openai" ? openaiPolicy() : undefined;
+    const ownerSession = sessionGeneration;
+    const ownerModel = modelIdentity(ctx.model);
+    const ownerSessionId = ctx.sessionManager.getSessionId();
+    const controller = policy ? new AbortController() : undefined;
+    if (controller) nativeQueryControllers.add(controller);
+    const signal = controller
+      ? options?.signal
+        ? AbortSignal.any([options.signal, controller.signal])
+        : controller.signal
+      : undefined;
+    const checkCurrent = () => {
+      if (
+        !openaiPolicyIsCurrent(policy) ||
+        ownerSession !== sessionGeneration ||
+        modelIdentity(ctx.model) !== ownerModel ||
+        ctx.sessionManager.getSessionId() !== ownerSessionId
+      )
+        throw abortError();
+    };
     try {
       const auth = await resolveRuntimeUsageAuth(ctx, adapter, salt, reader, candidates, undefined, {
         openaiUseCodexUsage: policy?.enabled,
+        ...(policy ? { signal, checkCurrent } : {}),
       });
-      if (!openaiPolicyIsCurrent(policy)) throw abortError();
+      if (policy) checkCurrent();
       return auth;
     } catch (error) {
-      if (!openaiPolicyIsCurrent(policy)) throw abortError();
+      if (policy) checkCurrent();
       throw error;
+    } finally {
+      if (controller) nativeQueryControllers.delete(controller);
     }
   };
   const cache = new UsageCache(CACHE_TTL_MS);
@@ -280,7 +310,7 @@ export default function usageExtension(pi: ExtensionAPI, dependencies: UsageExte
     let auth: ResolvedUsageAuth | undefined;
     try {
       auth = await awaitWithDeadline(
-        resolveUsageAuth(ctx, adapter, undefined, credentialReader, credentialCandidates),
+        resolveUsageAuth(ctx, adapter, undefined, credentialReader, credentialCandidates, undefined, { signal }),
         signal,
         Math.max(1, deadlineAt - Date.now()),
         `resolving ${adapter.displayName} runtime auth`,
@@ -356,7 +386,7 @@ export default function usageExtension(pi: ExtensionAPI, dependencies: UsageExte
       if (signal.aborted || requestContextChanged()) throw abortError();
       if (!requiresRequestBoundaryGuard) return;
       const revalidated = await awaitWithDeadline(
-        resolveUsageAuth(ctx, adapter, undefined, credentialReader, credentialCandidates),
+        resolveUsageAuth(ctx, adapter, undefined, credentialReader, credentialCandidates, undefined, { signal }),
         signal,
         Math.max(1, deadlineAt - Date.now()),
         `revalidating ${providerName} runtime auth`,
@@ -541,6 +571,7 @@ export default function usageExtension(pi: ExtensionAPI, dependencies: UsageExte
       if (signal.aborted || controller.signal.aborted || !openaiPolicyIsCurrent(policy)) throw abortError();
       return { ...outcome, openaiPolicy: policy };
     } finally {
+      controller.abort();
       nativeQueryControllers.delete(controller);
     }
   };
@@ -558,7 +589,7 @@ export default function usageExtension(pi: ExtensionAPI, dependencies: UsageExte
       modelIdentity(ctx.model) !== expectedModel ||
       settingsRuntime.get().settings.selectedTargets[adapter.id] !== expectedTargetId;
     const auth = await awaitWithDeadline(
-      resolveUsageAuth(ctx, adapter, undefined, credentialReader, credentialCandidates),
+      resolveUsageAuth(ctx, adapter, undefined, credentialReader, credentialCandidates, undefined, { signal }),
       signal,
       Math.max(1, deadlineAt - Date.now()),
       `resolving ${providerDisplayName(ctx, adapter.id)} runtime auth`,
@@ -567,7 +598,7 @@ export default function usageExtension(pi: ExtensionAPI, dependencies: UsageExte
     const guard = async () => {
       if (signal.aborted || changed()) throw abortError();
       const revalidated = await awaitWithDeadline(
-        resolveUsageAuth(ctx, adapter, undefined, credentialReader, credentialCandidates),
+        resolveUsageAuth(ctx, adapter, undefined, credentialReader, credentialCandidates, undefined, { signal }),
         signal,
         Math.max(1, deadlineAt - Date.now()),
         `revalidating ${providerDisplayName(ctx, adapter.id)} runtime auth`,
@@ -636,6 +667,7 @@ export default function usageExtension(pi: ExtensionAPI, dependencies: UsageExte
       }
       publishStatus(ctx, outcome, model, true);
     } finally {
+      controller.abort();
       activeControllers.delete(controller);
       if (statusController === controller) statusController = undefined;
     }
@@ -699,7 +731,7 @@ export default function usageExtension(pi: ExtensionAPI, dependencies: UsageExte
       if (!adapter) return false;
       try {
         const auth = await awaitWithDeadline(
-          resolveUsageAuth(ctx, adapter, undefined, credentialReader, credentialCandidates),
+          resolveUsageAuth(ctx, adapter, undefined, credentialReader, credentialCandidates, undefined, { signal }),
           signal,
           DEFAULT_TIMEOUT_MS,
           `revalidating ${adapter.displayName} runtime auth`,
@@ -738,7 +770,7 @@ export default function usageExtension(pi: ExtensionAPI, dependencies: UsageExte
     if (!adapter) return false;
     try {
       const auth = await awaitWithDeadline(
-        resolveUsageAuth(ctx, adapter, undefined, credentialReader, credentialCandidates),
+        resolveUsageAuth(ctx, adapter, undefined, credentialReader, credentialCandidates, undefined, { signal }),
         signal,
         DEFAULT_TIMEOUT_MS,
         `revalidating ${adapter.displayName} runtime auth`,
@@ -1153,7 +1185,7 @@ export default function usageExtension(pi: ExtensionAPI, dependencies: UsageExte
               settingsRuntime,
               controller.signal,
               () => statusGeneration === menuGeneration && !controller.signal.aborted,
-              (id) => {
+              (id, uiClosed) => {
                 if (id === "openaiUseCodexUsage") {
                   // A completed rename can outlive UI cancellation. Invalidate owned work
                   // after durable publication, but never touch a replacement session's UI.
@@ -1165,6 +1197,13 @@ export default function usageExtension(pi: ExtensionAPI, dependencies: UsageExte
                     statusController?.abort();
                     clearStatusTimers();
                     safeSetStatus(ctx, undefined);
+                    // A stale or closed menu cannot restore the session refresh loop.
+                    if (
+                      sessionActive &&
+                      (uiClosed || statusGeneration !== menuGeneration || controller.signal.aborted)
+                    ) {
+                      startStatusRefresh(ctx, ctx.model, false);
+                    }
                   }
                   return;
                 }
@@ -1489,6 +1528,7 @@ export default function usageExtension(pi: ExtensionAPI, dependencies: UsageExte
     for (const controller of activeControllers) controller.abort();
     activeControllers.clear();
     statusController = undefined;
+    for (const controller of nativeQueryControllers) controller.abort();
     sessionActive = true;
     const ownerGeneration = sessionGeneration;
     try {
@@ -1517,6 +1557,7 @@ export default function usageExtension(pi: ExtensionAPI, dependencies: UsageExte
     for (const controller of activeControllers) controller.abort();
     activeControllers.clear();
     statusController = undefined;
+    for (const controller of nativeQueryControllers) controller.abort();
     cache.clear();
     failureBackoff.clear();
     latestQueries.clear();
