@@ -29,7 +29,10 @@ function telegramMessage(notification: Notification) {
     ),
   ];
   const entities = ranges.flatMap(({ style, offset, length }) => {
-    const end = Math.min(offset + length, contentEnd);
+    // Trim only the retained entity, not the text or later offsets.
+    // https://core.telegram.org/api/entities#entity-length
+    const retained = source.slice(offset, Math.min(offset + length, contentEnd)).trimEnd();
+    const end = offset + retained.length;
     if (end <= offset || !codePointBoundary(source, offset) || !codePointBoundary(source, end)) return [];
     return [{ type: style === "bold" ? "bold" : "code", offset, length: end - offset }];
   });

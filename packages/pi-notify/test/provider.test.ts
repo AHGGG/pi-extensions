@@ -1,5 +1,9 @@
 import assert from "node:assert/strict";
+import { mkdir, mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { notificationMetadata } from "../src/metadata.js";
 import { type Destination, deliver, type Notification } from "../src/provider.js";
 import { createTelegramProvider } from "../src/telegram.js";
 import { clipText } from "../src/text.js";
@@ -112,6 +116,100 @@ describe("Telegram provider", () => {
       ]);
     },
   );
+  it.each([" ", "\t", "\n", "\r\n", "\v\f", "\u00a0", "\u2003", "\u2028\u2029", "\u3000"])(
+    "excludes trailing whitespace %j from all styles without moving later offsets",
+    async (whitespace) => {
+      const value = "  😀e\u0301 inner space";
+      const title = `Test${whitespace}`;
+      const body = `${value}${whitespace}${whitespace}next${whitespace}tail`;
+      const next = value.length + whitespace.length * 2;
+      const tail = next + "next".length + whitespace.length;
+      const payload = await sentMessage({
+        ...note,
+        title,
+        body,
+        bodyEmphasis: [
+          { style: "monospace", offset: 0, length: value.length + whitespace.length },
+          { style: "bold", offset: value.length + whitespace.length, length: whitespace.length },
+          { style: "bold", offset: next, length: "next".length + whitespace.length },
+          { style: "monospace", offset: tail, length: "tail".length },
+        ],
+      });
+      expect(payload.text).toBe(`${title}\n${body}`);
+      expect(payload.entities).toEqual([
+        { type: "bold", offset: 0, length: "Test".length },
+        { type: "code", offset: title.length + 1, length: value.length },
+        { type: "bold", offset: title.length + 1 + next, length: "next".length },
+        { type: "code", offset: title.length + 1 + tail, length: "tail".length },
+      ]);
+      expect(selectedEntities(payload)).toEqual([
+        { type: "bold", text: "Test" },
+        { type: "code", text: value },
+        { type: "bold", text: "next" },
+        { type: "code", text: "tail" },
+      ]);
+    },
+  );
+  it.each(["bold", "monospace"] as const)("omits whitespace-only %s entities", async (style) => {
+    const payload = await sentMessage({
+      ...note,
+      title: " \t\n",
+      body: " \t\n",
+      bodyEmphasis: [{ style, offset: 0, length: 3 }],
+    });
+    expect(payload.text).toBe(" \t\n\n \t\n");
+    expect(payload.entities).toEqual([]);
+  });
+  it.each(["bold", "monospace"] as const)("trims %s whitespace exposed by body clipping", async (style) => {
+    const body = `${"x".repeat(4087)}😀 \nrest`;
+    const payload = await sentMessage({
+      ...note,
+      body,
+      bodyEmphasis: [{ style, offset: 4087, length: body.length - 4087 }],
+    });
+    expect(payload.text).toBe(`Test\n${"x".repeat(4087)}😀 …`);
+    expect(selectedEntities(payload)).toEqual([
+      { type: "bold", text: "Test" },
+      { type: style === "bold" ? "bold" : "code", text: "😀" },
+    ]);
+  });
+  it.each(["bold", "monospace"] as const)("omits a %s range clipped to whitespace only", async (style) => {
+    const body = `${"x".repeat(4088)}  rest`;
+    const payload = await sentMessage({
+      ...note,
+      body,
+      bodyEmphasis: [{ style, offset: 4088, length: 6 }],
+    });
+    expect(payload.text).toBe(`Test\n${"x".repeat(4088)}  …`);
+    expect(selectedEntities(payload)).toEqual([{ type: "bold", text: "Test" }]);
+  });
+  it("preserves a real workspace path with a trailing space in the message text", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "pi-notify-entities-"));
+    try {
+      const cwd = join(directory, "workspace ");
+      await mkdir(cwd);
+      const notification = await notificationMetadata(
+        { id: "test", sessionId: "session ", cwd, startedAt: 0, settledAt: 1000, error: false },
+        new AbortController().signal,
+      );
+      const payload = await sentMessage(notification);
+      expect(payload.text).toBe(`${notification.title}\n${notification.body}`);
+      expect(payload.text).toContain(`Workspace: ${cwd}\nElapsed:`);
+      expect(selectedEntities(payload)).toEqual([
+        { type: "bold", text: notification.title },
+        { type: "code", text: "session" },
+        { type: "code", text: cwd.trimEnd() },
+      ]);
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+  it("trims whitespace exposed by title clipping", async () => {
+    const title = `${"x".repeat(4092)}😀 \nrest`;
+    const payload = await sentMessage({ ...note, title });
+    expect(payload.text).toBe(`${"x".repeat(4092)}😀 …`);
+    expect(payload.entities).toEqual([{ type: "bold", offset: 0, length: 4094 }]);
+  });
   it("accepts notifications without body emphasis", async () => {
     const payload = await sentMessage(note);
     expect(payload.text).toBe("Test\nhello <b>world</b>");
