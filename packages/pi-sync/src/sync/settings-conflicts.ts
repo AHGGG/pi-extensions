@@ -18,8 +18,8 @@ export async function resolveSettingsConflicts(
   const decisions = [...plan.decisions];
   for (let index = 0; index < decisions.length; index++) {
     const decision = decisions[index];
-    if (decision?.kind !== "conflict" || decision.reason !== "both-changed" || decision.path !== "settings.json")
-      continue;
+    if (decision?.path !== "settings.json") continue;
+    if (decision.kind === "conflict" ? decision.reason !== "both-changed" : !config.agentMode) continue;
     const left = local.files.find((file) => file.path === decision.path);
     const right = remote.files.find((file) => file.path === decision.path);
     if (!left || !right) continue; // File deletion/addition is not a JSON field merge.
@@ -29,6 +29,8 @@ export async function resolveSettingsConflicts(
       ancestor,
       Buffer.from(left.contentBase64, "base64"),
       Buffer.from(right.contentBase64, "base64"),
+      undefined,
+      Boolean(config.agentMode),
     );
     if (merged.kind === "review") {
       fields.push(...merged.fields);

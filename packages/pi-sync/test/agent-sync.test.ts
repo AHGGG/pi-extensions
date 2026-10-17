@@ -59,6 +59,38 @@ for (const auto of [false, true])
       assert.equal((await fs.stat(path.join(claimDir, records[0] ?? ""))).mode & 0o077, 0);
     }));
 
+for (const [localVersion, remoteVersion] of [
+  ["2.0.0", "3.0.0"],
+  ["1.0.0", "2.0.0"],
+  ["2.0.0", "1.0.0"],
+] as const)
+  test(`agent sync keeps higher package version without inference: ${localVersion}/${remoteVersion}`, async () =>
+    withTempHome(async (agentDir) => {
+      const f = await createMergeFixture(agentDir);
+      const settingsPath = path.join(agentDir, "settings.json");
+      const content = (version: string) => JSON.stringify({ packages: [`npm:example@${version}`] });
+      await fs.writeFile(settingsPath, content("2.0.0"));
+      await push(f.ctx, mergeOptions, undefined, () => f.backend);
+      await enabled();
+      await fs.writeFile(settingsPath, content(localVersion));
+      await f.remoteEdit("settings.json", content(remoteVersion));
+      const mock = agentContext(() => {
+        throw new Error("no inference expected");
+      });
+      await withStateDirectoryAccess(() =>
+        withAgentSyncLock(mock.ctx, mergeOptions, (current) => syncBoth(mock.ctx, current, () => f.backend)),
+      );
+      assert.equal(mock.requests.length, 0);
+      const expected = content(remoteVersion === "3.0.0" ? "3.0.0" : "2.0.0");
+      assert.deepEqual(JSON.parse(await fs.readFile(settingsPath, "utf8")), JSON.parse(expected));
+      const head = await f.backend.readHead();
+      assert.ok(head);
+      const published = await f.backend.readSnapshot(head.snapshotRef);
+      const file = published.files.find((file) => file.path === "settings.json");
+      assert.ok(file);
+      assert.deepEqual(JSON.parse(Buffer.from(file.contentBase64, "base64").toString()), JSON.parse(expected));
+    }));
+
 for (const mutation of ["local", "remote", "settings", "model"] as const)
   test(`reject stale candidate after ${mutation} changes during inference`, async () =>
     withTempHome(async (agentDir) => {

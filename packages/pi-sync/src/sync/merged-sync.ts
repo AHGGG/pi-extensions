@@ -289,7 +289,7 @@ export async function mergeSync(
       );
       await validate();
       let resolved = { plan, fields: [] as string[] };
-      if (config.mergeSettings) {
+      if (config.mergeSettings || config.agentMode) {
         try {
           resolved = await timings.measure("transfer settings merge", () =>
             resolveSettingsConflicts(config, state, local, remote, plan),

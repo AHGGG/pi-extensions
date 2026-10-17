@@ -367,7 +367,7 @@ Parent model prompts and tools are not changed.
 This is configuration isolation, not an OS sandbox or proof of semantic correctness.
 
 Eligible text is global `AGENTS.md` and `.md`/`.txt` files under `prompts/` or `skills/`.
-Global `settings.json` uses the existing strict JSON, atomic-value, numeric, coupled-field, unknown-field, and machine-local-field policies.
+Global `settings.json` uses the existing strict JSON, numeric, coupled-field, unknown-field, and machine-local-field policies. In Agent mode, `packages` merges by source identity and selects the higher explicit SemVer version for each npm package present on both sides, even when one side has not changed from the verified ancestor. No registry lookup occurs. Package filters must match. Independent additions and unchanged deletions merge; delete/upgrade conflicts, duplicate identities, incompatible filters, version ranges, tags and Git sources retain the existing atomic selection rules when deterministic merging is not possible. Other arrays and nested objects remain atomic.
 Code/scripts, keybindings, binaries, unknown formats, session histories, deletion/modification conflicts, path collisions, and session-root transitions are not model-resolved.
 Existing deterministic merges still follow their own explicit settings.
 Unsupported or refused groups remain unresolved; only an explicitly enabled `partialSync` policy permits progress around them.

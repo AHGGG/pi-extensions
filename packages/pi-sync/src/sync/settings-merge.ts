@@ -6,6 +6,8 @@ import {
   renderSettingsMembers,
 } from "./json-document.js";
 
+import { mergePackageVersions } from "./package-merge.js";
+
 export type SettingsMergeResult =
   | { kind: "merged"; content: Buffer }
   | { kind: "review"; reason: "unsupported-format" | "field-conflict"; fields: string[] };
@@ -24,6 +26,7 @@ export function mergeSettingsJson(
   local: Buffer,
   remote: Buffer,
   selections: ReadonlyMap<string, "local" | "remote"> = new Map(),
+  preferHigherPackageVersions = false,
 ): SettingsMergeResult {
   let documents: JsonDocument[];
   try {
@@ -39,6 +42,21 @@ export function mergeSettingsJson(
   units.push(...[...fields].filter((field) => !coupled.has(field)).map((field) => [field]));
   const conflicts: string[] = [];
   for (const unit of units) {
+    if (preferHigherPackageVersions && unit[0] === "packages") {
+      const packages = mergePackageVersions(
+        ...([base, left, right].map((document) => document.root.members.get("packages")?.node.value) as [
+          JsonNode["value"] | undefined,
+          JsonNode["value"] | undefined,
+          JsonNode["value"] | undefined,
+        ]),
+      );
+      if (packages) {
+        const document = parseSettingsDocument(Buffer.from(JSON.stringify({ packages })));
+        const node = document.root.members.get("packages")?.node;
+        if (node) selected.set("packages", { document, node });
+        continue;
+      }
+    }
     const equal = (first: JsonDocument, second: JsonDocument) =>
       unit.every((field) =>
         jsonEqual(first.root.members.get(field)?.node.value, second.root.members.get(field)?.node.value),
