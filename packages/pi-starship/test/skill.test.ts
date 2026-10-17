@@ -21,7 +21,7 @@ import { MODULE_DEFINITIONS, MODULE_NAMES } from "../src/modules/catalog.js";
 
 const packageDirectory = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const skillsDirectory = path.join(packageDirectory, "skills");
-const skillDirectory = path.join(skillsDirectory, "configuring-pi-starship");
+const skillDirectory = path.join(skillsDirectory, "configure-pi-starship");
 const referencesDirectory = path.join(skillDirectory, "references");
 const scriptsDirectory = path.join(skillDirectory, "scripts");
 const applyPath = path.join(scriptsDirectory, "apply.mjs");
@@ -42,7 +42,7 @@ test("package bundles one focused pi-starship configuration skill", async () => 
   assert.deepEqual(result.diagnostics, []);
   assert.equal(result.skills.length, 1);
   const skill = result.skills[0];
-  assert.equal(skill?.name, "configuring-pi-starship");
+  assert.equal(skill?.name, "configure-pi-starship");
   assert.equal(skill?.disableModelInvocation, true);
   assert.match(skill?.description ?? "", /Configure .* answer questions .*pi-starship\.toml/u);
   for (const excludedTask of [
@@ -66,7 +66,7 @@ test("package bundles one focused pi-starship configuration skill", async () => 
     await loader.reload();
     const loaded = loader.getSkills();
     assert.deepEqual(loaded.diagnostics, []);
-    assert.ok(loaded.skills.some(({ name }) => name === "configuring-pi-starship"));
+    assert.ok(loaded.skills.some(({ name }) => name === "configure-pi-starship"));
   } finally {
     rmSync(agentDir, { force: true, recursive: true });
   }
@@ -157,9 +157,9 @@ test("skill references own the detailed public configuration guidance", () => {
 
   const readme = readFileSync(path.join(packageDirectory, "README.md"), "utf8");
   assert.match(readme, /configuration skill is manual-only/u);
-  assert.match(readme, /Run `\/skill:configuring-pi-starship` before asking Pi/u);
+  assert.match(readme, /Run `\/skill:configure-pi-starship` before asking Pi/u);
   for (const file of Object.keys(expectedCoverage)) {
-    assert.ok(readme.includes(`./skills/configuring-pi-starship/references/${file}`));
+    assert.ok(readme.includes(`./skills/configure-pi-starship/references/${file}`));
   }
   const configuration = readFileSync(path.join(referencesDirectory, "configuration.md"), "utf8");
   assert.match(configuration, /format = "\$provider\$model\$thinking"/u);
