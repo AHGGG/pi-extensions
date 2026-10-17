@@ -2,6 +2,12 @@
 
 This changelog retains the published `@narumitw/pi-todo` predecessor history below the first `pi-progress` release.
 
+## 0.6.1
+
+### Patch Changes
+
+- e39afe6: Keep a fully completed progress widget hidden when a session starts again. Startup, resume, fork, and reload no longer replay the completion summary or reopen that snapshot; saved progress, tree navigation, and later incomplete updates are unchanged.
+
 ## 0.6.0
 
 ### Minor Changes

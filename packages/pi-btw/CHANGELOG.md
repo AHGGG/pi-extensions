@@ -1,5 +1,11 @@
 # @narumitw/pi-btw
 
+## 0.61.2
+
+### Patch Changes
+
+- 033dead: Reject unknown and duplicate modifiers when selecting the fullscreen jump-to-latest key hint. Match Pi's strict key parser so the hint names a usable binding.
+
 ## 0.61.1
 
 ### Patch Changes

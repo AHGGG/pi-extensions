@@ -1,5 +1,11 @@
 # @narumitw/pi-plan-mode
 
+## 0.59.3
+
+### Patch Changes
+
+- fed7bfb: Handle Pi custom-message run starts without consuming queued file quotes, clearing ready plans, or applying user-prompt Goal ownership logic.
+
 ## 0.59.2
 
 ### Patch Changes
