@@ -116,9 +116,29 @@ test("removes an exact duplicate-looking pending quote and refreshes the widget"
       "Next prompt context · 1 snippet · ~4 tokens · /file-context to review",
       "1. src/example.ts · lines 1-1 · ~4 tokens",
     ]);
+    const widgetBeforeCustom = widgets.get("file-context");
+    for (const content of ["background notification", [{ type: "text", text: "background notification" }]]) {
+      const customResult = await mock.events.get("before_agent_start")?.[0]?.(
+        {
+          messageType: "custom",
+          message: { role: "custom", customType: "notification", content, display: false, timestamp: 1 },
+          systemPrompt: "base",
+        },
+        context.ctx,
+      );
+      assert.equal(customResult, undefined);
+      assert.deepEqual(widgets.get("file-context"), widgetBeforeCustom);
+    }
     const injection = await mock.events.get("before_agent_start")?.[0]?.(
-      { prompt: "Explain", systemPrompt: "base" },
+      { messageType: "user", prompt: "Explain", systemPrompt: "base" },
       context.ctx,
+    );
+    assert.equal(
+      await mock.events.get("before_agent_start")?.[0]?.(
+        { messageType: "user", prompt: "Again", systemPrompt: "base" },
+        context.ctx,
+      ),
+      undefined,
     );
     assert.match(JSON.stringify(injection), /first snapshot/u);
     assert.doesNotMatch(JSON.stringify(injection), /second snapshot/u);

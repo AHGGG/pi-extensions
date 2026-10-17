@@ -1,5 +1,4 @@
 import assert from "node:assert/strict";
-import { stripVTControlCharacters } from "node:util";
 import { initTheme } from "@earendil-works/pi-coding-agent";
 import {
   CURSOR_MARKER,
@@ -10,6 +9,7 @@ import {
   visibleWidth,
 } from "@earendil-works/pi-tui";
 import { test } from "vitest";
+import { stripTuiCursorMarkers, plainTuiText as stripVTControlCharacters } from "../../../test/tui-text.js";
 import { createMenuScreenComponent, type MenuScreenComponent, type MenuScreenEvent } from "../src/components/index.js";
 import type { MenuScreen, MenuTransition } from "../src/types.js";
 
@@ -689,7 +689,7 @@ test("settings sanitize terminal controls from bracketed search paste", () => {
   const harness = componentHarness(settingsScreen, { plainTheme: true });
   const pasted = "\u001b[200~man\u001b]8;;https://unsafe.example\u0007ual\u009dtitle\u009c\u001b[201~";
   harness.component.handleInput(pasted);
-  const rendered = harness.component.render(80).join("\n");
+  const rendered = stripTuiCursorMarkers(harness.component.render(80).join("\n"));
   assert.equal(rendered.includes("\u001b]8;;https://unsafe.example"), false);
   assert.equal(rendered.includes("\u0007"), false);
   assert.equal(rendered.includes("\u009d"), false);
@@ -1239,7 +1239,7 @@ test("searchable multi-select forwards focus and sanitizes bracketed paste", () 
   focusable.focused = false;
 
   harness.component.handleInput("\u001b[200~📖\u0007\u009d\u009c\u001b[201~");
-  const rendered = harness.component.render(80).join("\n");
+  const rendered = stripTuiCursorMarkers(harness.component.render(80).join("\n"));
   assert.match(stripVTControlCharacters(rendered), /讀取 📖/);
   assert.doesNotMatch(stripVTControlCharacters(rendered), /Write/);
   assert.equal(rendered.includes("\u001b[200~"), false);

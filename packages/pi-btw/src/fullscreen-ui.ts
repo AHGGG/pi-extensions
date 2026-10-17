@@ -258,6 +258,12 @@ function normalizedKeyId(key: string): string {
   const parts = key.toLowerCase().split("+");
   const base = parts.at(-1);
   if (!base) return "";
+  const configuredModifiers = parts.slice(0, -1);
+  if (
+    new Set(configuredModifiers).size !== configuredModifiers.length ||
+    configuredModifiers.some((modifier) => !KEY_MODIFIER_ORDER.includes(modifier as never))
+  )
+    return "";
   const normalizedBase = base === "esc" ? "escape" : base === "return" ? "enter" : base;
   const modifiers = KEY_MODIFIER_ORDER.filter((modifier) => parts.includes(modifier));
   return [...modifiers, normalizedBase].join("+");

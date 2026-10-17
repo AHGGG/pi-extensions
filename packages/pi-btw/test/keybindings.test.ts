@@ -75,11 +75,15 @@ test.each([
   ["alt+n", "alt+down"],
   ["ctrl+alt+h", "alt+backspace"],
   ["ctrl+alt+m", "alt+enter"],
-  ["ctrl+x", "unknown+ctrl+x"],
 ])("detects live legacy matcher overlap: %s / %s", (first, second) => {
   setKittyProtocolActive(false);
   vi.stubEnv("WT_SESSION", "");
   assert.equal(btwKeysOverlap(first, second), true);
+});
+
+test.each(["unknown+ctrl+x", "ctrl+ctrl+x"])("invalid Pi modifier tokens do not overlap: %s", (key) => {
+  assert.equal(matchesKey("\u0018", key as never), false);
+  assert.equal(btwKeysOverlap("ctrl+x", key), false);
 });
 
 test("mode-dependent and Windows Terminal collisions follow Pi rather than string identity", () => {
