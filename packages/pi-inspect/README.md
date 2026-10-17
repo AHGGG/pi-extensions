@@ -12,8 +12,9 @@ A read-only browser view of the current Pi session, with consent-gated live cont
 
 - Explore ordered context messages and blocks with search, filters, a minimap and expandable details.
 - Read branch-scoped Session history with conversation groups, direct search matches, and an explicit internal-events view.
-- Inspect actual branches, historical prompts, tools, skills and codemode evidence through content-first Details without changing Pi's active leaf.
+- Inspect actual branches, historical prompts, tools, skills and codemode evidence through content-first Event details without changing Pi's active leaf.
 - Follow bounded live tool calls, including observed nested calls, with explicit provenance and unavailable-data labels.
+- Browse current Tools, MCP registrations and the startup skill catalog in Environment, separate from historical evidence.
 - Use light/dark and responsive browser layouts with keyboard navigation.
 
 ## 📦 Install
@@ -40,7 +41,9 @@ The old project-local extension is removed. Replace explicit `.pi/extensions/ins
 
 In Pi's interactive TUI, run `/inspect` and accept the sensitive-data warning. The command opens your default browser; if opening fails, Pi shows a private URL instead.
 
-Context shows the last observed model input, or an explicitly labeled session-derived fallback. Switch to Session for History, Branch view, or Captured executions; selecting a record opens Details. **View branch context** opens an explicit historical projection, not a captured request. Current runtime inventories and independent provider observations remain separate from historical evidence.
+Use the Context, Session and Environment tabs below the header. Context shows the last observed model input, or an explicitly labeled session-derived fallback. Session contains History, Branch view and Captured executions, with inline filters; selecting a record opens Event details beside the list, or in a drawer on narrow screens. **View branch context** opens an explicit historical projection, not a captured request.
+
+Environment contains Tools, MCP Servers and Skills. These show current tool metadata, extension-registered MCP server names and the skill catalog captured at inspector startup, not historical request evidence. Switching tabs retains resource reading state. Independent provider observations remain in Context.
 
 Use `/inspect stop` when finished. Closing the browser tab alone does not stop the server or collection.
 
@@ -69,6 +72,8 @@ See the bundled [viewer reference](./docs/viewer.md) for detailed bounds, connec
 ## 🚧 Limitations
 
 The observed Pi-stage context and provider-payload copies are not guaranteed final transport inputs. Historical projections follow native Pi semantics; missing checkpoints, uncaptured results, segment token sizes and unavailable timings are labeled rather than inferred. Session ancestry and live execution parentage remain separate.
+
+Environment cannot report the complete configured MCP server catalog, connection/authentication health or authoritative server-to-tool ownership. A registration or namespace is not proof of a connection. Skill file content and current file availability are unavailable; the inspector does not read skill files. The startup skill catalog is not continuously refreshed.
 
 The [viewer reference](./docs/viewer.md) documents every view, supported interaction, provenance distinction and capture limit.
 

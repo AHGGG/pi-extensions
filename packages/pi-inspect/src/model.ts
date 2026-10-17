@@ -43,11 +43,15 @@ export interface ToolView {
   callable: boolean;
   namespace?: string;
   schema: Capture;
+  source?: Capture;
+  metadataTruncated?: boolean;
 }
 export interface SkillView {
   name: string;
   path: string;
   description: string;
+  pathTruncated?: boolean;
+  metadataTruncated?: boolean;
 }
 export interface ContextSegment {
   id: string;
@@ -88,6 +92,7 @@ export interface Snapshot {
   currentPrompt: Capture;
   tools: ToolView[];
   skills: SkillView[];
+  mcp?: { servers: { name: string; truncated: boolean }[]; truncated: boolean; unavailable?: true };
   calls: Call[];
   droppedCalls: number;
   invalidCallEvents?: number;

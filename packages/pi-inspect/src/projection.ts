@@ -149,19 +149,38 @@ export function snapshot(
     context: observedContext ?? sessionContext(manager, index),
     currentPrompt: capture(prompt, 65536),
     tools: tools.slice(0, 256).map((t) => ({
-      name: displayText(t.name),
+      name: displayText(t.name).slice(0, 512),
       description: displayText(t.description).slice(0, 512),
+      metadataTruncated: [t.name, t.description, t.namespace?.name ?? ""].some(
+        (text) => displayText(text).length > 512,
+      ),
+      source: t.sourceInfo
+        ? capture(
+            {
+              source: t.sourceInfo.source,
+              path: t.sourceInfo.path,
+              scope: t.sourceInfo.scope,
+              origin: t.sourceInfo.origin,
+            },
+            2048,
+          )
+        : undefined,
       exposure: t.exposure,
       active: active.includes(t.name),
       callable:
         t.exposure === "codemode" || t.exposure === "deferred" || (t.exposure === "direct" && active.includes(t.name)),
-      namespace: t.namespace ? displayText(t.namespace.name) : undefined,
+      namespace: t.namespace ? displayText(t.namespace.name).slice(0, 512) : undefined,
       schema: capture(t.parameters, 2048),
     })),
     skills: skills.slice(0, 256).map((s) => ({
-      name: displayText(s.name),
-      path: displayText(s.path),
+      name: displayText(s.name).slice(0, 512),
+      path: displayText(s.path).slice(0, 2048),
+      pathTruncated: displayText(s.path).length > 2048,
       description: displayText(s.description).slice(0, 512),
+      metadataTruncated:
+        displayText(s.name).length > 512 ||
+        displayText(s.path).length > 2048 ||
+        displayText(s.description).length > 512,
     })),
     calls: collector.list(),
     droppedCalls: collector.dropped,
