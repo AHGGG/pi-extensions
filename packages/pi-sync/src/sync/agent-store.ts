@@ -8,6 +8,7 @@ import { LOCK_GUARD_STALE_MS, LOCK_GUARD_UPDATE_MS } from "../state/lock-policy.
 import { LOCKFILE_FS_ADAPTER } from "../state/lockfile-fs.js";
 import { stateDir } from "../state/state-directory.js";
 import { AGENT_OUTPUT_BYTES } from "./agent-policy.js";
+import { ContinuousError } from "./continuous-errors.js";
 
 interface Claim {
   version: 1;
@@ -89,7 +90,8 @@ export async function withAgentClaim<T>(fn: (assertOwner: () => Promise<void>) =
       await checkDirectory();
       await withClaimGuard(async () => {
         const existing = await readClaim();
-        if (existing && alive(existing.pid)) throw new Error("Agent mode deferred: another local resolver is running.");
+        if (existing && alive(existing.pid))
+          throw new ContinuousError("contention", "Agent mode deferred: another local resolver is running.");
         // A durability failure can occur after rename: cleanup must own partial initialization too.
         armed = true;
         await writeJson(paths().claim, claim);

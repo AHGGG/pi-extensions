@@ -430,6 +430,7 @@ export async function syncBoth(
   const validateMutation = captureMutationOwner(ctx, options.signal);
   const config = await loadConfig(options.setup);
   throwIfAborted(options.signal);
+  options.background?.validate(config);
   if (config.include.length > 0 && options.auto && startupTransferEnabled(config))
     return mergeSync(ctx, options, factory);
   if (!options.auto && config.include.length > 0 && (await readMergeJournal(config)))

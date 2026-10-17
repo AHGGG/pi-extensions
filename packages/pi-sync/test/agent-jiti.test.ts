@@ -14,7 +14,7 @@ import { snapshot, v3WebDavSettings, withTempHome } from "./helpers.js";
 import { mergeOptions } from "./merged-sync-fixture.js";
 import { MockWebDavServer } from "./mock-webdav-server.js";
 
-for (const trigger of ["command", "startup"] as const)
+for (const trigger of ["command", "startup", "continuous"] as const)
   test(`generated Jiti runtime resolves a real WebDAV conflict via ${trigger}`, async () =>
     withTempHome(async (agentDir) => {
       const server = await new MockWebDavServer().start();
@@ -24,7 +24,10 @@ for (const trigger of ["command", "startup"] as const)
         await fs.mkdir(agentDir, { recursive: true });
         const settings = v3WebDavSettings({ include: ["AGENTS.md"] });
         settings.storageConnections.dav.url = server.url;
-        Object.assign(settings.syncSetups.home.sync, { agentMode: true });
+        Object.assign(settings.syncSetups.home.sync, {
+          agentMode: true,
+          ...(trigger === "continuous" ? { continuous: true } : {}),
+        });
         await fs.writeFile(localConfigPath(), JSON.stringify(settings));
         await fs.writeFile(path.join(agentDir, "AGENTS.md"), "base\n");
         const mock = agentContext(selectRemote);

@@ -15,6 +15,10 @@ import { deferred } from "./startup-check-helpers.js";
 const { packageRoot, loadBuilder } = registerRuntimeBuilderContract({
   packageId: "pi-sync",
   forbiddenEagerInputs: [
+    "src/sync/continuous-sync.ts",
+    "src/sync/continuous-record.ts",
+    "src/sync/continuous-lease.ts",
+    "src/sync/continuous-watch.ts",
     "src/sync/agent-runner.ts",
     "src/sync/agent-plan.ts",
     "src/sync/agent-candidate.ts",

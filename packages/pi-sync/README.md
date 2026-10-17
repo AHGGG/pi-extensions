@@ -13,7 +13,7 @@ Reusable storage connections hold credentials, while named sync setups define ex
 - Protects changes with immutable snapshots, secret scanning, locks, conflict checks, pull backups, transactional apply, and recovery journals.
 - Keeps snapshot selection portable and free of credentials.
 - Writes settings atomically, preserves unknown fields, rejects stale edits, and fails closed on unsafe configuration.
-- Offers default-off experimental Agent mode for autonomous, validated text/settings conflict resolution.
+- Offers default-off experimental Agent mode for autonomous, validated text/settings conflict resolution, with a separate Continuous sync opt-in for monitoring and recovery.
 - Loads a generated split runtime with lazy UI and backend chunks.
 
 ## 📦 Install
@@ -173,7 +173,7 @@ See [Debug startup timings](./docs/settings.md#debug-startup-timings) for measur
 
 With **Automatic sync** enabled, session startup schedules a background check instead of waiting for a transfer. Pi remains usable while Git, WebDAV, R2, or S3 checks local hashes and remote metadata. Results follow the [status and review classifications](#resolve-conflicts-in-the-manager); check failures provide `/sync` guidance without opening a dialog. Use **Sync now** to start a reviewed transfer, or `/sync status` to retry a check. Foreground `/sync` cancels and drains the background check before starting.
 
-Checks run once per session start, including `/reload`, new, resumed, and forked sessions, in TUI and RPC only. Print/JSON skip startup checks. There is no polling or automatic check retry loop. The overall deadline is 30 seconds, followed by underlying cleanup where needed; Git process termination and temporary-ref cleanup can take additional time. Git checks can still fetch objects and update the extension's private bare cache, but never push, apply managed files, update the sync baseline, or reload Pi.
+Checks run once per session start, including `/reload`, new, resumed, and forked sessions, in TUI and RPC only. Print/JSON skip startup checks. This one-shot policy has no polling or automatic retry loop; separately enabled Continuous sync owns recurring work. The overall deadline is 30 seconds, followed by underlying cleanup where needed; Git process termination and temporary-ref cleanup can take additional time. Git checks can still fetch objects and update the extension's private bare cache, but never push, apply managed files, update the sync baseline, or reload Pi.
 
 **Compatibility change:** the existing `sync.automatic` boolean and Off default are unchanged, but On no longer performs startup push/pull. Startup is not guaranteed to use the latest remote content. Local transaction recovery remains an awaited safety barrier and can restore interrupted file changes before use; existing legacy settings-file initialization is also retained.
 
@@ -181,11 +181,19 @@ Shutdown behavior is unchanged: when **Automatic sync** is On and sessions are i
 
 ### Experimental Agent mode
 
-**Settings → Sync behavior → Agent mode (experimental)** controls per-setup `sync.agentMode`, default **Off**. Enabling requires a one-time review. It authorizes one merged sync next startup and autonomous **Sync now** / `/sync sync`, independently of Automatic sync and Startup transfer. Saving does not start a transfer. TUI/RPC only; no polling, daemon, shutdown inference, or Pi core modification.
+**Settings → Sync behavior → Agent mode (experimental)** controls per-setup `sync.agentMode`, default **Off**. Enabling requires a one-time review. It authorizes one merged sync next startup and autonomous **Sync now** / `/sync sync`, independently of Automatic sync and Startup transfer. Saving does not start a transfer from Settings. TUI/RPC only; Agent mode alone adds no polling, daemon, shutdown inference, or Pi core modification.
 
 **Warning:** eligible conflict text is sent to the selected Pi model and can incur costs. Accepted results can replace/delete selected local and remote content without another transfer prompt. The resolver has no tools or parent conversation, and validates candidate ownership and current versions before using the existing publication/backup/journal flow. Validation is not a guarantee of semantic correctness or lossless editing against other local processes.
 
 The first implementation resolves bounded overlapping `AGENTS.md` and prompt/skill Markdown/plain-text edits, and selects complete atomic global settings units. Verified ancestors are required. Code, session histories, deletion conflicts and path collisions are not model-resolved; unsupported/refused work pauses, unless existing partial-sync policy permits independent progress. No resources reload automatically. Disabling stops subsequent authorization, not completed writes or provider charges. Read [Agent mode settings, limits, privacy and recovery](./docs/settings.md#experimental-agent-mode) before enabling.
+
+### Experimental Continuous sync
+
+**Settings → Sync behavior → Continuous sync (experimental)** controls separate per-setup `sync.continuous`, default **Off**. Agent mode must also be enabled. A separate review authorizes recurring network access, model costs and automatic transfers while Pi is open. Upgrade all Pi processes sharing the agent directory before enabling it. Monitoring starts after the `/sync` command or manager closes, and replaces the duplicate one-shot startup transfer.
+
+Selected-file hints are coalesced after one quiet second. A 60–66 second remote/local check covers missed events. Temporary failures use bounded backoff. One local session owns monitoring for each shared agent directory; each computer remains a separate replica. Busy sessions and foreground commands release ownership after draining work. Nothing runs after Pi exits, and resources never reload automatically.
+
+**Warning:** local changes and retries can cause extra network requests between polls. Automatic model requests are limited to two per candidate and two per replica binding in a rolling 15-minute window, across restarts. These are request limits, not a currency cap. Safety blocks still require changed evidence or repair; uncertain provider/Git errors are not guessed to be retryable. See [Continuous sync consent, budgets and recovery](./docs/settings.md#experimental-continuous-sync).
 
 ### Opt-in automatic transfer
 

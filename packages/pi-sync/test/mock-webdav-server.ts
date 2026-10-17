@@ -9,6 +9,7 @@ export interface MockWebDavOptions {
   ignoreConditions?: boolean;
   etag?: "strong" | "weak" | "missing";
   deny?: boolean;
+  unavailable?: boolean;
   cleanupFails?: boolean;
   cleanupMultiStatus?: boolean;
   malformedXml?: boolean;
@@ -64,6 +65,7 @@ export class MockWebDavServer {
     const method = request.method ?? "GET";
     const path = decodeURIComponent(new URL(request.url ?? "/", this.origin).pathname).replace(/\/+$/u, "") || "/";
     this.requests.push({ method, path, headers: request.headers });
+    if (this.options.unavailable) return send(response, 503, "temporary outage");
     if (this.options.redirectTo) {
       return send(response, 302, undefined, { location: this.options.redirectTo });
     }

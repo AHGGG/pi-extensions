@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { createSyncBackend, type SyncBackendFactory } from "../backends/backend-factory.js";
 import type { AnySyncConfig } from "../settings/settings-types.js";
 import { createSnapshot } from "../snapshot/snapshot.js";
@@ -6,7 +7,7 @@ import { readStateForConfig, syncStateFingerprint } from "../state/sync-state-st
 import { throwIfAborted } from "./signals.js";
 import { createStartupTimings, type StartupTimings } from "./startup-timings.js";
 import { inspectRemoteSelection } from "./sync-policy.js";
-import { hasLocalChanges, remoteChangedSinceState } from "./sync-state.js";
+import { fileHashMap, hasLocalChanges, remoteChangedSinceState } from "./sync-state.js";
 
 /** Advisory baseline-relative observation, never an authorization to transfer files. */
 export async function inspectSync(
@@ -27,7 +28,13 @@ export async function inspectSync(
   throwIfAborted(signal);
   const head = await timings.measure("remote head", () => backend.readHead(signal));
   throwIfAborted(signal);
+  const freshness: { localIdentity?: string } = {
+    localIdentity: createHash("sha256")
+      .update(JSON.stringify(fileHashMap(local)))
+      .digest("hex"),
+  };
   return {
+    ...freshness,
     head,
     selectionState: head ? inspectRemoteSelection(config.include, { selection: head.selection, files: [] }) : undefined,
     localFiles: local.files.length,

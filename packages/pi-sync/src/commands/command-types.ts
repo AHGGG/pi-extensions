@@ -1,3 +1,4 @@
+import type { AnySyncConfig } from "../settings/settings-types.js";
 import type { AgentAcceptance } from "../sync/agent-request.js";
 import type { StartupTimings } from "../sync/startup-timings.js";
 
@@ -15,6 +16,8 @@ export interface CommandOptions {
   startupTimings?: StartupTimings;
   /** Internal validated resolver result; never parsed from command arguments. */
   agentAcceptance?: AgentAcceptance;
+  /** Internal cycle authorization, ownership and durable request reservation; never command arguments. */
+  background?: { validate(config?: AnySyncConfig): void; reserve(key: string): Promise<void> };
   args: string[];
 }
 

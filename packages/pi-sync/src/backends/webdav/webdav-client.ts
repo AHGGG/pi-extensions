@@ -1,4 +1,5 @@
 import { XMLParser } from "fast-xml-parser";
+import { ContinuousError, continuousFailure, retryAfter } from "../../sync/continuous-errors.js";
 import { throwIfAborted } from "../../sync/signals.js";
 import type { RemoteObject, ResolvedWebDavBackend } from "../backend-types.js";
 
@@ -25,6 +26,7 @@ export class WebDavHttpError extends Error {
     message: string,
     readonly status: number,
     options?: ErrorOptions,
+    readonly retryAfterMs?: number,
   ) {
     super(message, options);
     this.name = "WebDavHttpError";
@@ -232,7 +234,12 @@ export class WebDavClient {
       .replace(/[\u0000-\u001f\u007f-\u009f]/gu, " ")
       .trim();
     const detail = body ? `: ${redactText(body, this.config)}` : "";
-    throw new WebDavHttpError(`WebDAV ${action} failed with HTTP ${response.status}${detail}`, response.status);
+    throw new WebDavHttpError(
+      `WebDAV ${action} failed with HTTP ${response.status}${detail}`,
+      response.status,
+      undefined,
+      retryAfter(response),
+    );
   }
 }
 
@@ -343,7 +350,8 @@ function safeUrl(url: URL) {
 
 function redactError(error: unknown, config: ResolvedWebDavBackend) {
   const message = error instanceof Error ? error.message : String(error);
-  return new Error(redactText(message, config));
+  const failure = continuousFailure(error);
+  return new ContinuousError(failure.kind, redactText(message, config), failure.delay);
 }
 
 function redactText(value: string, config: ResolvedWebDavBackend) {

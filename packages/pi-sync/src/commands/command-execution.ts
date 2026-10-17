@@ -260,6 +260,7 @@ async function showConfig(ctx: ExtensionCommandContext, options: CommandOptions)
       `machine-local settings.json fields: ${(config.localFields ?? []).map(safeTerminalText).join(", ") || "none"}`,
       `startup transfer: ${startupTransferSummary(config)}`,
       `agent mode: ${config.agentMode ? "On (experimental)" : "Off"}`,
+      `continuous sync: ${config.continuous ? (config.agentMode ? "On (experimental)" : "paused; Agent mode is Off") : "Off"}`,
       `included content: ${config.include.join(", ") || "none"}`,
       `sessions: ${config.include.includes("sessions") ? "included" : "not included"}`,
       `settings file: ${localConfigPath()}`,

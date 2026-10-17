@@ -12,7 +12,12 @@ import {
   setupSwitchActionLabel,
 } from "../sync/setup-switch.js";
 import { captureMutationOwner } from "../sync/sync-local.js";
-import { AGENT_MODE_DESCRIPTION, saveAgentMode } from "./agent-mode-setting.js";
+import {
+  AGENT_MODE_DESCRIPTION,
+  CONTINUOUS_DESCRIPTION,
+  saveAgentMode,
+  saveContinuousMode,
+} from "./agent-mode-setting.js";
 import type { RunRoute } from "./cancellable-operation.js";
 import { dispatchManagerResult } from "./manager-result-dispatcher.js";
 import { boundedSettingsUI } from "./settings-frame.js";
@@ -73,6 +78,7 @@ export async function showSyncSettings(
     | "automatic"
     | "automatic-transfer"
     | "agent-mode"
+    | "continuous"
     | "merge-settings"
     | "local-fields"
     | "content-policy"
@@ -89,7 +95,10 @@ export async function showSyncSettings(
   type Screen = "categories" | Group;
   const groups: Record<Group, { label: string; ids: readonly string[] }> = {
     content: { label: "Sync content", ids: ["include", "remoteInclude", "localFields"] },
-    behavior: { label: "Sync behavior", ids: ["automatic", "automaticTransfer", "agentMode", "onSwitch"] },
+    behavior: {
+      label: "Sync behavior",
+      ids: ["automatic", "automaticTransfer", "agentMode", "continuous", "onSwitch"],
+    },
     storage: { label: "Storage & setups", ids: ["storageLocation", "setups", "connections"] },
     advanced: { label: "Advanced", ids: ["mergeSettings", "contentPolicy", "skipSecretScan", "showStatus", "debug"] },
     all: { label: "All settings (search)", ids: [] },
@@ -183,6 +192,14 @@ export async function showSyncSettings(
             currentValue: state.agentMode ? "On" : "Off",
             values: ["On", "Off"],
             action: "agent-mode",
+          },
+          {
+            id: "continuous",
+            label: "Continuous sync (experimental)",
+            description: `${CONTINUOUS_DESCRIPTION}${state.continuous && !state.agentMode ? " Saved On, but paused until Agent mode is enabled." : ""}`,
+            currentValue: state.continuous ? "On" : "Off",
+            values: ["On", "Off"],
+            action: "continuous",
           },
           {
             id: "onSwitch",
@@ -438,6 +455,34 @@ export async function showSyncSettings(
           } catch {
             // The save committed. A closed or replaced UI must not report a failed save.
             // The next Settings read shows the persisted value.
+          }
+          return { kind: "stay" };
+        } catch (error) {
+          try {
+            validate();
+          } catch {
+            return { kind: "rejected" };
+          }
+          notifySaveFailure(ctx, error);
+          return { kind: "rejected" };
+        }
+      },
+      continuous: async ({ value, signal: actionSignal }) => {
+        const mutationSignal = signal ? AbortSignal.any([signal, actionSignal]) : actionSignal;
+        const validate = captureMutationOwner(ctx, mutationSignal);
+        try {
+          const saved = await saveContinuousMode(ctx, setupName, value === "On", mutationSignal);
+          if (!saved) return { kind: "rejected" };
+          try {
+            validate();
+            ctx.ui.notify(
+              value === "On"
+                ? "Continuous sync enabled. Monitoring starts after the /sync command or manager closes; completed work is not undone."
+                : "Continuous sync disabled. Completed work is not undone.",
+              "info",
+            );
+          } catch {
+            /* committed save; do not use stale UI */
           }
           return { kind: "stay" };
         } catch (error) {

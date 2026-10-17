@@ -83,6 +83,8 @@ export interface SyncPolicySettings {
   automaticTransfer?: boolean;
   /** Experimental autonomous merged-sync authorization. */
   agentMode?: boolean;
+  /** Separate explicit authorization for recurring background work. */
+  continuous?: boolean;
   /** Version 4: settings.json root fields never uploaded. */
   localFields?: string[];
   mergeSettings?: boolean;
@@ -119,6 +121,7 @@ export interface SyncConfig<Backend extends ResolvedSyncBackend = ResolvedS3Back
   automatic: boolean;
   automaticTransfer?: boolean;
   agentMode?: boolean;
+  continuous?: boolean;
   localFields?: string[];
   mergeSettings?: boolean;
   mergeContent?: boolean;
@@ -143,6 +146,7 @@ export interface PartialConfig {
   automatic: boolean;
   automaticTransfer?: boolean;
   agentMode?: boolean;
+  continuous?: boolean;
   onSwitch: OnSwitchAction;
   showStatus: boolean;
   bucket?: string;

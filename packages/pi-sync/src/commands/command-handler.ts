@@ -13,7 +13,7 @@ import {
   syncAttentionMatchesConfig,
 } from "../ui/sync-attention.js";
 import { setSyncStatus } from "../ui/sync-status.js";
-import { parseOptions, splitArgs } from "./command.js";
+import { parseOptions, splitArgs, validateCommandOptions } from "./command.js";
 import { executeCommand, executeRecoveryCommand } from "./command-execution.js";
 
 export async function handleCommand(
@@ -22,6 +22,7 @@ export async function handleCommand(
   sessionSignal: AbortSignal,
   loaders: SyncLoaders,
   attention: SyncAttentionController,
+  onExplicitSync?: (setup?: string) => void,
 ) {
   await reconcileObservation(attention, sessionSignal);
   if (sessionSignal.aborted) return;
@@ -31,8 +32,18 @@ export async function handleCommand(
     onCommit?: () => void,
     target?: string,
     onDialog?: (active: boolean) => void,
-  ) =>
-    executeCommand(
+  ) => {
+    const [command, ...args] = splitArgs(route);
+    if (command === "sync") {
+      try {
+        const options = parseOptions(args);
+        validateCommandOptions("sync", options);
+        onExplicitSync?.(target ?? options.setup);
+      } catch {
+        /* Invalid routes do not request an automatic retry. */
+      }
+    }
+    return executeCommand(
       route,
       ctx,
       combineSignals(sessionSignal, signal),
@@ -41,6 +52,7 @@ export async function handleCommand(
       target,
       onDialog,
     );
+  };
   if (!rawArgs.trim()) {
     try {
       const { showSyncManager } = await import("../ui/manager-ui.js");
