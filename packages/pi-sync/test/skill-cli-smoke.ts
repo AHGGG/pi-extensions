@@ -4,9 +4,13 @@ import fs from "node:fs/promises";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 // Standalone RPC transport smoke; the local canned provider does not evaluate answer quality.
 // Run from the repository root after building: node packages/pi-sync/test/skill-cli-smoke.ts
+const piPackage = new URL("../package.json", import.meta.resolve("@earendil-works/pi-coding-agent"));
+const piManifest = JSON.parse(await fs.readFile(piPackage, "utf8"));
+const piCli = fileURLToPath(new URL(piManifest.bin.pi, piPackage));
 const directory = await fs.mkdtemp(path.join(tmpdir(), "pi-sync-skill-cli-"));
 const agentDir = path.join(directory, "agent");
 const workspace = path.join(directory, "workspace");
@@ -75,8 +79,9 @@ try {
   );
   const packagePath = path.resolve("packages/pi-sync");
   child = spawn(
-    "pi",
+    process.execPath,
     [
+      piCli,
       "--mode",
       "rpc",
       "--no-session",

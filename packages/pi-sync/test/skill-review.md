@@ -38,12 +38,15 @@ node packages/pi-sync/test/skill-cli-smoke.ts
 `test/skill.test.ts` checks real Pi discovery through package and root manifests, reload, exclusion from ordinary model prompts, reference boundaries, retained old anchors, and JSON examples against the real validator.
 Its negative cases cover unsupported versions, missing required policy fields, invalid booleans, and forbidden version downgrades.
 
-`test/skill-cli-smoke.ts` starts the real `pi -e <package-directory>` process in RPC mode with a temporary HOME, workspace, agent directory, and loopback-only canned provider.
+`test/skill-cli-smoke.ts` reads the installed Pi package's `bin.pi` entry and starts it with `process.execPath`, without a global `pi` or npm's PATH changes.
+It starts the real `pi -e <package-directory>` process in RPC mode with a temporary HOME, workspace, agent directory, and loopback-only canned provider.
+A direct Node run with `PATH=/usr/bin:/bin` passed all ten requests and reload checks.
 It verifies one ordinary request without manual-only skill metadata, eight explicit question expansions, and an additional expansion after public `ctx.reload()` through a temporary test-only extension command.
 The smoke makes ten local fixture requests and zero external provider requests, with tools disabled.
 It verifies that no private Pi Sync settings, sync state, or workspace content was created.
 It closes the child, drains its exit, closes the HTTP fixture, clears timers, and removes its temporary files on success and failure.
-Failure-injection runs with an immediately exiting `pi` shim and a missing `pi` executable both failed as expected and left no owned smoke directories behind.
+Failure-injection runs replaced `spawn` through a temporary Node preload with an immediately exiting child and a missing executable.
+Both runs failed as expected and left no owned smoke directories behind.
 The operation deadline starts only after the RPC readiness handshake.
 
 The canned provider verifies transport and instruction loading, not whether a live model follows the skill or gives correct answers.
