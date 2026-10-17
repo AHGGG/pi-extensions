@@ -25,16 +25,16 @@ for (const [lower, higher] of [
   }
 }
 
-test("preserves filters and independent additions, deletions and local paths", () => {
+test("preserves filters, one-sided npm membership changes and unchanged local paths", () => {
   const old = { source: "npm:example@1.0.0", extensions: ["a.ts"], skills: [] };
   const newer = { ...old, source: "npm:example@2.0.0" };
   assert.deepEqual(
     mergePackageVersions(
-      [old, "./keep", "./delete"],
-      [old, "./keep", "./local"],
-      [newer, "./keep", "./delete", "./remote"],
+      [old, "./keep", "npm:delete@1.0.0"],
+      [old, "./keep", "npm:delete@1.0.0"],
+      ["npm:add@1.0.0", newer, "./keep"],
     ),
-    [newer, "./keep", "./local", "./remote"],
+    ["npm:add@1.0.0", newer, "./keep"],
   );
 });
 
@@ -55,6 +55,92 @@ for (const [local, remote] of [
 test("delete/upgrade retains conflict, unchanged deletion stays deleted", () => {
   assert.equal(mergePackageVersions(["npm:x@1.0.0"], [], ["npm:x@2.0.0"]), undefined);
   assert.deepEqual(mergePackageVersions(["npm:x@1.0.0"], [], ["npm:x@1.0.0"]), []);
+});
+
+for (const [name, base, local, remote, expected] of [
+  [
+    "remote reorder",
+    ["npm:a@1.0.0", "npm:b@1.0.0"],
+    ["npm:a@2.0.0", "npm:b@1.0.0"],
+    ["npm:b@1.0.0", "npm:a@1.0.0"],
+    ["npm:b@1.0.0", "npm:a@2.0.0"],
+  ],
+  [
+    "local reorder",
+    ["npm:a@1.0.0", "npm:b@1.0.0"],
+    ["npm:b@1.0.0", "npm:a@1.0.0"],
+    ["npm:a@2.0.0", "npm:b@1.0.0"],
+    ["npm:b@1.0.0", "npm:a@2.0.0"],
+  ],
+  [
+    "equal reorder",
+    ["npm:a@1.0.0", "npm:b@1.0.0"],
+    ["npm:b@1.0.0", "npm:a@1.0.0"],
+    ["npm:b@1.0.0", "npm:a@2.0.0"],
+    ["npm:b@1.0.0", "npm:a@2.0.0"],
+  ],
+  [
+    "remote insertion position",
+    ["npm:a@1.0.0"],
+    ["npm:a@2.0.0"],
+    ["npm:b@1.0.0", "npm:a@1.0.0"],
+    ["npm:b@1.0.0", "npm:a@2.0.0"],
+  ],
+  [
+    "conflicting order",
+    ["npm:a@1.0.0", "npm:b@1.0.0", "npm:c@1.0.0"],
+    ["npm:b@1.0.0", "npm:a@1.0.0", "npm:c@1.0.0"],
+    ["npm:a@1.0.0", "npm:c@1.0.0", "npm:b@1.0.0"],
+    undefined,
+  ],
+  ["concurrent additions", [], ["npm:a@1.0.0"], ["npm:b@1.0.0"], undefined],
+] satisfies [string, string[], string[], string[], string[] | undefined][]) {
+  test(`package order: ${name}`, () => assert.deepEqual(mergePackageVersions(base, local, remote), expected));
+}
+
+for (const [base, local, remote] of [
+  ["git:github.com/example/repo@base", "git:github.com/example/repo@local", "git:github.com/example/repo@remote"],
+  [
+    "git:github.com/example/repo@base",
+    "https://github.com/example/repo.git@local",
+    "ssh://git@github.com/example/repo@remote",
+  ],
+  [
+    "git:git@git.example.org:group/repo.git@base",
+    "git:git@git.example.org:group/repo.git@local",
+    "git:git.example.org/group/repo@remote",
+  ],
+  [
+    "git:https://gitlab.com/example/repo@base",
+    "git:https://gitlab.com/example/repo@local",
+    "git:https://gitlab.com/example/repo@remote",
+  ],
+  [
+    "https://git.example.org/group/repo@base",
+    "http://git.example.org/group/repo@local",
+    "git://git.example.org/group/repo@remote",
+  ],
+  ["./repo", "./group/../repo", "./repo/"],
+  ["./repo", "./repo/", "./repo/"],
+] as const) {
+  test(`changed non-npm sources retain atomic handling: ${local}`, () => {
+    for (const filtered of [false, true]) {
+      const entry = (source: string) => (filtered ? { source, extensions: ["index.ts"] } : source);
+      assert.equal(mergePackageVersions([entry(base)], [entry(local)], [entry(remote)]), undefined);
+    }
+  });
+}
+
+test("unchanged non-npm sources permit npm upgrades without source normalization", () => {
+  const git = "git:github.com/example/repo@stable";
+  assert.deepEqual(
+    mergePackageVersions(
+      [git, "./repo", "npm:x@1.0.0"],
+      [git, "./repo", "npm:x@2.0.0"],
+      [git, "./repo", "npm:x@3.0.0"],
+    ),
+    [git, "./repo", "npm:x@3.0.0"],
+  );
 });
 
 test("higher version policy is opt-in and retains unknown settings", () => {

@@ -35,8 +35,28 @@ export function mergePackageVersions(
   const left = entries(local);
   const right = entries(remote);
   if (!ancestor || !left || !right) return undefined;
+  // Raw Git refs and local path aliases do not prove distinct package identities.
+  // Leave changes to those sources under the existing atomic field policy.
+  const otherEntries = (items: Map<string, Entry>) =>
+    [...items].filter(([key]) => !key.startsWith("npm:")).map(([, entry]) => entry.value);
+  if (!jsonEqual(otherEntries(ancestor), otherEntries(left)) || !jsonEqual(otherEntries(ancestor), otherEntries(right)))
+    return undefined;
+
+  // Package order affects resource precedence. Merge the ordered identity list
+  // atomically, then select versions without changing that order.
+  const baseKeys = [...ancestor.keys()];
+  const leftKeys = [...left.keys()];
+  const rightKeys = [...right.keys()];
+  const order = jsonEqual(leftKeys, rightKeys)
+    ? leftKeys
+    : jsonEqual(leftKeys, baseKeys)
+      ? rightKeys
+      : jsonEqual(rightKeys, baseKeys)
+        ? leftKeys
+        : undefined;
+  if (!order) return undefined;
   const output: JsonValue[] = [];
-  for (const key of new Set([...left.keys(), ...right.keys(), ...ancestor.keys()])) {
+  for (const key of new Set([...order, ...baseKeys])) {
     const a = ancestor.get(key);
     const l = left.get(key);
     const r = right.get(key);

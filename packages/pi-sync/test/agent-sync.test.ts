@@ -91,6 +91,57 @@ for (const [localVersion, remoteVersion] of [
       assert.deepEqual(JSON.parse(Buffer.from(file.contentBase64, "base64").toString()), JSON.parse(expected));
     }));
 
+for (const [name, base, local, remote, expected, requests] of [
+  [
+    "remote-only reorder",
+    ["npm:a@1.0.0", "npm:b@1.0.0"],
+    ["npm:a@1.0.0", "npm:b@1.0.0"],
+    ["npm:b@1.0.0", "npm:a@1.0.0"],
+    ["npm:b@1.0.0", "npm:a@1.0.0"],
+    0,
+  ],
+  [
+    "remote reorder with local upgrade",
+    ["npm:a@1.0.0", "npm:b@1.0.0"],
+    ["npm:a@2.0.0", "npm:b@1.0.0"],
+    ["npm:b@1.0.0", "npm:a@1.0.0"],
+    ["npm:b@1.0.0", "npm:a@2.0.0"],
+    0,
+  ],
+  [
+    "Git ref conflict",
+    ["git:github.com/example/repo@base"],
+    ["git:github.com/example/repo@local"],
+    ["https://github.com/example/repo.git@remote"],
+    ["https://github.com/example/repo.git@remote"],
+    1,
+  ],
+] satisfies [string, string[], string[], string[], string[], number][]) {
+  test(`agent publishes safe package selection: ${name}`, async () =>
+    withTempHome(async (agentDir) => {
+      const f = await createMergeFixture(agentDir);
+      const settingsPath = path.join(agentDir, "settings.json");
+      const content = (packages: string[]) => JSON.stringify({ packages });
+      await fs.writeFile(settingsPath, content(base));
+      await push(f.ctx, mergeOptions, undefined, () => f.backend);
+      await enabled();
+      await fs.writeFile(settingsPath, content(local));
+      await f.remoteEdit("settings.json", content(remote));
+      const mock = agentContext(selectRemote);
+      await withStateDirectoryAccess(() =>
+        withAgentSyncLock(mock.ctx, mergeOptions, (current) => syncBoth(mock.ctx, current, () => f.backend)),
+      );
+      assert.equal(mock.requests.length, requests);
+      assert.deepEqual(JSON.parse(await fs.readFile(settingsPath, "utf8")), { packages: expected });
+      const head = await f.backend.readHead();
+      assert.ok(head);
+      const published = await f.backend.readSnapshot(head.snapshotRef);
+      const file = published.files.find((file) => file.path === "settings.json");
+      assert.ok(file);
+      assert.deepEqual(JSON.parse(Buffer.from(file.contentBase64, "base64").toString()), { packages: expected });
+    }));
+}
+
 for (const mutation of ["local", "remote", "settings", "model"] as const)
   test(`reject stale candidate after ${mutation} changes during inference`, async () =>
     withTempHome(async (agentDir) => {
