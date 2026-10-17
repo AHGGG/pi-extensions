@@ -6,6 +6,7 @@ import { recordedLeaf } from "./identity.js";
 import type { ContextComposition, SkillView, Snapshot } from "./model.js";
 import { capture, displayText, readSessionName } from "./privacy.js";
 import { snapshot } from "./projection.js";
+import { mcpRegistrations } from "./resources.js";
 
 export class SessionFeed {
   private dirty = true;
@@ -62,6 +63,7 @@ export class SessionFeed {
       leaf: recordedLeaf(manager),
       name: readSessionName(manager),
       active: this.options.pi.getActiveTools(),
+      mcp: mcpRegistrations(this.options.pi),
       toolCount: tools.length,
       tools: tools.slice(0, 256).map((tool) => ({
         name: tool.name,
@@ -69,6 +71,7 @@ export class SessionFeed {
         namespace: tool.namespace?.name,
         description: displayText(tool.description).slice(0, 512),
         schema: capture(tool.parameters, 2048),
+        source: capture(tool.sourceInfo, 2048),
       })),
     });
   }
@@ -125,6 +128,7 @@ export class SessionFeed {
       revision: this.revision,
       context: this.observed ?? this.cached.context,
       providerObservation: this.providerObservation,
+      mcp: mcpRegistrations(this.options.pi),
       calls: this.options.collector.list(),
       droppedCalls: this.options.collector.dropped,
       invalidCallEvents: this.options.collector.invalidEvents,
