@@ -71,11 +71,16 @@ export function mergePackageVersions(
       valid(r.version) &&
       jsonEqual(l.options, r.options)
     ) {
-      chosen = compare(l.version, r.version) >= 0 ? l : r;
-    } else if (jsonEqual(l?.value, r?.value)) chosen = l;
-    else if (jsonEqual(l?.value, a?.value)) chosen = r;
-    else if (jsonEqual(r?.value, a?.value)) chosen = l;
-    else return undefined;
+      const precedence = compare(l.version, r.version);
+      if (precedence !== 0) chosen = precedence > 0 ? l : r;
+    }
+    // Build metadata and equivalent version spelling do not establish a higher version.
+    if (!chosen) {
+      if (jsonEqual(l?.value, r?.value)) chosen = l;
+      else if (jsonEqual(l?.value, a?.value)) chosen = r;
+      else if (jsonEqual(r?.value, a?.value)) chosen = l;
+      else return undefined;
+    }
     if (chosen) output.push(chosen.value);
   }
   return output;

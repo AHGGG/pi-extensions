@@ -51,7 +51,9 @@ export function mergeSettingsJson(
         ]),
       );
       if (packages) {
-        const document = parseSettingsDocument(Buffer.from(JSON.stringify({ packages })));
+        const document =
+          [left, right].find((source) => jsonEqual(source.root.members.get("packages")?.node.value, packages)) ??
+          parseSettingsDocument(Buffer.from(JSON.stringify({ packages })));
         const node = document.root.members.get("packages")?.node;
         if (node) selected.set("packages", { document, node });
         continue;

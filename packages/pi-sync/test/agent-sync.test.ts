@@ -108,6 +108,15 @@ for (const [name, base, local, remote, expected, requests] of [
     ["npm:b@1.0.0", "npm:a@2.0.0"],
     0,
   ],
+  ["remote-only build metadata", ["npm:x@1.0.0"], ["npm:x@1.0.0"], ["npm:x@1.0.0+remote"], ["npm:x@1.0.0+remote"], 0],
+  [
+    "conflicting build metadata",
+    ["npm:x@1.0.0"],
+    ["npm:x@1.0.0+local"],
+    ["npm:x@1.0.0+remote"],
+    ["npm:x@1.0.0+remote"],
+    1,
+  ],
   [
     "Git ref conflict",
     ["git:github.com/example/repo@base"],
@@ -141,6 +150,29 @@ for (const [name, base, local, remote, expected, requests] of [
       assert.deepEqual(JSON.parse(Buffer.from(file.contentBase64, "base64").toString()), { packages: expected });
     }));
 }
+
+test("unrelated sync preserves unchanged package bytes locally and remotely", async () =>
+  withTempHome(async (agentDir) => {
+    const f = await createMergeFixture(agentDir);
+    const settingsPath = path.join(agentDir, "settings.json");
+    const original = '{\n  "packages" : [\n    "npm:x@1.0.0"\n  ]\n}\n';
+    await fs.writeFile(settingsPath, original);
+    await push(f.ctx, mergeOptions, undefined, () => f.backend);
+    await enabled();
+    await f.remoteEdit("AGENTS.md", "remote instructions\n");
+    const mock = agentContext(selectRemote);
+    await withStateDirectoryAccess(() =>
+      withAgentSyncLock(mock.ctx, mergeOptions, (current) => syncBoth(mock.ctx, current, () => f.backend)),
+    );
+    assert.equal(mock.requests.length, 0);
+    assert.equal(await fs.readFile(settingsPath, "utf8"), original);
+    const head = await f.backend.readHead();
+    assert.ok(head);
+    const published = await f.backend.readSnapshot(head.snapshotRef);
+    const file = published.files.find((file) => file.path === "settings.json");
+    assert.ok(file);
+    assert.equal(Buffer.from(file.contentBase64, "base64").toString(), original);
+  }));
 
 for (const mutation of ["local", "remote", "settings", "model"] as const)
   test(`reject stale candidate after ${mutation} changes during inference`, async () =>
