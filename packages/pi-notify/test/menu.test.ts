@@ -6,12 +6,12 @@ import { KeybindingsManager, TUI_KEYBINDINGS, visibleWidth } from "@earendil-wor
 import { createTuiHarness } from "@narumitw/pi-tui-kit/testing";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { Coordinator } from "../src/coordinator.js";
-import { createGotifyProvider } from "../src/gotify.js";
 import { showNotifyMenu } from "../src/menu.js";
 import type { GotifyDestination } from "../src/provider.js";
+import { createGotifyProvider } from "../src/providers/gotify.js";
+import { createTelegramProvider } from "../src/providers/telegram.js";
 import { providers } from "../src/providers.js";
 import { SettingsStore, saveDestination, savePolicy } from "../src/settings.js";
-import { createTelegramProvider } from "../src/telegram.js";
 
 let directory: string;
 let store: SettingsStore;

@@ -1,10 +1,10 @@
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createGotifyProvider, normalizeGotifyUrl } from "../src/gotify.js";
 import { deliver, type GotifyDestination, type Notification } from "../src/provider.js";
+import { createGotifyProvider, normalizeGotifyUrl } from "../src/providers/gotify.js";
+import { createTelegramProvider } from "../src/providers/telegram.js";
 import { providers } from "../src/providers.js";
-import { createTelegramProvider } from "../src/telegram.js";
 
 const destination: GotifyDestination = {
   provider: "gotify",

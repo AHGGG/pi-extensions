@@ -1,5 +1,5 @@
-import { type DeliveryResult, isObject, type Notification, type NotificationProvider } from "./provider.js";
-import { clipText } from "./text.js";
+import { type DeliveryResult, isObject, type Notification, type NotificationProvider } from "../provider.js";
+import { clipText } from "../text.js";
 
 const TIMEOUT_MS = 10_000;
 const MAX_RESPONSE_BYTES = 65_536;
