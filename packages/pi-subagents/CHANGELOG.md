@@ -1,5 +1,11 @@
 # @narumitw/pi-subagents
 
+## 3.2.1
+
+### Patch Changes
+
+- dfc020b: Show a sanitized, shortened preview of each active subagent's existing task in the TUI widget without changing the spawn schema or inspection metadata.
+
 ## 3.2.0
 
 ### Minor Changes

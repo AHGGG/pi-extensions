@@ -1,5 +1,17 @@
 # @narumitw/pi-notify
 
+## 0.3.0
+
+### Minor Changes
+
+- 57a285f: Add Gotify destinations with application-token authentication, server URLs, optional priority, masked setup, and confirmed test delivery alongside Telegram.
+- 2442572: Add ntfy, Pushover, Discord webhook, Bark, and Generic webhook destinations with masked setup, confirmed tests, and bounded one-attempt delivery. Keep credentials in private User settings and preserve existing Telegram, Gotify, and Slack behavior.
+- 11949a2: Add Slack Incoming Webhook destinations alongside Telegram and Gotify. Configure and test fixed-channel Slack notifications through `/notify`, with User-only webhook secrets, redacted reviews, plain-text metadata, bounded delivery, and no automatic retries. Existing destinations and notification timing are unchanged.
+
+### Patch Changes
+
+- 49abb15: Use bold Telegram titles and repository names, with inline monospace branches, paths, and session IDs. Preserve literal punctuation, plain-text confirmation previews, and notification timing.
+
 ## 0.2.0
 
 ### Minor Changes
