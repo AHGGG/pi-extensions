@@ -890,6 +890,11 @@ test("mid-run compaction keeps the restored contract position after deferred per
     { role: "compactionSummary", content: "Compacted work", timestamp: 1_000 },
     timedAssistantMessage("Retained assistant tail", 1_100, 400),
   ];
+  // Startup publication was saved before compaction removed it from model context.
+  const startupContract = restoredGoalContract(restored.mock);
+  const sessionManager = (restored.ctx as { sessionManager: { getBranch: () => unknown[] } }).sessionManager;
+  sessionManager.getBranch().push({ type: "custom_message", ...startupContract });
+  Object.assign(sessionManager, { buildSessionContext: () => ({ messages: retained }) });
   const clock = vi.spyOn(Date, "now").mockReturnValue(2_000);
   try {
     await restored.mock.events.get("session_compact")?.[0]?.({ reason: "overflow", willRetry: true }, restored.ctx);
