@@ -1,5 +1,12 @@
 # @narumitw/pi-inspect
 
+## 0.3.0
+
+### Minor Changes
+
+- c3c65e8: Add a read-only Cache tab with active-branch usage history, weighted hit rates, conversational comparisons, and estimated costs. Keep unknown accounting explicit and include persisted warming and summary usage without changing model input.
+- 1be48cb: Add Environment with Tools, MCP Servers and Skills tabs beside Context and Session. Move Session filters inline and keep Event details controls inside Session. Show bounded public resource metadata with explicit unavailable states for MCP health, server ownership and skill content.
+
 ## 0.2.2
 
 ### Patch Changes
