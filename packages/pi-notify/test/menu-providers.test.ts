@@ -107,6 +107,11 @@ function harness(remap = false) {
   return { tui, text, choose, input, transition, run, notify, theme, zeroFrames };
 }
 
+const teamsWebhookUrl =
+  "https://tenant.example.environment.api.powerplatform.com/powerautomate/automations/direct/workflows/workflow-123/triggers/manual/paths/invoke?api-version=1&sp=%2Ftriggers%2Fmanual%2Frun&sv=1.0&sig=synthetic-signature_123";
+const replacementTeamsWebhookUrl = teamsWebhookUrl
+  .replace("workflow-123", "workflow-456")
+  .replace("synthetic-signature_123", "new-synthetic-signature");
 const examples: Destination[] = [
   { provider: "ntfy", label: "ntfy notifications", serverUrl: "https://ntfy.sh/", topic: "private-topic" },
   { provider: "pushover", label: "Pushover notifications", appToken: "a".repeat(30), userKey: "u".repeat(30) },
@@ -121,6 +126,7 @@ const examples: Destination[] = [
     label: "Generic webhook notifications",
     webhookUrl: "https://automation.example/secret-endpoint/",
   },
+  { provider: "teams", label: "Microsoft Teams notifications", webhookUrl: teamsWebhookUrl },
   {
     provider: "line",
     label: "LINE notifications",
@@ -129,6 +135,19 @@ const examples: Destination[] = [
   },
 ];
 const secrets = [
+  teamsWebhookUrl,
+  replacementTeamsWebhookUrl,
+  "tenant.example.environment.api.powerplatform.com",
+  "/powerautomate/automations/direct/workflows/",
+  "workflow-123",
+  "workflow-456",
+  "/triggers/manual/paths/invoke",
+  "api-version=1",
+  "sp=%2Ftriggers%2Fmanual%2Frun",
+  "sv=1.0",
+  "sig=",
+  "synthetic-signature_123",
+  "new-synthetic-signature",
   "a".repeat(30),
   "u".repeat(30),
   "bark-secret-key",
@@ -153,7 +172,11 @@ async function setup(h: ReturnType<typeof harness>, destination: Destination) {
   else if (destination.provider === "line") {
     await h.input(destination.channelAccessToken, true);
     await h.input(destination.recipientId, true);
-  } else if (destination.provider === "discord" || destination.provider === "webhook")
+  } else if (
+    destination.provider === "discord" ||
+    destination.provider === "webhook" ||
+    destination.provider === "teams"
+  )
     await h.input(destination.webhookUrl, true);
 }
 
@@ -261,7 +284,7 @@ it.each(examples.flatMap((destination) => [false, true].map((use) => ({ destinat
     await h.tui.waitForOpen();
     await setup(h, destination);
     for (const secret of secrets) expect(h.text()).not.toContain(secret);
-    if (destination.provider === "line") {
+    if (destination.provider === "line" || destination.provider === "teams") {
       expect(h.zeroFrames.every((frame) => frame.every((line) => visibleWidth(line) === 0))).toBe(true);
       for (const width of [1, 12, 72])
         for (const rows of [4, 8, 24]) {
@@ -277,7 +300,7 @@ it.each(examples.flatMap((destination) => [false, true].map((use) => ({ destinat
     const [id, saved] = Object.entries(store.snapshot.effective.destinations)[0] ?? [];
     expect(saved).toMatchObject(destination);
     expect(store.snapshot.effective.targetIds).toEqual(use ? [id] : []);
-    if (destination.provider === "line") {
+    if (destination.provider === "line" || destination.provider === "teams") {
       await h.choose("Status");
       expect(h.text()).toContain(destination.label);
       for (const secret of secrets) expect(h.text()).not.toContain(secret);
@@ -397,7 +420,7 @@ it.each(examples.flatMap((destination) => ["cancel", "save"].map((completion) =>
               ? "channel access token"
               : "webhook URL";
     await h.choose(`Replace ${credential}`);
-    if (destination.provider === "line") {
+    if (destination.provider === "line" || destination.provider === "teams") {
       const opened = h.tui.openCount;
       h.tui.press("tui.input.submit");
       await h.tui.waitForPending();
@@ -411,7 +434,9 @@ it.each(examples.flatMap((destination) => ["cancel", "save"].map((completion) =>
           ? "https://discord.com/api/v10/webhooks/456/newSecretToken"
           : destination.provider === "webhook"
             ? "http://localhost:8123/new-secret/"
-            : "new-secret-token";
+            : destination.provider === "teams"
+              ? replacementTeamsWebhookUrl
+              : "new-secret-token";
     await h.input(replacement, true);
     expect(h.text()).not.toContain(replacement);
     if (destination.provider === "pushover") {
@@ -445,7 +470,8 @@ it.each(examples.flatMap((destination) => ["cancel", "save"].map((completion) =>
         expect(saved).toMatchObject({ appToken: replacement, userKey: "k".repeat(30) });
       if (saved?.provider === "bark")
         expect(saved).toMatchObject({ deviceKey: replacement, serverUrl: "http://localhost:8080/base" });
-      if (saved?.provider === "discord" || saved?.provider === "webhook") expect(saved.webhookUrl).toBe(replacement);
+      if (saved?.provider === "discord" || saved?.provider === "webhook" || saved?.provider === "teams")
+        expect(saved.webhookUrl).toBe(replacement);
       if (saved?.provider === "line")
         expect(saved).toMatchObject({ channelAccessToken: replacement, recipientId: `C${"b".repeat(32)}` });
     }
@@ -456,9 +482,9 @@ it.each(examples.flatMap((destination) => ["cancel", "save"].map((completion) =>
 
 it.each(
   examples
-    .filter((destination) => destination.provider === "line")
+    .filter((destination) => destination.provider === "line" || destination.provider === "teams")
     .flatMap((destination) =>
-      ["credential", "recipient"].flatMap((stage) =>
+      (destination.provider === "teams" ? ["credential"] : ["credential", "recipient"]).flatMap((stage) =>
         ["cancel", "hard-cancel", "dispose", "replace"].map((cause) => ({ destination, stage, cause })),
       ),
     ),
@@ -476,7 +502,9 @@ it.each(
       ? stage === "recipient"
         ? destination.recipientId
         : destination.channelAccessToken
-      : "";
+      : destination.provider === "teams"
+        ? destination.webhookUrl
+        : "";
   h.tui.send(`\x1b[200~${value}X\x1b[201~`);
   h.tui.send("\x7f");
   expect(h.text()).not.toContain(value);
@@ -496,10 +524,15 @@ it.each(
 
 it.each(
   examples
-    .filter((destination) => destination.provider === "line")
-    .flatMap((destination) => ["recipient ID", "channel access token"].map((field) => ({ destination, field }))),
+    .filter((destination) => destination.provider === "line" || destination.provider === "teams")
+    .flatMap((destination) =>
+      (destination.provider === "teams" ? ["webhook URL"] : ["recipient ID", "channel access token"]).map((field) => ({
+        destination,
+        field,
+      })),
+    ),
 )(
-  "recovers from invalid LINE $field edits and failed saves without changing routing or exposing secrets",
+  "recovers from invalid $destination.provider $field edits and failed saves without changing routing or exposing secrets",
   async ({ destination, field }) => {
     await saveDestination(store, "saved", destination, owner.signal);
     const original = await fs.readFile(store.userPath, "utf8");
@@ -512,13 +545,23 @@ it.each(
     await h.choose("Edit destination");
     await h.choose(`Replace ${field}`);
     for (const secret of secrets) expect(h.text()).not.toContain(secret);
-    const invalid = field === "recipient ID" ? "private-secret-invalid" : "private:secret:invalid";
+    const invalid =
+      field === "webhook URL"
+        ? `${teamsWebhookUrl}&sig=private-secret-invalid`
+        : field === "recipient ID"
+          ? "private-secret-invalid"
+          : "private:secret:invalid";
     await h.input(invalid, true);
     expect(h.notify).toHaveBeenCalled();
     expect(store.snapshot).toBe(snapshot);
     expect(await fs.readFile(store.userPath, "utf8")).toBe(original);
     await h.choose(`Replace ${field}`);
-    const replacement = field === "recipient ID" ? `R${"c".repeat(32)}` : "recovered-line-secret";
+    const replacement =
+      field === "webhook URL"
+        ? replacementTeamsWebhookUrl
+        : field === "recipient ID"
+          ? `R${"c".repeat(32)}`
+          : "recovered-line-secret";
     await h.input(replacement, true);
     await h.choose("Change label");
     await h.input("Recovered");
@@ -530,7 +573,8 @@ it.each(
     await h.choose("Save changes");
     expect(store.snapshot.effective.destinations.saved).toMatchObject({ label: "Recovered" });
     expect(store.snapshot.effective.destinations.saved).toMatchObject({
-      [field === "recipient ID" ? "recipientId" : "channelAccessToken"]: replacement,
+      [field === "webhook URL" ? "webhookUrl" : field === "recipient ID" ? "recipientId" : "channelAccessToken"]:
+        replacement,
     });
     expect(store.snapshot.effective.targetIds).toEqual(["saved"]);
     h.tui.press("ctrl+c");
@@ -574,6 +618,36 @@ it.each(["token", "recipient"])(
     for (const secret of secrets) expect(JSON.stringify(h.notify.mock.calls)).not.toContain(secret);
   },
 );
+
+it("recovers from an invalid initial Teams URL without saving or sending", async () => {
+  const destination = examples.find((value) => value.provider === "teams");
+  if (destination?.provider !== "teams") throw new Error("Missing Teams example");
+  const h = harness(true);
+  const send = vi.spyOn(coordinator, "send");
+  const running = h.run();
+  await h.tui.waitForOpen();
+  await h.choose("Destinations");
+  await h.choose("Add destination");
+  await h.choose("Add Microsoft Teams destination");
+  await h.input(`${teamsWebhookUrl}&sig=private-invalid-signature`, true);
+  expect(h.text()).toContain("Add destination · User");
+  expect(h.notify).toHaveBeenCalledOnce();
+  expect(JSON.stringify(h.notify.mock.calls)).not.toContain("private-invalid-signature");
+  expect(await fs.readdir(directory)).toEqual([]);
+  expect(store.snapshot.effective.destinations).toEqual({});
+  expect(send).not.toHaveBeenCalled();
+  await h.choose("Add Microsoft Teams destination");
+  h.tui.send(`\x1b[200~${teamsWebhookUrl}X\x1b[201~`);
+  h.tui.send("\x7f");
+  for (const secret of secrets) expect(h.text()).not.toContain(secret);
+  await h.transition(() => h.tui.press("tui.input.submit"));
+  await h.choose("Save and use");
+  expect(Object.values(store.snapshot.effective.destinations)).toEqual([destination]);
+  expect(send).not.toHaveBeenCalled();
+  h.tui.press("ctrl+c");
+  await running;
+  for (const secret of secrets) expect(JSON.stringify(h.notify.mock.calls)).not.toContain(secret);
+});
 
 it.each(examples)("renders $provider destination summaries without secrets outside the TUI", (destination) => {
   const text = [destinationDescription(destination), ...destinationLines(destination)].join("\n");

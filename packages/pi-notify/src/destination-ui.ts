@@ -11,6 +11,7 @@ export const providerLabels: Record<Destination["provider"], string> = {
   bark: "Bark",
   webhook: "Generic webhook",
   line: "LINE",
+  teams: "Microsoft Teams",
 };
 export const providerLabel = (destination: Destination) => providerLabels[destination.provider];
 export const credentialLabels: Record<Destination["provider"], string> = {
@@ -23,6 +24,7 @@ export const credentialLabels: Record<Destination["provider"], string> = {
   bark: "device key",
   webhook: "webhook URL",
   line: "channel access token",
+  teams: "webhook URL",
 };
 export function displayServerUrl(raw: string): string {
   try {
@@ -43,6 +45,8 @@ export function destinationDescription(destination: Destination): string {
       return "Slack · webhook configured";
     case "line":
       return "LINE · channel access token and recipient configured";
+    case "teams":
+      return "Microsoft Teams · workflow webhook configured";
     case "pushover":
       return "Pushover · application token and user key configured";
     case "discord":
@@ -80,6 +84,13 @@ export function destinationLines(destination: Destination): string[] {
         "Channel access token: configured (hidden)",
         "Recipient ID: configured (hidden)",
         "Messaging API only, not LINE Notify. Account quotas and recipient eligibility apply.",
+      ];
+    case "teams":
+      return [
+        label,
+        "Webhook URL: configured (hidden)",
+        "Target: fixed by the owning workflow",
+        "Anyone authentication only. HTTP acceptance does not confirm a Teams post.",
       ];
     case "pushover":
       return [

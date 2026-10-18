@@ -6,6 +6,7 @@ import { createLineProvider } from "./providers/line.js";
 import { createNtfyProvider } from "./providers/ntfy.js";
 import { createPushoverProvider } from "./providers/pushover.js";
 import { createSlackProvider } from "./providers/slack.js";
+import { createTeamsProvider } from "./providers/teams.js";
 import { createTelegramProvider } from "./providers/telegram.js";
 import { createWebhookProvider } from "./providers/webhook.js";
 
@@ -19,4 +20,5 @@ export const providers: Providers = new Map([
   ["bark", createBarkProvider()],
   ["webhook", createWebhookProvider()],
   ["line", createLineProvider()],
+  ["teams", createTeamsProvider()],
 ]);

@@ -49,6 +49,12 @@ export interface BarkDestination {
   deviceKey: string;
 }
 
+export interface TeamsDestination {
+  provider: "teams";
+  label: string;
+  webhookUrl: string;
+}
+
 export interface LineDestination {
   provider: "line";
   label: string;
@@ -72,7 +78,8 @@ export type Destination =
   | DiscordDestination
   | BarkDestination
   | WebhookDestination
-  | LineDestination;
+  | LineDestination
+  | TeamsDestination;
 
 export interface BodyEmphasis {
   style: "bold" | "monospace";
