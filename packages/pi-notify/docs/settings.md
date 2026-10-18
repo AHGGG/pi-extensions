@@ -37,7 +37,7 @@ Each Gotify destination has `provider: "gotify"`, a nonempty `label` of at most 
 
 Each Slack destination has `provider: "slack"`, a nonempty `label` of at most 128 characters, and `webhookUrl`. The complete URL is a credential and belongs only in the canonical User file. The channel comes from the webhook installation, not the label or a settings field. URLs must be at most 2048 characters and match `https://hooks.slack.com/services/T[A-Z0-9]+/B[A-Z0-9]+/[A-Za-z0-9]+` exactly: a `T` workspace segment, a `B` installation segment, and an alphanumeric secret. Ports, URL credentials, query strings, fragments, redirects, alternate hosts, whitespace, control characters, backslashes, and encoded or normalized URL alternatives are rejected. GovSlack is not supported.
 
-A User file can select all nine providers together. For example, with existing `personal` Telegram and `gotify` destinations, add a Slack destination and select their IDs:
+A User file can select all ten providers together. For example, with existing `personal` Telegram and `gotify` destinations, add a Slack destination and select their IDs:
 
 ```json
 {
@@ -70,6 +70,7 @@ All destinations require `provider` and a nonempty `label` of at most 128 charac
 | `bark` | `serverUrl`, `deviceKey` | None |
 | `webhook` | `webhookUrl` | `bearerToken` |
 | `line` | `channelAccessToken`, `recipientId` | None |
+| `teams` | `webhookUrl` | None |
 
 For ntfy and Bark, enter the server base URL including any reverse-proxy base path. Do not append the topic or `/push`. Generic `webhookUrl` is the complete receiving endpoint. These configurable URLs must be absolute HTTP(S) URLs, at most 2048 characters both before and after normalization. URL user information, whitespace, control characters, encoded controls, backslashes (including encoded backslashes), malformed percent escapes, query strings, and fragments are rejected. Bark server bases remove trailing slashes before appending `/push`. ntfy publish URLs and Generic webhook endpoints preserve trailing slashes because they can select a different route. Literal or encoded dot segments and noncanonical numeric IPv4 aliases are rejected instead of silently selecting a different path or host. Prefer HTTPS; HTTP does not encrypt credentials or metadata. Explicit local/private addresses are allowed and can reach the Pi host's network. Use only trusted endpoints.
 
@@ -148,6 +149,49 @@ For example, add this fragment to the existing User document and include `line-p
 
 Recipient eligibility and message allowances apply. A user generally must be a friend of the Official Account or have messaged it in a one-to-one chat within the past seven days; group/room delivery requires the account to participate. HTTP 200 does not prove receipt: blocked or deleted accounts and ineligible users can still produce acceptance without delivery. Monthly allowances, pricing, and group message counting depend on the account's region and plan. Check the account before enabling automatic notifications. The extension does not obtain recipient IDs, run an inbound webhook, inspect quota, or manage account access.
 
+### Microsoft Teams
+
+Use `provider: "teams"`, a `label`, and `webhookUrl`. This supports the commercial Teams Workflows trigger **When a Teams webhook request is received**, with **Anyone** authentication only. No Authorization header is sent. The complete signed URL, including its host, path, and query, is a credential. It is never shown in menus, reviews, test previews, Status, or errors. Keep it only in User settings; never paste it into Pi chat or Project settings.
+
+**The current Teams integration has not been verified live.** The following is an explicit supported client policy awaiting live interoperability verification, not a complete Microsoft endpoint grammar or a resolved global response contract. Microsoft documents trigger authentication, payload examples, and URL migration, but observed URL examples do not define every possible service URL.
+
+The local validator accepts only:
+
+- A URL of at most 8192 characters, with the exact lowercase `https://` scheme and one or more lowercase DNS labels before `.environment.api.powerplatform.com`. Each label contains 1–63 lowercase ASCII letters, digits, or hyphens and starts and ends with a letter or digit; the complete hostname is at most 253 characters. Only an omitted port or explicit `:443` is allowed.
+- One of these literal paths, without a trailing slash or encoded/normalized alternatives:
+
+  ```text
+  /powerautomate/automations/direct/workflows/<opaqueID>/triggers/manual/paths/invoke
+  /powerautomate/automations/direct/cu/<opaqueRoute>/workflows/<opaqueID>/triggers/manual/paths/invoke
+  ```
+
+  Each `opaqueID` and `opaqueRoute` must match `[A-Za-z0-9_-]{1,256}`. This is a local safety policy, not a universal Microsoft ID or routing grammar.
+- Exactly four query keys, each present once: literal `api-version=1`, `sp` decoded to `/triggers/manual/run`, literal `sv=1.0`, and `sig` with a nonempty decoded value in the base64/base64url alphabet (`A–Z`, `a–z`, digits, `+`, `/`, `_`, `-`) and at most two trailing `=` padding characters. Query order may vary. Values use percent decoding, not form decoding: `+` remains `+`, not a space. Encoded key names, duplicate keys, unknown keys, and malformed percent escapes or UTF-8 are rejected. The original signed URL is preserved, including escape case, query order, and explicit `:443`; it is not rebuilt from decoded values.
+
+Whitespace, controls, backslashes, URL user information, fragments, other ports, malformed encoding, and alternatives that require case or path normalization are rejected. Legacy Office connectors, obsolete `logic.azure.com` endpoints, government clouds, and tenant-authenticated triggers are unsupported. If a current generated URL falls outside this policy, do not edit or reconstruct its signature to make it fit.
+
+The request contains a fixed Adaptive Card 1.2 message attachment. `RichTextBlock`/`TextRun` elements carry sanitized title and metadata as literal text; `TextRun` does not support Markdown. No actions, images, user templates, or routing overrides are included. Terminal controls are removed. Provider-neutral metadata replaces `@` with `＠`; no mention entities are sent. Client automatic links are not guaranteed to be suppressed. The workflow selects the destination chat/channel, whose members can read the metadata.
+
+The entire encoded JSON request is capped locally at 24,000 UTF-8 bytes, including its envelope and JSON escaping. Clipping preserves complete Unicode code points and includes an ellipsis within the budget. This conservative local bound is not proof that every downstream Teams action accepts the rendered card: Microsoft's approximate 28 KB action limit includes rendered elements.
+
+Delivery reuses the bounded JSON transport unchanged: one attempt, no retry, redirects rejected, a 10-second total request/response deadline, and a 65,536-byte response-read cap. **Only HTTP 202** counts as trigger acceptance after that read completes. A bounded empty, text, or JSON body is allowed; no response-body meaning is inferred. Other 2xx statuses are not accepted. Oversized or stalled 202 bodies can still fail with `response` or `timeout`. HTTP 429 reports a safe `rate-limit` and an available positive integer `Retry-After`, without retrying. Under [HTTP 202 semantics](https://www.rfc-editor.org/rfc/rfc9110.html#name-202-accepted), acceptance does not establish completed processing. It proves neither that a workflow posted to Teams nor that a recipient read the message; check run history and the receiving chat/channel separately.
+
+Add this fragment to the existing User document and include `teams-workflow` in `targetIds` to select it. Replace the placeholder with the exact current generated URL outside Pi chat; preserve unrelated destinations and settings.
+
+```json
+{
+  "destinations": {
+    "teams-workflow": {
+      "provider": "teams",
+      "label": "Build Teams workflow",
+      "webhookUrl": "<current-generated-workflow-url>"
+    }
+  }
+}
+```
+
+No extension OAuth flow, inbound server, SDK, or channel override is needed or supported. See [Teams setup and revocation](#teams-setup-and-revocation) for workflow ownership, permissions, and operational checks.
+
 ### Mixed User settings example
 
 Replace placeholders with real values. `appToken` and `userKey` must meet the Pushover length rule; the Discord URL must be copied from Discord. This fragment does not replace existing Telegram, Gotify, Slack, or unknown settings. Omit optional tokens when using anonymous delivery.
@@ -193,7 +237,7 @@ Replace placeholders with real values. `appToken` and `userKey` must meet the Pu
 
 ## Provider setup and revocation
 
-Use `/notify` to add a destination, complete its review, and choose Save only or Save and use. Labels are generated automatically and can be changed. Secret inputs are masked; complete Discord and Generic webhook URLs remain hidden in lists, reviews, tests, Status, and errors. Optional ntfy tokens and priority, and Generic tokens, can be cleared in review. Send test previews the metadata and requires confirmation before an external request. Unsaved cancellation does not save a draft; cancelling delivery cannot recall an accepted message.
+Use `/notify` to add a destination, complete its review, and choose Save only or Save and use. Labels are generated automatically and can be changed. Secret inputs are masked; complete Discord, Teams, and Generic webhook URLs remain hidden in lists, reviews, tests, Status, and errors. Optional ntfy tokens and priority, and Generic tokens, can be cleared in review. Send test previews the metadata and requires confirmation before an external request. Unsaved cancellation does not save a draft; cancelling delivery cannot recall an accepted message.
 
 ### Telegram and Gotify
 
@@ -231,6 +275,16 @@ Treat an exposed URL as a compromised credential. Revoke or remove that webhook 
 
 For exposed credentials, follow the [channel token rules](https://developers.line.biz/en/docs/basics/channel-access-token/) for that token type: revoke a revocable token and replace it, or reissue a long-lived token and end any old-token grace period. Stateless tokens cannot be revoked and expire after their short validity period. Do not rely on removing a destination to revoke a token. Recheck receipt after replacement; cancellation cannot recall an accepted push. Recipient IDs are private identifiers, not authentication credentials; do not publish them with example settings.
 
+## Teams setup and revocation
+
+1. Open Workflows in Teams or Power Automate and create a flow with **When a Teams webhook request is received**. Choose **Anyone** authentication, not a tenant/user-authenticated mode. Configure the downstream Teams action and its target chat/channel for the fixed Adaptive Card. See [Workflows webhook setup](https://learn.microsoft.com/en-us/microsoftteams/platform/webhooks-and-connectors/how-to/add-incoming-webhook); use its Workflows instructions, not legacy Office connector instructions.
+2. Confirm Workflows is available under the account, tenant policy, and applicable licensing. The workflow owner's connection and chat/channel posting privileges must permit the downstream action. Add appropriate co-owners and maintain its connections so an owner leaving does not leave an unmanaged flow. The extension cannot grant channel access, repair credentials, or change tenant policy.
+3. Save the workflow and copy its current generated URL from the trigger. Use the [trigger URL migration guidance](https://learn.microsoft.com/en-us/power-automate/triggers-troubleshoot) if a URL changed; do not use an obsolete `logic.azure.com` URL or convert it by hand. Compare it with the [supported local URL policy](#microsoft-teams).
+4. Run `/notify`, add a Microsoft Teams destination, and paste the complete URL into the masked input. Review the label and choose Save only or Save and use. Replacing the URL uses an empty masked input; the stored value is not displayed. Unsaved cancellation keeps the saved destination unchanged.
+5. Use Send test, review the metadata, and confirm one external request. HTTP 202 reports trigger acceptance only. Check workflow run history, downstream action success, and the target chat/channel for the card. A local accepted result does not verify routing, account permissions, or receipt. The current integration remains unverified live; this is a user verification procedure, not a completed smoke result.
+
+Anyone authentication makes URL secrecy essential. If it is exposed, disable the owning workflow to stop use, then revoke/replace the endpoint through the workflow's available controls or delete and recreate the workflow. Ensure the old endpoint is no longer usable before relying on a replacement; ask a workflow owner or administrator if needed. Copy the new generated URL into User settings and confirm its downstream result with Send test. Removing a destination or changing its label does not revoke the old URL. A cancelled HTTP request cannot recall an accepted trigger or Teams post.
+
 ## Persistence and recovery
 
 Settings operations are ordered within the process, including across store instances for the same user path. Reads wait for pending writes. This is not a cross-process lock: simultaneous menu edits in different Pi processes can conflict.
@@ -239,9 +293,13 @@ Writes read the latest valid document, preserve unrelated fields and destination
 
 If a file is malformed, repair it manually before saving. Disable notifications in every effective scope to stop new attempts and cancel pending reminders. Unloading the extension aborts owned delivery work, but cannot recall accepted messages. Revoke exposed tokens or Slack webhooks before replacing them in User settings.
 
+### Reverting to a version without Teams
+
+While the Teams-capable version is installed, remove Teams IDs from explicit Project selections in every affected project, then remove them from User selections and delete every saved Teams destination, including unselected ones. Confirm all remaining destinations and effective selections are supported before installing the older version and reloading. Unsupported saved destinations disable older routing even when unselected. Existing providers need no migration. Revoke exposed or unused workflow URLs separately through the owning workflow; removing settings does not revoke them.
+
 ### Reverting to a version without LINE
 
-While this version is installed, remove LINE destination IDs from explicit Project selections in every affected project, then remove them from User selections and delete all saved LINE destinations, including unselected ones. Preserve the other eight providers and unrelated fields. Confirm the older version supports every saved destination and selected ID before installing it and reloading. Removing selections alone is insufficient: an unsupported unselected destination also disables older routing. Revoke unused or exposed channel tokens separately through LINE.
+While this version is installed, remove LINE destination IDs from explicit Project selections in every affected project, then remove them from User selections and delete all saved LINE destinations, including unselected ones. Preserve the other supported providers and unrelated fields. Confirm the older version supports every saved destination and selected ID before installing it and reloading. Removing selections alone is insufficient: an unsupported unselected destination also disables older routing. Revoke unused or exposed channel tokens separately through LINE.
 
 ### Reverting to a version without the new providers
 
@@ -277,9 +335,9 @@ The coordinator observes `before_agent_start`, with `agent_start` as a fallback,
 
 Metadata is collected at settlement through bounded Git subprocesses. Missing Git information is omitted. Pending metadata work is cancelled with its reminder. Once a delivery attempt starts, new user work does not cancel it; session replacement, reload, shutdown, or explicit test cancellation does. Late results cannot replace newer per-destination status. Test delivery bypasses automatic enablement and inactivity, requires explicit confirmation, and never changes automatic arming or history.
 
-The provider contract validates destinations and sends a provider-neutral notification with a cancellation signal. Providers do not read sessions, change settings, schedule timers, or decide notification policy. The built-in provider map contains Telegram, Gotify, Slack, ntfy, Pushover, Discord, Bark, Generic webhook, and LINE. Transport results distinguish accepted, failed with a safe code, and cancelled; retry-after is diagnostic, not an automatic retry instruction.
+The provider contract validates destinations and sends a provider-neutral notification with a cancellation signal. Providers do not read sessions, change settings, schedule timers, or decide notification policy. The built-in provider map contains Telegram, Gotify, Slack, ntfy, Pushover, Discord, Bark, Generic webhook, LINE, and Microsoft Teams. Transport results distinguish accepted, failed with a safe code, and cancelled; retry-after is diagnostic, not an automatic retry instruction.
 
-All transports reject redirects, use a 10-second deadline covering the request and response read, make one attempt, and cap success response reads at 65,536 bytes. Errors expose only fixed codes, never tokens, request URLs, response bodies, or raw transport exceptions. ntfy, Pushover, Discord, Bark, Generic webhook, and LINE report HTTP 429 as `rate-limit`, with a positive integer `Retry-After` in seconds when available; fractional Discord retry values are not displayed. Retry-after is diagnostic only. Service acceptance does not prove device receipt, downstream delivery, or reading. Text clipping preserves Unicode code points; the [provider limits](#new-provider-fields) specify each byte or UTF-16 budget.
+All transports reject redirects, use a 10-second deadline covering the request and response read, make one attempt, and cap success response reads at 65,536 bytes. Errors expose only fixed codes, never tokens, request URLs, response bodies, or raw transport exceptions. ntfy, Pushover, Discord, Bark, Generic webhook, LINE, and Teams report HTTP 429 as `rate-limit`, with a positive integer `Retry-After` in seconds when available; fractional Discord retry values are not displayed. Retry-after is diagnostic only. Service acceptance does not prove device receipt, downstream delivery, or reading. Text clipping preserves Unicode code points; the [provider limits](#new-provider-fields) specify each byte or UTF-16 budget.
 
 Telegram requests use its fixed HTTPS origin and do not enable paid broadcasts. Text is clipped to at most 4096 UTF-16 code units without splitting a Unicode code point. Telegram's JSON `ok` field and HTTP status are both checked.
 
@@ -311,6 +369,10 @@ Slack combines the title and body into one section block with a `plain_text` tex
 - [LINE push messages](https://developers.line.biz/en/reference/messaging-api/#send-push-message) and [text character count](https://developers.line.biz/en/docs/messaging-api/text-character-count/): fixed endpoint, eligibility, UTF-16 budget, and response conditions.
 - [LINE OpenAPI](https://github.com/line/line-openapi/blob/main/messaging-api.yml) and [official SDK push tests](https://github.com/line/line-bot-sdk-nodejs/blob/master/test/line-bot-client.spec.ts): current `sentMessages` and legacy empty-object acceptance.
 - [LINE channel access tokens](https://developers.line.biz/en/docs/basics/channel-access-token/), [user IDs](https://developers.line.biz/en/docs/messaging-api/getting-user-ids/), [group chats](https://developers.line.biz/en/docs/messaging-api/group-chats/), and [pricing](https://developers.line.biz/en/docs/messaging-api/pricing/): setup, revocation, recipient acquisition, and account-dependent message allowance.
+- [Teams connector: Microsoft Teams Webhook](https://learn.microsoft.com/en-us/connectors/teams/#microsoft-teams-webhook): trigger authentication and card envelope; Anyone requests omit Authorization. This does not establish a complete URL or HTTP response contract.
+- [Teams Workflows webhook setup](https://learn.microsoft.com/en-us/microsoftteams/platform/webhooks-and-connectors/how-to/add-incoming-webhook) and [trigger troubleshooting/URL migration](https://learn.microsoft.com/en-us/power-automate/triggers-troubleshoot): workflow creation, ownership, and current generated URLs. Published examples inform the supported client policy; they are not a normative universal URL grammar.
+- [Adaptive Cards TextRun schema](https://learn.microsoft.com/en-us/adaptive-cards/schema-explorer/text-run) and [RichTextBlock schema](https://learn.microsoft.com/en-us/adaptive-cards/schema-explorer/rich-text-block): literal text without Markdown in TextRun.
+- [RFC 9110: 202 Accepted](https://www.rfc-editor.org/rfc/rfc9110.html#name-202-accepted): acceptance is not completed processing; it does not establish which status every Teams workflow returns.
 - [Pi extension lifecycle](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/extensions.md#agent_start--agent_end--agent_before_settle--agent_settled).
 
 Input classification follows the installed Pi `ProcessTerminal` and `StdinBuffer` sequence splitting, Pi's `parseKey`/`isKeyRelease`, and `TuiAltScreen` SGR mouse handling. Pure classifier tests cover keyboard, Unicode, paste, focus, press/release, motion, wheel, legacy mouse, CSI/OSC/DCS/APC replies, and unknown input. These tests do not prove that an event reaches the extension. Installed-runtime tests also pass events through real regular/fullscreen Pi renderers and check listener order, viewport keys, and focused-overlay branches. Physical terminal and multiplexer behavior remains unverified.

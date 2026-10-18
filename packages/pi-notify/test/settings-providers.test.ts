@@ -49,6 +49,12 @@ const destinations = [
     bearerToken: "webhook-bearer-secret",
   },
   {
+    provider: "teams",
+    label: "Microsoft Teams notifications",
+    webhookUrl:
+      "https://tenant.example.environment.api.powerplatform.com/powerautomate/automations/direct/workflows/workflow-123/triggers/manual/paths/invoke?api-version=1&sp=%2Ftriggers%2Fmanual%2Frun&sv=1.0&sig=synthetic-signature_123",
+  },
+  {
     provider: "line",
     label: "LINE recipient",
     channelAccessToken: "line-secret-token",
@@ -70,7 +76,7 @@ afterEach(async () => {
   await fs.rm(directory, { recursive: true, force: true });
 });
 
-it("round-trips all nine providers, keeps private credentials, and routes through trusted Project selections", async () => {
+it("round-trips all ten providers, keeps private credentials, and routes through trusted Project selections", async () => {
   const all: Destination[] = [
     telegram,
     { provider: "gotify", label: "Server", serverUrl: "https://gotify.example/base", appToken: "gotify-secret" },
@@ -94,7 +100,7 @@ it("round-trips all nine providers, keeps private credentials, and routes throug
   if (process.platform !== "win32") expect((await fs.stat(store.userPath)).mode & 0o777).toBe(0o600);
   expect(await fs.readdir(dirname(store.userPath))).toEqual(["pi-notify.json"]);
 
-  const selected = ["line", "discord", "telegram", "bark", "ntfy", "slack", "pushover", "gotify", "webhook"];
+  const selected = ["teams", "line", "discord", "telegram", "bark", "ntfy", "slack", "pushover", "gotify", "webhook"];
   await savePolicy(store, "project", "targetIds", selected, signal());
   expect((await store.load()).effective.targetIds).toEqual(selected);
   expect(JSON.parse(await fs.readFile(store.projectPath as string, "utf8"))).toEqual({ targetIds: selected });
@@ -160,7 +166,9 @@ it.each(destinations.flatMap((destination) => [false, true].map((selected) => ({
               ? { ...destination, deviceKey: "private-secret\ninvalid" }
               : destination.provider === "line"
                 ? { ...destination, channelAccessToken: "private-secret\ninvalid" }
-                : { ...destination, webhookUrl: "https://user:private-secret@webhook.example/SecretEndpoint" };
+                : destination.provider === "teams"
+                  ? { ...destination, webhookUrl: `${destination.webhookUrl}&sig=private-secret` }
+                  : { ...destination, webhookUrl: "https://user:private-secret@webhook.example/SecretEndpoint" };
     const snapshot = resolveSettings(
       {
         destinations: { personal: telegram, invalid },
@@ -173,7 +181,7 @@ it.each(destinations.flatMap((destination) => [false, true].map((selected) => ({
     expect(snapshot.effective.destinations).toEqual({ personal: telegram });
     expect(snapshot.diagnostics.length).toBeGreaterThan(0);
     expect(JSON.stringify(snapshot.diagnostics)).not.toMatch(
-      /private-secret|SecretEndpoint|discord\.com|webhook\.example|line-secret|U[a-f0-9]{32}/,
+      /private-secret|SecretEndpoint|discord\.com|webhook\.example|line-secret|U[a-f0-9]{32}|powerplatform|workflow-123|synthetic-signature/,
     );
   },
 );
@@ -186,7 +194,7 @@ it.each(destinations)("forbids Project $provider definitions even when User owns
     expect(snapshot.effective.destinations).toEqual(source === user ? { one: store.validate(destination) } : {});
     expect(snapshot.diagnostics).toContain("Project destinations are forbidden; use User settings.");
     expect(JSON.stringify(snapshot.diagnostics)).not.toMatch(
-      /secret|Secret|ntfy\.example|discord\.com|192\.168|127\.0|AAAA|UUUU|U[a-f0-9]{32}/,
+      /secret|Secret|ntfy\.example|discord\.com|192\.168|127\.0|AAAA|UUUU|U[a-f0-9]{32}|powerplatform|workflow-123|synthetic-signature/,
     );
   }
 });
@@ -199,10 +207,14 @@ it.each(destinations)(
     await savePolicy(store, "project", "targetIds", ["new"], signal());
     const oldProviders = new Map(
       [...providers].filter(([id]) =>
-        destination.provider === "line" ? id !== "line" : ["telegram", "gotify", "slack"].includes(id),
+        destination.provider === "teams"
+          ? id !== "teams"
+          : destination.provider === "line"
+            ? id !== "line" && id !== "teams"
+            : ["telegram", "gotify", "slack"].includes(id),
       ),
     );
-    expect(oldProviders.size).toBe(destination.provider === "line" ? 8 : 3);
+    expect(oldProviders.size).toBe(destination.provider === "teams" ? 9 : destination.provider === "line" ? 8 : 3);
     const oldStore = new SettingsStore(store.userPath, store.projectPath, oldProviders);
     expect((await oldStore.load()).effective.enabled).toBe(false);
     await savePolicy(store, "user", "targetIds", ["personal"], signal());
@@ -222,7 +234,7 @@ it.each(destinations)(
   },
 );
 
-it.each(destinations.filter(({ provider }) => provider === "line"))(
+it.each(destinations.filter(({ provider }) => provider === "line" || provider === "teams"))(
   "blocks $provider saves over malformed settings and recovers after repair",
   async (destination) => {
     await fs.mkdir(dirname(store.userPath));
@@ -242,7 +254,7 @@ it.each(destinations.filter(({ provider }) => provider === "line"))(
   },
 );
 
-it.each(destinations.filter(({ provider }) => provider === "line"))(
+it.each(destinations.filter(({ provider }) => provider === "line" || provider === "teams"))(
   "preserves saved Off and explicit Project selections while adding, editing, and removing $provider",
   async (destination) => {
     await saveDestination(store, "personal", telegram, signal());

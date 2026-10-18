@@ -59,6 +59,7 @@ type Action =
   | "addDiscord"
   | "addBark"
   | "addWebhook"
+  | "addTeams"
   | "addLine"
   | "recipientId"
   | "userKey"
@@ -96,6 +97,7 @@ export const helpLines = [
   "Gotify labels are generated automatically. Edit the label or optional safe-integer priority from the destination review. An empty priority uses the server default.",
   "For Slack, enable Incoming Webhooks in a Slack app and add a webhook to your workspace. Its installation fixes the channel. Paste the complete hooks.slack.com URL only into the masked field; never into Pi chat.",
   "Slack webhook URLs are secrets. Reviews and Status show only that a webhook is configured. Revoke an exposed webhook in the Slack app before replacing it.",
+  "For Microsoft Teams, create a Workflows webhook with Anyone authentication. Enter its complete current signed URL only in the masked field. The workflow owns its target. HTTP 202 means trigger acceptance, not proof of a Teams post; live interoperability is not yet verified. See docs/settings.md for supported URLs, setup, and revocation.",
   "For LINE, enable Messaging API on an Official Account and enter its channel access token and user/group/room ID in masked inputs. Recipient eligibility and account quotas apply. LINE Notify is not supported. See docs/settings.md for setup and revocation.",
   "For ntfy, subscribe to a topic and configure server authentication and topic permissions. Topic secrecy is not access control. Review the server, optional Bearer token, and priority from 1 to 5.",
   "For Pushover, enter the application token and user key in masked inputs. Delivery uses normal priority only, without emergency acknowledgement or retries.",
@@ -183,9 +185,12 @@ export async function showNotifyMenu(ctx: ExtensionCommandContext, options: Menu
     draft = undefined;
     return { kind: "to", screen: "main" } as const;
   };
-  const addWebhook = async (provider: "discord" | "webhook", actionSignal: AbortSignal) => {
+  const addWebhook = async (provider: "discord" | "webhook" | "teams", actionSignal: AbortSignal) => {
     const result = await runSecretInput(menuCtx, {
-      title: `${provider === "discord" ? "Discord" : "Generic webhook"} URL`,
+      title:
+        provider === "teams"
+          ? "Teams workflow webhook URL"
+          : `${provider === "discord" ? "Discord" : "Generic webhook"} URL`,
       signal: actionSignal,
       isCurrent,
       onError: reportError,
@@ -196,7 +201,12 @@ export async function showNotifyMenu(ctx: ExtensionCommandContext, options: Menu
     if (result.kind !== "submitted") return { kind: "stay" } as const;
     const destination = providers.get(provider)?.validate({
       provider,
-      label: provider === "discord" ? "Discord notifications" : "Generic webhook notifications",
+      label:
+        provider === "teams"
+          ? "Microsoft Teams notifications"
+          : provider === "discord"
+            ? "Discord notifications"
+            : "Generic webhook notifications",
       webhookUrl: result.value,
     });
     if (!destination) throw new Error("Use a valid webhook URL.");
@@ -252,6 +262,7 @@ export async function showNotifyMenu(ctx: ExtensionCommandContext, options: Menu
           { id: "addBark", label: "Add Bark destination", action: "addBark" },
           { id: "addWebhook", label: "Add Generic webhook destination", action: "addWebhook" },
           { id: "addLine", label: "Add LINE destination", action: "addLine" },
+          { id: "addTeams", label: "Add Microsoft Teams destination", action: "addTeams" },
         ],
       }),
       destination: () => ({
@@ -675,6 +686,7 @@ export async function showNotifyMenu(ctx: ExtensionCommandContext, options: Menu
       },
       addDiscord: ({ signal: actionSignal }) => addWebhook("discord", actionSignal),
       addWebhook: ({ signal: actionSignal }) => addWebhook("webhook", actionSignal),
+      addTeams: ({ signal: actionSignal }) => addWebhook("teams", actionSignal),
       addBark: async ({ signal: actionSignal }) => {
         const result = await runSecretInput(menuCtx, {
           title: "Bark device key",
@@ -825,6 +837,7 @@ export async function showNotifyMenu(ctx: ExtensionCommandContext, options: Menu
               destination.channelAccessToken = valid.channelAccessToken;
               break;
             }
+            case "teams":
             case "discord":
             case "webhook": {
               const valid = providers.get(destination.provider)?.validate({ ...destination, webhookUrl: result.value });

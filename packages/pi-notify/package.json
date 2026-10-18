@@ -16,6 +16,9 @@
     "bark",
     "line",
     "line-messaging-api",
+    "microsoft-teams",
+    "teams-workflows",
+    "power-automate",
     "webhook",
     "incoming-webhook",
     "notifications"

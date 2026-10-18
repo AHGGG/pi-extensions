@@ -13,6 +13,8 @@ let originalAgentDir: string | undefined;
 let fetcher: ReturnType<typeof vi.fn<typeof fetch>>;
 const token = `123:${"s".repeat(30)}`;
 const webhookUrl = "https://hooks.slack.com/services/T01234567/B01234567/secretWebhookValue";
+const teamsWebhookUrl =
+  "https://tenant.example.environment.api.powerplatform.com/powerautomate/automations/direct/workflows/workflow-123/triggers/manual/paths/invoke?api-version=1&sp=%2Ftriggers%2Fmanual%2Frun&sv=1.0&sig=synthetic-signature_123";
 const lifecycleDestinations: Record<string, Destination> = {
   gotify: { provider: "gotify", label: "Gotify", serverUrl: "https://push.example.com", appToken: "A-token" },
   slack: { provider: "slack", label: "Slack", webhookUrl },
@@ -36,6 +38,7 @@ const lifecycleDestinations: Record<string, Destination> = {
     webhookUrl: "https://webhook.example/SecretEndpoint",
     bearerToken: "webhook-secret",
   },
+  teams: { provider: "teams", label: "Microsoft Teams notifications", webhookUrl: teamsWebhookUrl },
   line: {
     provider: "line",
     label: "LINE",
@@ -223,8 +226,8 @@ it.each(Object.keys(lifecycleDestinations))(
     expect(h.notifyUI).not.toHaveBeenCalled();
   },
 );
-it("delivers one settled work period through mixed existing and LINE providers", async () => {
-  const ids = ["ntfy", "pushover", "discord", "bark", "webhook", "line"];
+it("delivers one settled work period through mixed existing, LINE, and Teams providers", async () => {
+  const ids = ["ntfy", "pushover", "discord", "bark", "webhook", "line", "teams"];
   await fs.writeFile(
     join(directory, "pi-notify.json"),
     JSON.stringify({
@@ -258,6 +261,7 @@ it("delivers one settled work period through mixed existing and LINE providers",
     "https://bark.example/base/push",
     "https://webhook.example/SecretEndpoint",
     "https://api.line.me/v2/bot/message/push",
+    teamsWebhookUrl,
   ]);
   const payloads = fetcher.mock.calls.map(([, init]) => JSON.parse(String(init?.body)));
   for (const payload of payloads) {
@@ -270,6 +274,12 @@ it("delivers one settled work period through mixed existing and LINE providers",
   expect(payloads[5].to).toBe(`U${"a".repeat(32)}`);
   expect(payloads[5].messages).toMatchObject([{ type: "text" }]);
   expect(new Headers(fetcher.mock.calls[5]?.[1]?.headers).get("authorization")).toBe("Bearer line-secret-token");
+  expect(payloads[6]).toMatchObject({
+    type: "message",
+    attachments: [{ contentType: "application/vnd.microsoft.card.adaptive", content: { type: "AdaptiveCard" } }],
+  });
+  expect(new Headers(fetcher.mock.calls[6]?.[1]?.headers).has("authorization")).toBe(false);
+  expect(fetcher.mock.calls[6]?.[1]).toMatchObject({ method: "POST", redirect: "error" });
   await h.emit("agent_settled", ctx, { aborted: false });
   expect(fetcher).toHaveBeenCalledTimes(ids.length);
   await h.emit("session_shutdown", ctx);
@@ -293,19 +303,28 @@ it.each(["rpc", "print", "json"])("uses settlement fallback in %s, rejects or ex
   const path = join(directory, "pi-notify.json");
   const settings = JSON.parse(await fs.readFile(path, "utf8"));
   settings.destinations.line = lifecycleDestinations.line;
-  settings.targetIds.push("line");
+  settings.destinations.teams = lifecycleDestinations.teams;
+  settings.targetIds.push("line", "teams");
   await fs.writeFile(path, JSON.stringify(settings));
   fetcher.mockImplementation(async (url) =>
-    String(url).startsWith("https://api.telegram.org")
-      ? Response.json({ ok: true, result: {} })
-      : Response.json({ sentMessages: [{ id: "461230966842064897" }] }),
+    url === teamsWebhookUrl
+      ? new Response("Accepted", { status: 202 })
+      : String(url).startsWith("https://api.telegram.org")
+        ? Response.json({ ok: true, result: {} })
+        : Response.json({ sentMessages: [{ id: "461230966842064897" }] }),
   );
   const h = await setup();
   const ctx = h.context(mode);
   await h.emit("session_start", ctx);
   await h.emit("before_agent_start", ctx);
   await h.emit("agent_settled", ctx, { aborted: false });
-  await vi.waitFor(() => expect(fetcher).toHaveBeenCalledTimes(2), { interval: 1 });
+  await vi.waitFor(() => expect(fetcher).toHaveBeenCalledTimes(3), { interval: 1 });
+  expect(fetcher.mock.calls.map(([url]) => url)).toEqual([
+    `https://api.telegram.org/bot${token}/sendMessage`,
+    "https://api.line.me/v2/bot/message/push",
+    teamsWebhookUrl,
+  ]);
+  expect(new Headers(fetcher.mock.calls[2]?.[1]?.headers).has("authorization")).toBe(false);
   expect(h.tui.openCount).toBe(0);
   const command = h.commands.get("notify");
   assert.ok(command);
@@ -315,7 +334,9 @@ it.each(["rpc", "print", "json"])("uses settlement fallback in %s, rejects or ex
   } else await expect(command.handler("", ctx as ExtensionCommandContext)).rejects.toThrow("requires TUI");
   await expect(command.handler("settings trailing", ctx as ExtensionCommandContext)).rejects.toThrow("Usage");
   expect(h.tui.openCount).toBe(0);
-  expect(JSON.stringify(h.notifyUI.mock.calls)).not.toMatch(/line-secret|U[a-f0-9]{32}/);
+  expect(JSON.stringify(h.notifyUI.mock.calls)).not.toMatch(
+    /line-secret|U[a-f0-9]{32}|tenant\.example|powerplatform|workflow-123|synthetic-signature|api-version|sig=/,
+  );
   await h.emit("session_shutdown", ctx);
 });
 it("isolates headless sessions sharing one UI and ignores untrusted project routing", async () => {
