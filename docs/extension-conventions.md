@@ -382,6 +382,28 @@ Do not create a validator merely because a convention is written down. Add one w
 area has a stable, low-false-positive rule that can be checked without encoding product semantics in
 fragile regular expressions. Until then, label the real verification method honestly.
 
+#### Package architecture and workflow diagrams
+
+Each package MAY keep topic-focused architecture and workflow documentation under
+`packages/<package>/docs/`; no fixed filename or mandatory architecture document is required.
+
+- **MUST:** Use descriptive lowercase kebab-case filenames that identify the topic rather than a PR
+  number or temporary bug. **Verification:** `Review` of document names and scope.
+- **SHOULD:** Use Mermaid architecture diagrams to explain component boundaries and data flow, and
+  sequence diagrams to explain ordering, asynchronous work, and lifecycle interactions.
+- **SHOULD:** Explain the main idea in plain language before each diagram, keep each diagram focused
+  on one question, and connect simplified labels to actual component or API names.
+- **MUST:** Keep diagrams consistent with the current implementation and distinguish implemented
+  behavior from proposals.
+  Include failure, cancellation, or recovery paths when they are necessary to understand the
+  documented behavior. **Verification:** `Review` against the relevant code paths and tests.
+- **MUST:** Keep package documentation discoverable through the package README or a linked
+  documentation index, and update affected diagrams when the documented behavior changes.
+  **Verification:** `Review` of links, changed behavior, and diagram consistency.
+
+Keep short explanations in the README when they fit naturally; move detailed explanations and
+larger diagrams into package-owned documentation rather than duplicating them.
+
 ## New extension checklist
 
 - [ ] Place the package under `packages/`, include its source entrypoint in the root Pi manifest,
