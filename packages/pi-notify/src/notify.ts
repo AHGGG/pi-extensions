@@ -85,7 +85,7 @@ export default function notify(pi: ExtensionAPI): void {
     await stop(owner);
   });
   pi.registerCommand("notify", {
-    description: "Configure Telegram, Gotify, and Slack notifications and inactivity reminders",
+    description: "Configure notification destinations and inactivity reminders",
     handler: async (args, ctx) => {
       if (args.trim()) throw new Error("Usage: /notify (no arguments).");
       const owner = current(ctx);
