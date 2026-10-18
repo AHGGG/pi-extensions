@@ -13,7 +13,7 @@ import {
 import { abortable } from "./abortable.js";
 import { createCheckpointDetails, fallbackSummary, latestCheckpoint, parseCheckpointDetails } from "./checkpoint.js";
 import { checkpointKeptMessages, projectSessionCheckpointContext } from "./checkpoint-projection.js";
-import { resolveCompactionBinding, sameCompactionBinding } from "./compaction-binding.js";
+import { compactionBindingChanges, resolveCompactionBinding, sameCompactionBinding } from "./compaction-binding.js";
 import { activeTools, type CompactionAttempt, compactRemotely } from "./compaction-operation.js";
 import { captureCompactionBranch } from "./compaction-ownership.js";
 import { type RemoteCompactionProtocol, resolveCompactionRoute } from "./model-api.js";
@@ -286,7 +286,7 @@ export async function adoptWarmCompaction(
     if (signal.aborted) return { kind: "cancel" };
     if (!valid()) return { kind: "stale" };
     if (!sameCompactionBinding(job.attempt.binding, binding.binding))
-      return stale("authentication, route, or provider binding changed");
+      return stale(compactionBindingChanges(job.attempt.binding, binding.binding).join("; "));
     if (job.attempt.failure) return { kind: "failed", attempt: job.attempt };
     if (!result || !("compaction" in result) || !result.compaction)
       return stale("prepared checkpoint result is unavailable");

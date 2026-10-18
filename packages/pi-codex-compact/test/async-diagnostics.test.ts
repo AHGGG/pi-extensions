@@ -19,7 +19,7 @@ for (const logging of [true, false])
     h.setKey("SECRET-CHANGED-CREDENTIAL");
     assert.equal(await h.start(), undefined);
     const messages = h.notifications.map(({ message }) => message).join("\n");
-    assert.equal(messages.includes("authentication, route, or provider binding changed"), logging);
+    assert.equal(messages.includes("request authentication changed"), logging);
     assert.doesNotMatch(messages, /SECRET-CHANGED-CREDENTIAL|fixture-key|example\.test/);
     assert.equal(h.fetches, 1);
   });
@@ -53,7 +53,7 @@ for (const change of ["prompt", "unpaired", "projection", "auth-lookup", "naviga
       reason = /unmatched tool call/;
     } else if (change === "projection") {
       const entry = h.manager.getBranch().find((entry) => entry.type === "message");
-      assert.ok(entry && entry.type === "message");
+      assert.ok(entry && entry.type === "message" && "content" in entry.message);
       entry.message.content = "PRIVATE-EDIT";
       reason = /persisted snapshot entries changed/;
     } else if (change === "auth-lookup") {
@@ -100,9 +100,7 @@ for (const logging of [true, false])
     await h.compact("manual");
     const messages = h.notifications.map(({ message }) => message).join("\n");
     assert.equal(
-      messages.includes(
-        "Async checkpoint application rejected. Reason: authentication, route, or provider binding changed.",
-      ),
+      messages.includes("Async checkpoint application rejected. Reason: request authentication changed."),
       logging,
     );
     assert.doesNotMatch(messages, /PRIVATE-FOREGROUND-KEY/);
@@ -115,4 +113,41 @@ test("a discarded candidate is reported once across subsequent context hooks", a
   await h.emit("context", { messages: [] });
   await h.emit("context", { messages: [] });
   assert.equal(h.notifications.filter(({ message }) => message.includes("checkpoint discarded")).length, 1);
+});
+
+for (const logging of [true, false])
+  test(`multiple binding changes use fixed ordered labels with logging=${logging}`, async () => {
+    const h = await ready(logging);
+    const originalBranch = JSON.stringify(h.manager.getBranch());
+    h.setKey("PRIVATE-ROTATED-TOKEN");
+    const replacement = {
+      ...h.provider,
+      name: "PRIVATE-PROVIDER-NAME",
+      stream: h.provider.stream.bind(h.provider),
+      streamSimple: h.provider.streamSimple.bind(h.provider),
+    };
+    h.ctx.modelRegistry.getProvider = () => replacement;
+    assert.equal(await h.start(), undefined);
+    const notices = h.notifications.map(({ message }) => message).join("\n");
+    assert.equal(
+      notices.includes(
+        "Reason: request authentication changed; provider instance changed; stream function changed; streamSimple function changed.",
+      ),
+      logging,
+    );
+    assert.doesNotMatch(notices, /PRIVATE-|fixture-key|example\.test|[a-f0-9]{64}/);
+    assert.equal(JSON.stringify(h.manager.getBranch()), originalBranch);
+    assert.equal(h.fetches, 1);
+    await h.start();
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.equal(h.fetches, 2);
+  });
+
+test("binding diagnostics remain silent without UI", async () => {
+  const h = await ready();
+  h.ctx.hasUI = false;
+  const previousCount = h.notifications.length;
+  h.setKey("PRIVATE-HEADLESS-TOKEN");
+  assert.equal(await h.start(), undefined);
+  assert.equal(h.notifications.length, previousCount);
 });

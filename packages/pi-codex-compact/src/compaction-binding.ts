@@ -16,6 +16,17 @@ export interface CompactionBinding {
   streamSimple: Provider["streamSimple"];
 }
 
+const componentLabels = [
+  "model changed",
+  "route changed",
+  "request authentication changed",
+  "provider authentication changed",
+] as const;
+// Request-scoped diagnostics only: never attach these digests to enumerable state,
+// checkpoint details, notifications, or debug output. Weak keys follow job lifetime.
+const componentDigests = new WeakMap<CompactionBinding, string[]>();
+const digest = (serialized: string) => createHash("sha256").update(serialized).digest("hex");
+
 /** Resolve auth through the same public Pi APIs for preparation and adoption. */
 export async function resolveCompactionBinding(
   ctx: ExtensionContext,
@@ -37,15 +48,20 @@ export async function resolveCompactionBinding(
   }
   const provider = ctx.modelRegistry.getProvider(model.provider);
   if (!provider) throw new Error("The active Responses provider is unavailable");
+  const serialized = JSON.stringify([model, route, auth, providerAuth]);
   const binding: CompactionBinding = {
-    // Only this digest leaves the request scope; never persist authentication material.
-    key: createHash("sha256")
-      .update(JSON.stringify([model, route, auth, providerAuth]))
-      .digest("hex"),
+    // Keep the original guard digest; never persist authentication material.
+    key: digest(serialized),
     provider,
     stream: provider.stream,
     streamSimple: provider.streamSimple,
   };
+  // Split the exact serialization used by the existing guard, without resolving
+  // auth again or invoking provider/model serialization hooks a second time.
+  componentDigests.set(
+    binding,
+    (JSON.parse(serialized) as unknown[]).map((value) => digest(JSON.stringify(value))),
+  );
   return { auth, route: route as Extract<CompactionRoute, { kind: "remote" }>, provider, binding };
 }
 
@@ -57,4 +73,23 @@ export function sameCompactionBinding(left: CompactionBinding | undefined, right
     left.stream === right.stream &&
     left.streamSimple === right.streamSimple
   );
+}
+
+/** Explain a rejection using fixed labels only; never change the acceptance guard. */
+export function compactionBindingChanges(left: CompactionBinding | undefined, right: CompactionBinding): string[] {
+  if (!left) return ["prepared binding unavailable"];
+  if (sameCompactionBinding(left, right)) return [];
+  const changes: string[] = [];
+  if (left.key !== right.key) {
+    const before = componentDigests.get(left);
+    const after = componentDigests.get(right);
+    if (before && after)
+      for (const [index, label] of componentLabels.entries()) if (before[index] !== after[index]) changes.push(label);
+    // Preserve an explanation for legacy/test bindings without component data.
+    if (changes.length === 0) changes.push("binding changed");
+  }
+  if (left.provider !== right.provider) changes.push("provider instance changed");
+  if (left.stream !== right.stream) changes.push("stream function changed");
+  if (left.streamSimple !== right.streamSimple) changes.push("streamSimple function changed");
+  return changes;
 }
