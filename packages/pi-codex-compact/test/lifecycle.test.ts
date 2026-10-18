@@ -355,7 +355,22 @@ test("configured custom Codex Responses APIs compact and replay only while curre
     model: { ...customModel, id: "gpt-5.6-different" },
     sessionManager: replaySessionManager,
   }).ctx;
-  assert.equal(await contextHandler?.(contextEvent, differentModel), undefined);
+  assert.deepEqual(await contextHandler?.(contextEvent, differentModel), projected);
+  assert.deepEqual(
+    await payloadHandler?.(
+      {
+        type: "before_provider_request",
+        payload: {
+          input: [
+            { role: "user", content: [{ type: "input_text", text: marker }] },
+            { role: "user", content: [{ type: "input_text", text: "later" }] },
+          ],
+        },
+      },
+      differentModel,
+    ),
+    rewritten,
+  );
   const differentApi = createMockContext({
     model: { ...customModel, api: "openai-responses" },
     sessionManager: replaySessionManager,
@@ -588,78 +603,82 @@ for (const protocol of ["remote-v2", "context-management"] as const) {
   });
 }
 
-test("repeated compaction projects a persisted legacy summary across protocols", async () => {
-  const mock = createMockPi();
-  const entries = branch();
-  const kept = entries[1].type === "message" ? entries[1].message : assert.fail("kept message");
-  const details = createCheckpointDetails({
-    provider: model.provider,
-    api: model.api,
-    profile: "codex-responses-v1",
-    modelId: model.id,
-    protocol: "remote-v2",
-    replacementHistory: [
-      { role: "user", content: [{ type: "input_text", text: "older context" }] },
-      { type: "compaction", encrypted_content: "prior-opaque" },
-    ],
-    keptMessages: [kept],
-    checkpointId: "legacy-checkpoint",
-    createdAt: "2026-01-01T00:00:02.000Z",
-  });
-  const persistedSummary = legacyFallbackSummary(details.checkpointId);
-  const checkpointEntry = {
-    type: "compaction" as const,
-    id: "legacy-compact",
-    parentId: "assistant",
-    timestamp: "2026-01-01T00:00:02.000Z",
-    summary: persistedSummary,
-    firstKeptEntryId: "assistant",
-    tokensBefore: 123,
-    details,
-  };
-  const repeatedBranch = [...entries, checkpointEntry];
-  let preparedPayload: unknown;
-  createCodexCompactExtension({
-    settingsRuntime: settingsRuntime({ protocol: "responses-compact" }),
-    fetch: async () => compactJsonResponse(),
-  })(mock.pi);
-  const handler = mock.events.get("session_before_compact")?.[0];
-  const { ctx, notifications, statuses } = createMockContext({
-    model,
-    getSystemPrompt: () => "system",
-    sessionManager: {
-      getSessionId: () => "session",
-      getBranch: () => repeatedBranch,
-    },
-    modelRegistry: {
-      getApiKeyAndHeaders: async () => ({ ok: true }),
-      getProvider: () =>
-        fakeProvider(
-          undefined,
-          model,
-          (payload) => {
-            preparedPayload = payload;
-          },
-          "responses-compact",
-        ),
-    },
-    hasUI: true,
-  });
+for (const selectedModel of [model, { ...model, id: "selected-responses-model" }]) {
+  test(`repeated compaction projects a legacy checkpoint on ${selectedModel.id}`, async () => {
+    const mock = createMockPi();
+    const entries = branch();
+    const kept = entries[1].type === "message" ? entries[1].message : assert.fail("kept message");
+    const details = createCheckpointDetails({
+      provider: model.provider,
+      api: model.api,
+      profile: "codex-responses-v1",
+      modelId: model.id,
+      protocol: "remote-v2",
+      replacementHistory: [
+        { role: "user", content: [{ type: "input_text", text: "older context" }] },
+        { type: "compaction", encrypted_content: "prior-opaque" },
+      ],
+      keptMessages: [kept],
+      checkpointId: "legacy-checkpoint",
+      createdAt: "2026-01-01T00:00:02.000Z",
+    });
+    const persistedSummary = legacyFallbackSummary(details.checkpointId);
+    const checkpointEntry = {
+      type: "compaction" as const,
+      id: "legacy-compact",
+      parentId: "assistant",
+      timestamp: "2026-01-01T00:00:02.000Z",
+      summary: persistedSummary,
+      firstKeptEntryId: "assistant",
+      tokensBefore: 123,
+      details,
+    };
+    const repeatedBranch = [...entries, checkpointEntry];
+    let preparedPayload: unknown;
+    createCodexCompactExtension({
+      settingsRuntime: settingsRuntime({ protocol: "responses-compact" }),
+      fetch: async () => compactJsonResponse(),
+    })(mock.pi);
+    const handler = mock.events.get("session_before_compact")?.[0];
+    const { ctx, notifications, statuses } = createMockContext({
+      model: selectedModel,
+      getSystemPrompt: () => "system",
+      sessionManager: {
+        getSessionId: () => "session",
+        getBranch: () => repeatedBranch,
+      },
+      modelRegistry: {
+        getApiKeyAndHeaders: async () => ({ ok: true }),
+        getProvider: () =>
+          fakeProvider(
+            undefined,
+            selectedModel,
+            (payload) => {
+              preparedPayload = payload;
+            },
+            "responses-compact",
+          ),
+      },
+      hasUI: true,
+    });
 
-  const result = (await handler?.(event(new AbortController().signal, repeatedBranch), ctx)) as {
-    compaction: { details: unknown };
-  };
-  const parsed = parseCheckpointDetails(result.compaction.details);
-  assert.ok(parsed);
-  assert.equal(parsed.protocol, "responses-compact");
-  assert.deepEqual((preparedPayload as { input: unknown[] }).input.at(-1), {
-    type: "compaction",
-    encrypted_content: "prior-opaque",
+    const result = (await handler?.(event(new AbortController().signal, repeatedBranch), ctx)) as {
+      compaction: { details: unknown };
+    };
+    const parsed = parseCheckpointDetails(result.compaction.details);
+    assert.ok(parsed);
+    assert.equal(parsed.protocol, "responses-compact");
+    assert.equal(parsed.modelId, selectedModel.id);
+    assert.equal((preparedPayload as { model: string }).model, selectedModel.id);
+    assert.deepEqual((preparedPayload as { input: unknown[] }).input.at(-1), {
+      type: "compaction",
+      encrypted_content: "prior-opaque",
+    });
+    assert.doesNotMatch(JSON.stringify(preparedPayload), /legacy-checkpoint.*stores the older history/);
+    assert.deepEqual(notifications, []);
+    assert.equal(statuses.get("codex-compact"), undefined);
   });
-  assert.doesNotMatch(JSON.stringify(preparedPayload), /legacy-checkpoint.*stores the older history/);
-  assert.deepEqual(notifications, []);
-  assert.equal(statuses.get("codex-compact"), undefined);
-});
+}
 
 test("valid session startup reloads settings without a package warning", async () => {
   const mock = createMockPi();

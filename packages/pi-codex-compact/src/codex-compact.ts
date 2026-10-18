@@ -60,11 +60,7 @@ function isCheckpointCompatible(
 ): boolean {
   const route = resolveCompactionRoute(model, settings);
   return (
-    route.kind === "remote" &&
-    model !== undefined &&
-    route.api === details.api &&
-    route.profile === details.profile &&
-    model.id === details.modelId
+    route.kind === "remote" && model !== undefined && route.api === details.api && route.profile === details.profile
   );
 }
 
@@ -91,19 +87,14 @@ function activeTools(pi: ExtensionAPI): Tool[] {
 
 function projectedCurrentMessages(
   event: SessionBeforeCompactEvent,
-  model: Model<Api>,
   route: Extract<CompactionRoute, { kind: "remote" }>,
 ): { messages: AgentMessage[]; prior?: CodexCheckpointDetails } {
   const leafId = event.branchEntries.at(-1)?.id ?? null;
   const session = buildSessionContext(event.branchEntries, leafId);
   const prior = latestCheckpoint(event.branchEntries);
   if (!prior) return { messages: session.messages };
-  if (
-    prior.details.api !== route.api ||
-    prior.details.profile !== route.profile ||
-    prior.details.modelId !== model.id
-  ) {
-    throw new Error("The active opaque checkpoint belongs to a different Responses model");
+  if (prior.details.api !== route.api || prior.details.profile !== route.profile) {
+    throw new Error("The active opaque checkpoint belongs to an incompatible Responses API/profile");
   }
   const projected = projectSessionCheckpointContext(session.messages, event.branchEntries, prior);
   if (!projected) {
@@ -213,7 +204,7 @@ async function compactRemotely(
     );
     const provider = ctx.modelRegistry.getProvider(model.provider);
     if (!provider) throw new Error("The active Responses provider is unavailable");
-    const current = projectedCurrentMessages(event, model, route);
+    const current = projectedCurrentMessages(event, route);
     const context: Context = {
       systemPrompt: ctx.getSystemPrompt(),
       messages: convertToLlm(current.messages),
@@ -319,7 +310,7 @@ async function compactRemotely(
     if (settings.checkpointRecovery === "cancel") return { cancel: true };
     let nativeFallbackAllowed = false;
     try {
-      const current = projectedCurrentMessages(event, model, route);
+      const current = projectedCurrentMessages(event, route);
       if (!current.prior) throw new Error("Checkpoint recovery lost its checkpoint");
       const messages = summaryPrefix(current.messages, keptMessages(event), fingerprintMessage);
       // Native fallback is intentionally lossy, but never bypass projection or ownership checks.
