@@ -123,6 +123,7 @@ describe("Slack validation", () => {
       "discord",
       "bark",
       "webhook",
+      "line",
     ]);
     expect(providers.get("slack")?.label).toBe("Slack");
     expect(validateDestination({ ...destination, future: true, channel: "not-an-override" }, providers)).toEqual(

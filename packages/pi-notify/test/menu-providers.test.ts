@@ -87,9 +87,13 @@ function harness(remap = false) {
     }
     throw new Error(`Menu item not found: ${label}\n${text()}`);
   };
-  const input = async (value: string) => {
+  const input = async (value: string, masked = false) => {
     tui.send("\x15");
     tui.send(`\x1b[200~${value}\x1b[201~`);
+    if (masked) {
+      expect(text()).not.toContain(value);
+      for (const secret of secrets) expect(text()).not.toContain(secret);
+    }
     await transition(() => tui.press("tui.input.submit"));
   };
   const run = () =>
@@ -117,6 +121,12 @@ const examples: Destination[] = [
     label: "Generic webhook notifications",
     webhookUrl: "https://automation.example/secret-endpoint/",
   },
+  {
+    provider: "line",
+    label: "LINE notifications",
+    channelAccessToken: "line-secret-token",
+    recipientId: `U${"a".repeat(32)}`,
+  },
 ];
 const secrets = [
   "a".repeat(30),
@@ -126,6 +136,8 @@ const secrets = [
   "secret-endpoint",
   "bearer-secret",
   "ntfy-secret",
+  "line-secret-token",
+  `U${"a".repeat(32)}`,
 ];
 async function setup(h: ReturnType<typeof harness>, destination: Destination) {
   await h.choose("Destinations");
@@ -138,8 +150,11 @@ async function setup(h: ReturnType<typeof harness>, destination: Destination) {
     expect(h.text()).not.toContain(destination.appToken);
     await h.input(destination.userKey);
   } else if (destination.provider === "bark") await h.input(destination.deviceKey);
-  else if (destination.provider === "discord" || destination.provider === "webhook")
-    await h.input(destination.webhookUrl);
+  else if (destination.provider === "line") {
+    await h.input(destination.channelAccessToken, true);
+    await h.input(destination.recipientId, true);
+  } else if (destination.provider === "discord" || destination.provider === "webhook")
+    await h.input(destination.webhookUrl, true);
 }
 
 it.each([false, true])(
@@ -246,11 +261,28 @@ it.each(examples.flatMap((destination) => [false, true].map((use) => ({ destinat
     await h.tui.waitForOpen();
     await setup(h, destination);
     for (const secret of secrets) expect(h.text()).not.toContain(secret);
+    if (destination.provider === "line") {
+      expect(h.zeroFrames.every((frame) => frame.every((line) => visibleWidth(line) === 0))).toBe(true);
+      for (const width of [1, 12, 72])
+        for (const rows of [4, 8, 24]) {
+          const frame = h.tui.resize({ width, rows });
+          expect(frame.length).toBeLessThanOrEqual(Math.max(1, rows - 3));
+          expect(frame.every((line) => visibleWidth(line) <= width)).toBe(true);
+        }
+      h.tui.resize({ width: 100, rows: 40 });
+      h.tui.invalidate();
+    }
     expect(await fs.readdir(directory)).toEqual([]);
     await h.choose(use ? "Save and use" : "Save only");
     const [id, saved] = Object.entries(store.snapshot.effective.destinations)[0] ?? [];
     expect(saved).toMatchObject(destination);
     expect(store.snapshot.effective.targetIds).toEqual(use ? [id] : []);
+    if (destination.provider === "line") {
+      await h.choose("Status");
+      expect(h.text()).toContain(destination.label);
+      for (const secret of secrets) expect(h.text()).not.toContain(secret);
+      await h.transition(() => h.tui.send("\x11"));
+    }
     await h.choose("Destinations");
     await h.choose(destination.label);
     await h.choose("Edit destination");
@@ -262,6 +294,7 @@ it.each(examples.flatMap((destination) => [false, true].map((use) => ({ destinat
     expect(store.snapshot.effective.destinations[id ?? ""]?.label).toBe(destination.label);
     await h.choose("Save changes");
     expect(store.snapshot.effective.destinations[id ?? ""]?.label).toBe("Changed");
+    expect(store.snapshot.effective.targetIds).toEqual(use ? [id] : []);
     const send = vi.spyOn(coordinator, "send").mockResolvedValue({ state: "accepted" });
     await h.choose("Send test");
     await h.choose("Changed");
@@ -360,8 +393,17 @@ it.each(examples.flatMap((destination) => ["cancel", "save"].map((completion) =>
           ? "application token"
           : destination.provider === "bark"
             ? "device key"
-            : "webhook URL";
+            : destination.provider === "line"
+              ? "channel access token"
+              : "webhook URL";
     await h.choose(`Replace ${credential}`);
+    if (destination.provider === "line") {
+      const opened = h.tui.openCount;
+      h.tui.press("tui.input.submit");
+      await h.tui.waitForPending();
+      expect(h.tui.openCount).toBe(opened);
+      expect(h.text()).toContain(credential);
+    }
     const replacement =
       destination.provider === "pushover"
         ? "p".repeat(30)
@@ -370,12 +412,20 @@ it.each(examples.flatMap((destination) => ["cancel", "save"].map((completion) =>
           : destination.provider === "webhook"
             ? "http://localhost:8123/new-secret/"
             : "new-secret-token";
-    await h.input(replacement);
+    await h.input(replacement, true);
     expect(h.text()).not.toContain(replacement);
     if (destination.provider === "pushover") {
       await h.choose("Replace user key");
       await h.input("k".repeat(30));
       expect(h.text()).not.toContain("k".repeat(30));
+    } else if (destination.provider === "line") {
+      await h.choose("Replace recipient ID");
+      expect(h.text()).not.toContain(destination.recipientId);
+      const opened = h.tui.openCount;
+      h.tui.press("tui.input.submit");
+      await h.tui.waitForPending();
+      expect(h.tui.openCount).toBe(opened);
+      await h.input(`C${"b".repeat(32)}`, true);
     } else if (destination.provider === "bark" || destination.provider === "ntfy") {
       await h.choose("Change server URL");
       await h.input("http://localhost:8080/base/");
@@ -396,9 +446,132 @@ it.each(examples.flatMap((destination) => ["cancel", "save"].map((completion) =>
       if (saved?.provider === "bark")
         expect(saved).toMatchObject({ deviceKey: replacement, serverUrl: "http://localhost:8080/base" });
       if (saved?.provider === "discord" || saved?.provider === "webhook") expect(saved.webhookUrl).toBe(replacement);
+      if (saved?.provider === "line")
+        expect(saved).toMatchObject({ channelAccessToken: replacement, recipientId: `C${"b".repeat(32)}` });
     }
     expect(store.snapshot.effective.targetIds).toEqual([]);
     expect(JSON.stringify(h.notify.mock.calls)).not.toContain(replacement);
+  },
+);
+
+it.each(
+  examples
+    .filter((destination) => destination.provider === "line")
+    .flatMap((destination) =>
+      ["credential", "recipient"].flatMap((stage) =>
+        ["cancel", "hard-cancel", "dispose", "replace"].map((cause) => ({ destination, stage, cause })),
+      ),
+    ),
+)("releases pending $destination.provider setup at $stage after $cause", async ({ destination, stage, cause }) => {
+  const h = harness(true);
+  const running = h.run();
+  await h.tui.waitForOpen();
+  await h.choose("Destinations");
+  await h.choose("Add destination");
+  await h.choose(`Add ${destination.label.replace(" notifications", "")} destination`);
+  if (stage === "recipient" && destination.provider === "line") await h.input(destination.channelAccessToken, true);
+  for (const secret of secrets) expect(h.text()).not.toContain(secret);
+  const value =
+    destination.provider === "line"
+      ? stage === "recipient"
+        ? destination.recipientId
+        : destination.channelAccessToken
+      : "";
+  h.tui.send(`\x1b[200~${value}X\x1b[201~`);
+  h.tui.send("\x7f");
+  expect(h.text()).not.toContain(value);
+  for (const secret of secrets) expect(h.text()).not.toContain(secret);
+  if (cause === "dispose" || cause === "cancel") {
+    await h.transition(() => (cause === "dispose" ? h.tui.dispose() : h.tui.send("\x11")));
+    expect(h.text()).toContain("Add destination · User");
+    h.tui.press("ctrl+c");
+  } else if (cause === "replace") owner.abort();
+  else h.tui.press("ctrl+c");
+  await running;
+  expect(h.tui.isOpen).toBe(false);
+  expect(await fs.readdir(directory)).toEqual([]);
+  expect(store.snapshot.effective.destinations).toEqual({});
+  expect(h.notify).not.toHaveBeenCalled();
+});
+
+it.each(
+  examples
+    .filter((destination) => destination.provider === "line")
+    .flatMap((destination) => ["recipient ID", "channel access token"].map((field) => ({ destination, field }))),
+)(
+  "recovers from invalid LINE $field edits and failed saves without changing routing or exposing secrets",
+  async ({ destination, field }) => {
+    await saveDestination(store, "saved", destination, owner.signal);
+    const original = await fs.readFile(store.userPath, "utf8");
+    const snapshot = store.snapshot;
+    const h = harness(true);
+    const running = h.run();
+    await h.tui.waitForOpen();
+    await h.choose("Destinations");
+    await h.choose(destination.label);
+    await h.choose("Edit destination");
+    await h.choose(`Replace ${field}`);
+    for (const secret of secrets) expect(h.text()).not.toContain(secret);
+    const invalid = field === "recipient ID" ? "private-secret-invalid" : "private:secret:invalid";
+    await h.input(invalid, true);
+    expect(h.notify).toHaveBeenCalled();
+    expect(store.snapshot).toBe(snapshot);
+    expect(await fs.readFile(store.userPath, "utf8")).toBe(original);
+    await h.choose(`Replace ${field}`);
+    const replacement = field === "recipient ID" ? `R${"c".repeat(32)}` : "recovered-line-secret";
+    await h.input(replacement, true);
+    await h.choose("Change label");
+    await h.input("Recovered");
+    vi.spyOn(fs, "rename").mockRejectedValueOnce(new Error(JSON.stringify(destination)));
+    await h.choose("Save changes");
+    expect(store.snapshot).toBe(snapshot);
+    expect(await fs.readFile(store.userPath, "utf8")).toBe(original);
+    expect(h.text()).toContain("Recovered");
+    await h.choose("Save changes");
+    expect(store.snapshot.effective.destinations.saved).toMatchObject({ label: "Recovered" });
+    expect(store.snapshot.effective.destinations.saved).toMatchObject({
+      [field === "recipient ID" ? "recipientId" : "channelAccessToken"]: replacement,
+    });
+    expect(store.snapshot.effective.targetIds).toEqual(["saved"]);
+    h.tui.press("ctrl+c");
+    await running;
+    const output = JSON.stringify(h.notify.mock.calls);
+    expect(output).not.toContain(invalid);
+    expect(output).not.toContain(replacement);
+    for (const secret of secrets) expect(output).not.toContain(secret);
+  },
+);
+
+it.each(["token", "recipient"])(
+  "recovers from invalid initial LINE %s setup without saving or sending",
+  async (field) => {
+    const destination = examples.find((value) => value.provider === "line");
+    if (destination?.provider !== "line") throw new Error("Missing LINE example");
+    const h = harness(true);
+    const send = vi.spyOn(coordinator, "send");
+    const running = h.run();
+    await h.tui.waitForOpen();
+    await h.choose("Destinations");
+    await h.choose("Add destination");
+    await h.choose("Add LINE destination");
+    const invalid = "private:invalid:value";
+    await h.input(field === "token" ? invalid : destination.channelAccessToken, true);
+    await h.input(field === "recipient" ? invalid : destination.recipientId, true);
+    expect(h.text()).toContain("Add destination · User");
+    expect(h.notify).toHaveBeenCalledOnce();
+    expect(JSON.stringify(h.notify.mock.calls)).not.toContain(invalid);
+    expect(await fs.readdir(directory)).toEqual([]);
+    expect(store.snapshot.effective.destinations).toEqual({});
+    expect(send).not.toHaveBeenCalled();
+    await h.choose("Add LINE destination");
+    await h.input(destination.channelAccessToken, true);
+    await h.input(destination.recipientId, true);
+    await h.choose("Save and use");
+    expect(Object.values(store.snapshot.effective.destinations)).toEqual([destination]);
+    expect(send).not.toHaveBeenCalled();
+    h.tui.press("ctrl+c");
+    await running;
+    for (const secret of secrets) expect(JSON.stringify(h.notify.mock.calls)).not.toContain(secret);
   },
 );
 

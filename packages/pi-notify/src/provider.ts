@@ -49,6 +49,13 @@ export interface BarkDestination {
   deviceKey: string;
 }
 
+export interface LineDestination {
+  provider: "line";
+  label: string;
+  channelAccessToken: string;
+  recipientId: string;
+}
+
 export interface WebhookDestination {
   provider: "webhook";
   label: string;
@@ -64,7 +71,8 @@ export type Destination =
   | PushoverDestination
   | DiscordDestination
   | BarkDestination
-  | WebhookDestination;
+  | WebhookDestination
+  | LineDestination;
 
 export interface BodyEmphasis {
   style: "bold" | "monospace";
