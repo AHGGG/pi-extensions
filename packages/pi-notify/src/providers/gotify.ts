@@ -1,4 +1,4 @@
-import { type DeliveryResult, isObject, type NotificationProvider } from "./provider.js";
+import { type DeliveryResult, isObject, type NotificationProvider } from "../provider.js";
 
 const TIMEOUT_MS = 10_000;
 const MAX_RESPONSE_BYTES = 65_536;

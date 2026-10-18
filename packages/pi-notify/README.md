@@ -99,7 +99,8 @@ Manual aborts and interactive confirmation prompts do not notify. `agent_settled
 ## 🗂️ Package layout
 
 - `src/index.ts`: Pi entrypoint forwarding to `src/notify.ts`.
-- `src/`: session coordination, metadata, settings, menu, provider contract, and Telegram/Gotify transports.
+- `src/`: session coordination, metadata, settings, menu, and provider contract.
+- `src/providers/`: Telegram and Gotify transports.
 - `docs/`: installed settings and behavior reference.
 - `test/`: repository-only deterministic tests.
 

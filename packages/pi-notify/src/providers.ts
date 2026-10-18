@@ -1,6 +1,6 @@
-import { createGotifyProvider } from "./gotify.js";
 import type { Providers } from "./provider.js";
-import { createTelegramProvider } from "./telegram.js";
+import { createGotifyProvider } from "./providers/gotify.js";
+import { createTelegramProvider } from "./providers/telegram.js";
 
 export const providers: Providers = new Map([
   ["telegram", createTelegramProvider()],

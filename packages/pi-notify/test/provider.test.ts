@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { notificationMetadata } from "../src/metadata.js";
 import { type Destination, deliver, type Notification } from "../src/provider.js";
-import { createTelegramProvider } from "../src/telegram.js";
+import { createTelegramProvider } from "../src/providers/telegram.js";
 import { clipText } from "../src/text.js";
 
 export const destination: Destination = {
