@@ -72,6 +72,15 @@ test("registers five fixed main-agent tools with stable schemas and explicit lim
     tools.map((candidate) => candidate.name),
     ["subagent_spawn", "subagent_inspect", "subagent_cancel", "subagent_wait", "subagent_send"],
   );
+  assert.deepEqual(Object.keys(tools[0]?.parameters.properties ?? {}), [
+    "task",
+    "tools",
+    "skills",
+    "extensions",
+    "thinkingLevel",
+    "timeout",
+  ]);
+  assert.equal(Check(tools[0]?.parameters, { task: "No new arguments" }), true);
   assert.equal(tools[0]?.parameters.properties?.task?.maxLength, 50 * 1024);
   assert.equal(tools[0]?.parameters.properties?.tools?.maxItems, 64);
   assert.equal(tools[0]?.parameters.properties?.skills?.maxItems, 16);
@@ -328,7 +337,7 @@ test("spawns jobs with default and explicit tools and thinking levels", async ()
   assert.doesNotMatch(JSON.stringify(completions), /skills|extensions|using-pi-subagents|index\.ts|custom_review/iu);
 });
 
-test("shows active job timing, timeout, and selected tools above the editor", async () => {
+test("shows active job tasks, timing, timeout, and selected tools above the editor", async () => {
   let refreshWidget: (() => void) | undefined;
   const fakeTimer = { unref() {} } as NodeJS.Timeout;
   vi.spyOn(globalThis, "setInterval").mockImplementation((callback, delay) => {
@@ -361,16 +370,22 @@ test("shows active job timing, timeout, and selected tools above the editor", as
 
   const factory = context.widgets.get(SUBAGENT_WIDGET_KEY) as ((_tui: unknown, theme: Theme) => Component) | undefined;
   assert.equal(typeof factory, "function");
-  const lines = factory?.({}, identityTheme()).render(80) ?? [];
-  assert.equal(lines[0], "─".repeat(80));
+  const lines = factory?.({}, identityTheme()).render(120) ?? [];
+  assert.equal(lines[0], "─".repeat(120));
   assert.equal(lines[1], "Subagents · 2 active");
   assert.match(
     lines[2] ?? "",
-    new RegExp(`^▶ ${String(first.details.jobId)} · running · 1m 5s / 2m · tools: read, edit, custom_review$`, "u"),
+    new RegExp(
+      `^▶ ${String(first.details.jobId)} · First · running · 1m 5s / 2m · tools: read, edit, custom_review$`,
+      "u",
+    ),
   );
   assert.match(
     lines[3] ?? "",
-    new RegExp(`^▶ ${String(second.details.jobId)} · running · 0s / no timeout · tools: read, grep, find, ls$`, "u"),
+    new RegExp(
+      `^▶ ${String(second.details.jobId)} · Second · running · 0s / no timeout · tools: read, grep, find, ls$`,
+      "u",
+    ),
   );
   now = 66_000;
   assert.ok(refreshWidget);
@@ -390,8 +405,12 @@ test("shows active job timing, timeout, and selected tools above the editor", as
   assert.ok(clearIntervalSpy.mock.calls.length > 0);
 });
 
-test("does not install the component widget outside TUI mode", async () => {
-  const { context } = await setup({}, {}, { mode: "rpc", hasUI: true });
+test.each(["rpc", "json", "print"])("does not install the component widget in %s mode", async (mode) => {
+  const { mock, context } = await setup({ runChild: waitForCancellation }, {}, { mode, hasUI: mode === "rpc" });
+  const spawned = await spawnJob(mock, context, "No task preview outside the TUI");
+  assert.equal(spawned.details.state, "queued");
+  assert.equal(context.widgets.has(SUBAGENT_WIDGET_KEY), false);
+  await cancelJob(mock, context, String(spawned.details.jobId));
   assert.equal(context.widgets.has(SUBAGENT_WIDGET_KEY), false);
 });
 
