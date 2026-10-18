@@ -14,7 +14,13 @@ export interface GotifyDestination {
   priority?: number;
 }
 
-export type Destination = TelegramDestination | GotifyDestination;
+export interface SlackDestination {
+  provider: "slack";
+  label: string;
+  webhookUrl: string;
+}
+
+export type Destination = TelegramDestination | GotifyDestination | SlackDestination;
 
 export interface BodyEmphasis {
   style: "bold" | "monospace";

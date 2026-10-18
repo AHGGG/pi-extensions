@@ -11,6 +11,7 @@ let directory: string;
 let originalAgentDir: string | undefined;
 let fetcher: ReturnType<typeof vi.fn<typeof fetch>>;
 const token = `123:${"s".repeat(30)}`;
+const webhookUrl = "https://hooks.slack.com/services/T01234567/B01234567/secretWebhookValue";
 beforeEach(async () => {
   directory = await fs.mkdtemp(join(tmpdir(), "pi-notify-life-"));
   originalAgentDir = process.env.PI_CODING_AGENT_DIR;
@@ -112,7 +113,7 @@ it("does not notify intermediate events and uses final error outcome", async () 
   await h.emit("session_shutdown", ctx);
   expect(h.unsubscribe).toHaveBeenCalledTimes(1);
 });
-it("delivers one settled work period to both Telegram and Gotify from the built-in registry", async () => {
+it("delivers one settled work period to Telegram, Gotify, and Slack from the built-in registry", async () => {
   await enable();
   const path = join(directory, "pi-notify.json");
   const settings = JSON.parse(await fs.readFile(path, "utf8"));
@@ -122,14 +123,17 @@ it("delivers one settled work period to both Telegram and Gotify from the built-
     serverUrl: "https://push.example.com/base",
     appToken: "A-token",
   };
-  settings.targetIds.push("gotify");
+  settings.destinations.slack = { provider: "slack", label: "Slack", webhookUrl };
+  settings.targetIds.push("gotify", "slack");
   await fs.writeFile(path, JSON.stringify(settings));
   fetcher.mockImplementation(
     async (url) =>
       new Response(
-        String(url).includes("push.example.com")
-          ? JSON.stringify({ id: 1, appid: 1, message: "accepted", date: "2026-07-06T00:00:00Z" })
-          : '{"ok":true,"result":{}}',
+        url === webhookUrl
+          ? "ok"
+          : String(url).includes("push.example.com")
+            ? JSON.stringify({ id: 1, appid: 1, message: "accepted", date: "2026-07-06T00:00:00Z" })
+            : '{"ok":true,"result":{}}',
       ),
   );
   const h = await setup();
@@ -137,46 +141,58 @@ it("delivers one settled work period to both Telegram and Gotify from the built-
   await h.emit("session_start", ctx);
   await h.emit("before_agent_start", ctx);
   await h.emit("agent_settled", ctx, { aborted: false });
-  await vi.waitFor(() => expect(fetcher).toHaveBeenCalledTimes(2), { interval: 1 });
+  await vi.waitFor(() => expect(fetcher).toHaveBeenCalledTimes(3), { interval: 1 });
   expect(fetcher.mock.calls.map(([url]) => url)).toEqual([
     `https://api.telegram.org/bot${token}/sendMessage`,
     "https://push.example.com/base/message",
+    webhookUrl,
   ]);
   expect(JSON.parse(String(fetcher.mock.calls[1]?.[1]?.body)).message).toContain("Example");
+  expect(
+    JSON.parse(String(fetcher.mock.calls[2]?.[1]?.body)).blocks.some((block: { text: { text: string } }) =>
+      block.text.text.includes("Example"),
+    ),
+  ).toBe(true);
   await h.emit("session_shutdown", ctx);
 });
-it("aborts Gotify delivery on session replacement and shutdown without stale warnings", async () => {
-  await fs.writeFile(
-    join(directory, "pi-notify.json"),
-    JSON.stringify({
-      targetIds: ["gotify"],
-      destinations: {
-        gotify: { provider: "gotify", label: "Gotify", serverUrl: "https://push.example.com", appToken: "A-token" },
-      },
-    }),
-  );
-  fetcher.mockImplementation(
-    async (_url, init) =>
-      new Promise((_resolve, reject) => {
-        init?.signal?.addEventListener("abort", () => reject(new Error("A-token")), { once: true });
+it.each(["gotify", "slack"])(
+  "aborts %s delivery on session replacement and shutdown without stale warnings",
+  async (provider) => {
+    await fs.writeFile(
+      join(directory, "pi-notify.json"),
+      JSON.stringify({
+        targetIds: ["gotify"],
+        destinations: {
+          gotify:
+            provider === "gotify"
+              ? { provider: "gotify", label: "Gotify", serverUrl: "https://push.example.com", appToken: "A-token" }
+              : { provider: "slack", label: "Slack", webhookUrl },
+        },
       }),
-  );
-  const h = await setup();
-  const ctx = h.context("rpc");
-  await h.emit("session_start", ctx);
-  for (const boundary of ["session_start", "session_shutdown"]) {
-    await h.emit("before_agent_start", ctx);
-    await h.emit("agent_settled", ctx, { aborted: false });
-    await vi.waitFor(() => expect(fetcher).toHaveBeenCalledTimes(boundary === "session_start" ? 1 : 2), {
-      interval: 1,
-    });
-    const requestSignal = fetcher.mock.calls.at(-1)?.[1]?.signal;
-    expect(requestSignal?.aborted).toBe(false);
-    await h.emit(boundary, ctx);
-    expect(requestSignal?.aborted).toBe(true);
-  }
-  expect(h.notifyUI).not.toHaveBeenCalled();
-});
+    );
+    fetcher.mockImplementation(
+      async (_url, init) =>
+        new Promise((_resolve, reject) => {
+          init?.signal?.addEventListener("abort", () => reject(new Error(webhookUrl)), { once: true });
+        }),
+    );
+    const h = await setup();
+    const ctx = h.context("rpc");
+    await h.emit("session_start", ctx);
+    for (const boundary of ["session_start", "session_shutdown"]) {
+      await h.emit("before_agent_start", ctx);
+      await h.emit("agent_settled", ctx, { aborted: false });
+      await vi.waitFor(() => expect(fetcher).toHaveBeenCalledTimes(boundary === "session_start" ? 1 : 2), {
+        interval: 1,
+      });
+      const requestSignal = fetcher.mock.calls.at(-1)?.[1]?.signal;
+      expect(requestSignal?.aborted).toBe(false);
+      await h.emit(boundary, ctx);
+      expect(requestSignal?.aborted).toBe(true);
+    }
+    expect(h.notifyUI).not.toHaveBeenCalled();
+  },
+);
 it("suppresses aborts even when final assistant error remains after retry cancellation", async () => {
   await enable();
   const h = await setup();

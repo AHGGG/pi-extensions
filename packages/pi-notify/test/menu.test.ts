@@ -7,8 +7,9 @@ import { createTuiHarness } from "@narumitw/pi-tui-kit/testing";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { Coordinator } from "../src/coordinator.js";
 import { showNotifyMenu } from "../src/menu.js";
-import type { GotifyDestination } from "../src/provider.js";
+import type { GotifyDestination, SlackDestination } from "../src/provider.js";
 import { createGotifyProvider } from "../src/providers/gotify.js";
+import { createSlackProvider } from "../src/providers/slack.js";
 import { createTelegramProvider } from "../src/providers/telegram.js";
 import { providers } from "../src/providers.js";
 import { SettingsStore, saveDestination, savePolicy } from "../src/settings.js";
@@ -19,6 +20,8 @@ let owner: AbortController;
 let coordinator: Coordinator;
 const token = `123:${"s".repeat(30)}`;
 const gotifyToken = "gotify-application-secret";
+const webhookUrl = "https://hooks.slack.com/services/T01234567/B01234567/secretWebhookValue";
+const slackDestination = (): SlackDestination => ({ provider: "slack", label: "Slack notifications", webhookUrl });
 const gotifyDestination = (): GotifyDestination => ({
   provider: "gotify",
   label: "Server",
@@ -663,42 +666,55 @@ it("keeps the Project inheritance action distinct from a destination named inher
   h.tui.press("ctrl+c");
   await running;
 });
-it("renders Gotify destination review through RPC without exposing secrets or using custom UI", async () => {
-  await saveDestination(store, "server", gotifyDestination(), owner.signal);
-  const routes = ["Destinations", "Server", "Edit destination", "Back", "Back", "Back", "Done"];
-  const titles: string[] = [];
-  const select = vi.fn(async (title: string, choices: string[]) => {
-    titles.push(title);
-    const route = routes.shift();
-    return choices.find((choice) => choice.startsWith(route ?? "missing route"));
-  });
-  const custom = vi.fn();
-  const ctx = {
-    mode: "rpc",
-    hasUI: true,
-    ui: { select, custom, notify: vi.fn() },
-  } as unknown as ExtensionCommandContext;
-  await showNotifyMenu(ctx, {
-    store,
-    coordinator,
-    providers,
-    signal: owner.signal,
-    isCurrent: () => !owner.signal.aborted,
-  });
-  expect(custom).not.toHaveBeenCalled();
-  expect(routes).toEqual([]);
-  expect(titles.join("\n")).toContain("Review Gotify destination · User");
-  expect(titles.join("\n")).toContain("Application token: configured (hidden)");
-  expect(titles.join("\n")).toContain("Server: https://notify.example/gotify");
-  expect(titles.join("\n")).not.toContain(gotifyToken);
-});
-it.each(["telegram", "gotify"])("hard-cancels an active %s test request and drains the loader", async (provider) => {
+it.each(["gotify", "slack"])(
+  "renders %s review through RPC without exposing secrets or using custom UI",
+  async (provider) => {
+    const destination = provider === "gotify" ? gotifyDestination() : slackDestination();
+    await saveDestination(store, "server", destination, owner.signal);
+    const routes = ["Destinations", destination.label, "Edit destination", "Back", "Back", "Back", "Done"];
+    const titles: string[] = [];
+    const select = vi.fn(async (title: string, choices: string[]) => {
+      titles.push(title);
+      const route = routes.shift();
+      return choices.find((choice) => choice.startsWith(route ?? "missing route"));
+    });
+    const custom = vi.fn();
+    const ctx = {
+      mode: "rpc",
+      hasUI: true,
+      ui: { select, custom, notify: vi.fn() },
+    } as unknown as ExtensionCommandContext;
+    await showNotifyMenu(ctx, {
+      store,
+      coordinator,
+      providers,
+      signal: owner.signal,
+      isCurrent: () => !owner.signal.aborted,
+    });
+    expect(custom).not.toHaveBeenCalled();
+    expect(routes).toEqual([]);
+    expect(titles.join("\n")).toContain(`Review ${provider === "gotify" ? "Gotify" : "Slack"} destination · User`);
+    expect(titles.join("\n")).toContain(
+      provider === "gotify" ? "Application token: configured (hidden)" : "Webhook URL: configured (hidden)",
+    );
+    if (provider === "gotify") expect(titles.join("\n")).toContain("Server: https://notify.example/gotify");
+    expect(titles.join("\n")).not.toContain(gotifyToken);
+    expect(titles.join("\n")).not.toContain(webhookUrl);
+  },
+);
+it.each(
+  ["telegram", "gotify", "slack"].flatMap((provider) =>
+    ["ctrl+c", "dispose", "replace"].map((cause) => [provider, cause]),
+  ),
+)("cancels an active %s test request on %s and drains the loader", async (provider, cause) => {
   await saveDestination(
     store,
     "one",
     provider === "telegram"
       ? { provider: "telegram", label: "Personal", botToken: token, chatId: "123" }
-      : gotifyDestination(),
+      : provider === "gotify"
+        ? gotifyDestination()
+        : slackDestination(),
     owner.signal,
   );
   let requestSignal: AbortSignal | undefined;
@@ -716,10 +732,186 @@ it.each(["telegram", "gotify"])("hard-cancels an active %s test request and drai
   await h.choose(0);
   await h.transition(() => h.tui.press("tui.select.confirm"));
   await vi.waitFor(() => expect(requestSignal).toBeDefined(), { interval: 1 });
-  h.tui.press("ctrl+c");
+  if (cause === "dispose") {
+    await h.transition(() => h.tui.dispose());
+    expect(requestSignal?.aborted).toBe(true);
+    expect(h.notify).not.toHaveBeenCalled();
+    h.tui.press("ctrl+c");
+  } else if (cause === "replace") owner.abort();
+  else h.tui.press("ctrl+c");
   await running;
   expect(requestSignal?.aborted).toBe(true);
   expect(h.tui.isOpen).toBe(false);
+});
+it.each([`${webhookUrl} `, `${webhookUrl}?secret=invalid`])(
+  "rejects invalid Slack setup without exposing input: %s",
+  async (value) => {
+    const h = harness(true);
+    const running = h.run();
+    await h.tui.waitForOpen();
+    await h.choose(0);
+    await h.choose(2);
+    h.tui.send(`\x1b[200~${value}\x1b[201~`);
+    await h.transition(() => h.tui.press("tui.input.submit"));
+    expect(h.tui.render().join("\n")).toContain("Destinations · User");
+    expect(h.tui.render().join("\n")).not.toContain(webhookUrl);
+    expect(JSON.stringify(h.notify.mock.calls)).not.toContain(webhookUrl);
+    expect(store.snapshot.effective.destinations).toEqual({});
+    h.tui.press("ctrl+c");
+    await running;
+    expect(await fs.readdir(directory)).toEqual([]);
+  },
+);
+it.each(["use", "save only"])("adds a masked Slack destination with explicit selection: %s", async (selection) => {
+  const h = harness(true);
+  const running = h.run();
+  await h.tui.waitForOpen();
+  await h.choose(0);
+  await h.choose(2);
+  expect(h.tui.render().join("\n")).toContain("Slack webhook URL");
+  h.tui.send(`\x1b[200~${webhookUrl}X\x1b[201~`);
+  h.tui.send("\x7f");
+  expect(h.tui.render().join("\n")).not.toContain(webhookUrl);
+  await h.transition(() => h.tui.press("tui.input.submit"));
+  const review = h.tui.resize({ width: 120, rows: 40 }).join("\n");
+  expect(review).toContain("Review Slack destination");
+  expect(review).toContain("Label: Slack notifications");
+  expect(review).toContain("Webhook URL: configured (hidden)");
+  expect(review).not.toMatch(/hooks\.slack|secretWebhook|priority|chat ID|application token/);
+  expect(await fs.readdir(directory)).toEqual([]);
+  await h.choose(selection === "use" ? 0 : 3);
+  const [id, destination] = Object.entries(store.snapshot.effective.destinations)[0] ?? [];
+  expect(destination).toEqual(slackDestination());
+  expect(store.snapshot.effective.targetIds).toEqual(selection === "use" ? [id] : []);
+  h.tui.press("ctrl+c");
+  await running;
+});
+it.each(["cancel", "save"])("edits Slack transactionally and preserves selection: %s", async (completion) => {
+  await saveDestination(store, "slack", slackDestination(), owner.signal, false);
+  await savePolicy(store, "user", "enabled", false, owner.signal);
+  await savePolicy(store, "project", "targetIds", [], owner.signal);
+  const original = await fs.readFile(store.userPath, "utf8");
+  const replacement = webhookUrl.replace("secretWebhookValue", "replacementSecret");
+  const h = harness(true);
+  const running = h.run();
+  await h.tui.waitForOpen();
+  await h.choose(0);
+  await h.choose(0);
+  await h.choose(0);
+  await h.choose(1);
+  h.tui.send(`\x1b[200~${webhookUrl}?secret=invalid\x1b[201~`);
+  await h.transition(() => h.tui.press("tui.input.submit"));
+  expect(store.snapshot.effective.destinations.slack).toEqual(slackDestination());
+  await h.choose(1);
+  h.tui.send(`\x1b[200~${replacement}\x1b[201~`);
+  expect(h.tui.render().join("\n")).not.toContain(replacement);
+  await h.transition(() => h.tui.press("tui.input.submit"));
+  await h.choose(2);
+  h.tui.send("\x15");
+  h.tui.send("\x1b[200~WorkX\x1b[201~");
+  h.tui.send("\x7f");
+  await h.transition(() => h.tui.press("tui.input.submit"));
+  expect(await fs.readFile(store.userPath, "utf8")).toBe(original);
+  const review = h.tui.resize({ width: 120, rows: 40 }).join("\n");
+  expect(review).toContain("Label: Work");
+  expect(review).toContain("Save keeps your current notification selection.");
+  expect(review).not.toMatch(/hooks\.slack|replacementSecret|secretWebhook/);
+  if (completion === "save") {
+    vi.spyOn(fs, "rename").mockRejectedValueOnce(new Error(replacement));
+    h.tui.press("home");
+    await h.transition(() => h.tui.press("tui.select.confirm"));
+    expect(await fs.readFile(store.userPath, "utf8")).toBe(original);
+    expect(store.snapshot.effective.destinations.slack).toEqual(slackDestination());
+    await h.choose(0);
+  }
+  h.tui.press("ctrl+c");
+  await running;
+  expect(store.snapshot.effective.destinations.slack).toEqual(
+    completion === "save" ? { provider: "slack", label: "Work", webhookUrl: replacement } : slackDestination(),
+  );
+  expect(store.snapshot.effective.enabled).toBe(false);
+  expect(store.snapshot.user.targetIds ?? []).toEqual([]);
+  expect(store.snapshot.project.targetIds).toEqual([]);
+  expect(JSON.stringify(h.notify.mock.calls)).not.toMatch(/hooks\.slack|replacementSecret|secretWebhook/);
+});
+it.each(["secret", "review", "dispose", "replace"])("cancels Slack setup at %s without saving", async (stage) => {
+  const h = harness(true);
+  const running = h.run();
+  await h.tui.waitForOpen();
+  await h.choose(0);
+  await h.choose(2);
+  h.tui.send(`\x1b[200~${webhookUrl}\x1b[201~`);
+  if (stage === "review") await h.transition(() => h.tui.press("tui.input.submit"));
+  if (stage === "dispose") {
+    await h.transition(() => h.tui.dispose());
+    expect(h.tui.render().join("\n")).toContain("Destinations · User");
+    h.tui.press("ctrl+c");
+  } else if (stage === "replace") owner.abort();
+  else h.tui.press("ctrl+c");
+  await running;
+  expect(h.tui.isOpen).toBe(false);
+  expect(await fs.readdir(directory)).toEqual([]);
+});
+it("redacts Slack routing, previews metadata, and sends only after confirmation", async () => {
+  await saveDestination(store, "addSlack", slackDestination(), owner.signal);
+  const provider = providers.get("slack");
+  if (!provider) throw new Error("Missing Slack provider");
+  const fetcher = vi.fn<typeof fetch>().mockImplementation(async () => new Response("ok"));
+  vi.spyOn(provider, "send").mockImplementation(createSlackProvider(fetcher).send);
+  const h = harness();
+  const running = h.run();
+  await h.tui.waitForOpen();
+  await h.choose(0);
+  expect(h.tui.render().join("\n")).toContain("Slack · webhook configured");
+  await h.choose(0); // Saved ID addSlack does not invoke the add action.
+  expect(h.tui.render().join("\n")).toContain("Slack destination · User");
+  await h.transition(() => h.tui.press("tui.select.cancel"));
+  await h.transition(() => h.tui.press("tui.select.cancel"));
+  await h.choose(3);
+  expect(h.tui.render().join("\n")).toContain("Slack · webhook configured");
+  expect(h.tui.render().join("\n")).not.toContain(webhookUrl);
+  await h.transition(() => h.tui.press("tui.select.cancel"));
+  await h.choose(1);
+  await h.choose(0);
+  const preview = h.tui.resize({ width: 512, rows: 50 }).join("\n");
+  expect(preview).toContain("Send test to Slack");
+  expect(preview).not.toContain(webhookUrl);
+  expect(fetcher).not.toHaveBeenCalled();
+  await h.transition(() => h.tui.press("tui.select.confirm"));
+  await vi.waitFor(() => expect(h.notify).toHaveBeenCalledWith("Slack accepted the test notification.", "info"), {
+    interval: 1,
+  });
+  h.tui.press("ctrl+c");
+  await running;
+  expect(fetcher).toHaveBeenCalledTimes(1);
+  expect(fetcher.mock.calls[0]?.[0]).toBe(webhookUrl);
+  const payload = JSON.parse(String(fetcher.mock.calls[0]?.[1]?.body));
+  expect(
+    payload.blocks.every(
+      (block: { text: { type: string; text: string } }) =>
+        block.text.type === "plain_text" && preview.includes(block.text.text),
+    ),
+  ).toBe(true);
+  expect(JSON.stringify(payload)).not.toContain(webhookUrl);
+});
+it("removes Slack only after confirmation and blocks current Project selections", async () => {
+  await saveDestination(store, "slack", slackDestination(), owner.signal);
+  await savePolicy(store, "project", "targetIds", ["slack"], owner.signal);
+  const h = harness();
+  const running = h.run();
+  await h.tui.waitForOpen();
+  await h.choose(0);
+  await h.choose(0);
+  await h.choose(1);
+  expect(store.snapshot.effective.destinations.slack).toEqual(slackDestination());
+  await h.transition(() => h.tui.press("tui.select.confirm"));
+  expect(store.snapshot.effective.destinations.slack).toEqual(slackDestination());
+  await savePolicy(store, "project", "targetIds", [], owner.signal);
+  await h.choose(0);
+  expect(store.snapshot.effective.destinations).toEqual({});
+  expect(store.snapshot.user.targetIds).toEqual([]);
+  h.tui.press("ctrl+c");
+  await running;
 });
 it.each(["abort", "dispose"])("releases the menu on %s", async (cause) => {
   const h = harness();
