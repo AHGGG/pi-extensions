@@ -14,7 +14,7 @@ Use `/notify` for setup or edit the canonical user JSON file. Settings load on s
 
 Destination IDs contain 1–64 ASCII letters, digits, underscores, or hyphens, starting with a letter or digit; `constructor`, `prototype`, and `__proto__` are reserved. The menu creates IDs automatically.
 
-Telegram setup requires a bot token and chat ID; Gotify setup requires an application token and server URL; Slack setup requires a complete Incoming Webhook URL. The menu generates a label and opens a review for edits before saving. Editing an existing destination opens the same review with its current values. Destination changes take effect only after confirmation. For a new destination, Save and use adds it to User `targetIds` in the same atomic save; Save only stores it without selecting it. Editing an existing destination preserves its selection state. Explicit Project selections and saved `enabled: false` values are unchanged. Automatic notifications default to On; Off pauses automatic delivery but still allows manual tests. No delivery occurs without a selected destination.
+Telegram setup requires a bot token and chat ID; Gotify setup requires an application token and server URL; Slack setup requires a complete Incoming Webhook URL. The five additional providers use the [fields below](#new-provider-fields). Add destinations through the provider-choice screen in `/notify`. The menu generates a label and opens a review for edits before saving. Editing an existing destination opens the same review with its current values. Destination changes take effect only after confirmation. For a new destination, Save and use adds it to User `targetIds` in the same atomic save; Save only stores it without selecting it. Editing an existing destination preserves its selection state. Explicit Project selections and saved `enabled: false` values are unchanged. Automatic notifications default to On; Off pauses automatic delivery but still allows manual tests. No delivery occurs without a selected destination.
 
 Each Telegram destination has `provider: "telegram"`, a nonempty `label` of at most 128 characters, `botToken`, a numeric string `chatId`, and optional positive safe-integer `messageThreadId`. A group or supergroup ID can be negative. Store IDs as strings, not JSON numbers. Forum topic IDs use Telegram's `message_thread_id` field. Other Telegram chat products with additional required fields are not supported.
 
@@ -37,7 +37,7 @@ Each Gotify destination has `provider: "gotify"`, a nonempty `label` of at most 
 
 Each Slack destination has `provider: "slack"`, a nonempty `label` of at most 128 characters, and `webhookUrl`. The complete URL is a credential and belongs only in the canonical User file. The channel comes from the webhook installation, not the label or a settings field. URLs must be at most 2048 characters and match `https://hooks.slack.com/services/T[A-Z0-9]+/B[A-Z0-9]+/[A-Za-z0-9]+` exactly: a `T` workspace segment, a `B` installation segment, and an alphanumeric secret. Ports, URL credentials, query strings, fragments, redirects, alternate hosts, whitespace, control characters, backslashes, and encoded or normalized URL alternatives are rejected. GovSlack is not supported.
 
-A User file can select all three providers together. For example, with existing `personal` Telegram and `gotify` destinations, add a Slack destination and select their IDs:
+A User file can select all eight providers together. For example, with existing `personal` Telegram and `gotify` destinations, add a Slack destination and select their IDs:
 
 ```json
 {
@@ -58,6 +58,133 @@ Resolve defaults, User fields, then trusted Project overrides. Project arrays re
 
 Project Settings show inherited values and allow restoring inheritance. Removing a destination clears its User selection atomically, but is blocked if the current trusted Project explicitly selects it. Change that Project selection first. Other projects are not edited; repair their selected IDs before enabling notifications there.
 
+## New provider fields
+
+All destinations require `provider` and a nonempty `label` of at most 128 characters. Destinations, addresses, and credentials belong only in `<getAgentDir()>/pi-notify.json`, normally `~/.pi/agent/pi-notify.json`. Trusted Project files at `<workspace>/.pi/pi-notify.json` can change policy or select existing User destination IDs, but cannot define endpoints or secrets.
+
+| Provider | Required fields besides `provider` and `label` | Optional fields |
+| --- | --- | --- |
+| `ntfy` | `serverUrl`, `topic` | `accessToken`, `priority` |
+| `pushover` | `appToken`, `userKey` | None |
+| `discord` | `webhookUrl` | None |
+| `bark` | `serverUrl`, `deviceKey` | None |
+| `webhook` | `webhookUrl` | `bearerToken` |
+
+For ntfy and Bark, enter the server base URL including any reverse-proxy base path. Do not append the topic or `/push`. Generic `webhookUrl` is the complete receiving endpoint. These configurable URLs must be absolute HTTP(S) URLs, at most 2048 characters both before and after normalization. URL user information, whitespace, control characters, encoded controls, backslashes (including encoded backslashes), malformed percent escapes, query strings, and fragments are rejected. Bark server bases remove trailing slashes before appending `/push`. ntfy publish URLs and Generic webhook endpoints preserve trailing slashes because they can select a different route. Literal or encoded dot segments and noncanonical numeric IPv4 aliases are rejected instead of silently selecting a different path or host. Prefer HTTPS; HTTP does not encrypt credentials or metadata. Explicit local/private addresses are allowed and can reach the Pi host's network. Use only trusted endpoints.
+
+The ntfy `accessToken`, Bark `deviceKey`, and Generic `bearerToken` each have a local limit of 1–512 printable ASCII characters without spaces. This is a header/key safety limit, not a promise that a service accepts every such value. Omit optional credentials in JSON; in review, leave the replacement input empty to clear them. Empty strings are not stored credentials. ntfy and Generic webhooks support only anonymous or Bearer authentication, not Basic, URL credentials, arbitrary headers, or query-based authentication. No custom templates, scripts, or extension-specific environment variables are supported.
+
+### ntfy
+
+`topic` must match `[-_A-Za-z0-9]{1,64}`. Reserved names are `docs`, `static`, `file`, `app`, `metrics`, `account`, `settings`, `signup`, `login`, and `v1`; the check is case-sensitive. A self-hosted server can forbid additional names. `priority`, when present, must be an integer from 1 to 5; an omitted or cleared priority uses the server default.
+
+The transport sends JSON directly to the normalized server base URL, with `topic`, `title`, `message`, and optional `priority`. A configured `accessToken` is sent only as a Bearer header. Title and body are clipped to 1024 and 4096 UTF-8 bytes. The complete encoded JSON request is also capped at 8192 bytes; escaping can reduce the available body length. Only HTTP 200 with a message object counts as accepted. That object must have a nonempty string `id`, positive safe-integer `time`, `event: "message"`, the expected `topic`, and a string `message`.
+
+Topic secrecy is not access control. Without server authentication and topic permissions, public topics can expose metadata and allow unwanted publishers. An ntfy access token has the user's full access; it is not a topic-scoped credential. Configure server ACLs, use a suitably restricted user, and protect the token.
+
+### Pushover
+
+`appToken` and `userKey` must each contain exactly 30 ASCII alphanumeric characters. Pushover uses the fixed HTTPS endpoint `https://api.pushover.net/1/messages.json`; no server URL is configurable. It sends JSON fields `token`, `user`, `title`, `message`, and `priority: 0`. There is no emergency priority, acknowledgement, retry parameter, or configurable priority.
+
+The local title and body caps are 250 and 1024 UTF-16 code units. These are conservative bounds for the service's character limits; astral characters use two code units. Only HTTP 200 with numeric JSON `status: 1` counts as accepted.
+
+### Discord
+
+`webhookUrl` must use one of these exact official endpoint shapes, with a positive decimal webhook ID (no leading zero, at most 20 digits and at most 18446744073709551615) and a nonempty alphanumeric, underscore, or hyphen token:
+
+```text
+https://discord.com/api/webhooks/{id}/{token}
+https://discord.com/api/v10/webhooks/{id}/{token}
+```
+
+The complete URL is a credential. Alternate hosts, ports, URL credentials, queries, fragments, encoded or normalized alternatives, controls, and backslashes are rejected. The transport adds `wait=true` internally, but configured URLs must have no query string.
+
+Discord receives title and body as `content`, clipped to 2000 UTF-16 code units. Requests set `allowed_mentions: { "parse": [] }` and `flags: 4` (`SUPPRESS_EMBEDS`), even for direct provider callers. This prevents mention parsing and link previews; it does not suppress notifications. A descriptive User-Agent identifies the integration. Only HTTP 200 with a Message response containing valid positive decimal `id` and `channel_id` values under the same ID bound and an integer `type` counts as accepted. Normal text-channel webhooks are supported; forum/media channels and thread selection are not.
+
+### Bark
+
+`serverUrl` can be `https://api.day.app` or a self-hosted server base, including a reverse-proxy path. JSON is sent to `<serverUrl>/push` with `device_key`, `title`, and `body`. The key and message are never placed in a URL path or query. The device key is the only supported Bark credential; there is no Bark bearer field. Servers that require Bark's native Basic authentication are not supported. A separate proxy is outside this integration's contract.
+
+Local title and body caps are 256 and 2048 UTF-8 bytes. The encoded `{title,body}` object is capped at 3000 bytes to leave space within Apple's 4096-byte APNs envelope. These are conservative local limits, not universal server limits. Only HTTP 200 with numeric JSON `code: 200` counts as accepted. JSON delivery avoids URL exposure but does not prevent the official Bark server from logging request bodies, including device keys and metadata.
+
+### Generic webhook
+
+`webhookUrl` is masked in full, even without a token. Optional `bearerToken` is sent as `Authorization: Bearer <token>`. The fixed JSON payload contains only:
+
+```json
+{
+  "id": "notification-id",
+  "title": "Pi notification title",
+  "body": "Notification metadata",
+  "settledAt": 1792281600000
+}
+```
+
+`settledAt` is Unix epoch milliseconds, not seconds. No internal emphasis, destination credentials, or configurable fields are added. Any HTTP 2xx response counts as endpoint acceptance, including empty or non-JSON responses, after the bounded response read completes. This is not proof of downstream delivery. An oversized or stalled 2xx response body can still fail with `response` or `timeout`.
+
+### Mixed User settings example
+
+Replace placeholders with real values. `appToken` and `userKey` must meet the Pushover length rule; the Discord URL must be copied from Discord. This fragment does not replace existing Telegram, Gotify, Slack, or unknown settings. Omit optional tokens when using anonymous delivery.
+
+```json
+{
+  "targetIds": ["ntfy", "pushover", "discord", "bark", "home-hook"],
+  "destinations": {
+    "ntfy": {
+      "provider": "ntfy",
+      "label": "Personal ntfy",
+      "serverUrl": "https://ntfy.sh",
+      "topic": "replace-with-your-topic",
+      "accessToken": "<access-token>",
+      "priority": 3
+    },
+    "pushover": {
+      "provider": "pushover",
+      "label": "Personal Pushover",
+      "appToken": "<30-character-application-token>",
+      "userKey": "<30-character-user-key>"
+    },
+    "discord": {
+      "provider": "discord",
+      "label": "Build channel",
+      "webhookUrl": "https://discord.com/api/webhooks/<id>/<token>"
+    },
+    "bark": {
+      "provider": "bark",
+      "label": "Personal Bark",
+      "serverUrl": "https://api.day.app",
+      "deviceKey": "<device-key>"
+    },
+    "home-hook": {
+      "provider": "webhook",
+      "label": "Home automation",
+      "webhookUrl": "https://automation.example.com/pi-notify",
+      "bearerToken": "<bearer-token>"
+    }
+  }
+}
+```
+
+## Provider setup and revocation
+
+Use `/notify` to add a destination, complete its review, and choose Save only or Save and use. Labels are generated automatically and can be changed. Secret inputs are masked; complete Discord and Generic webhook URLs remain hidden in lists, reviews, tests, Status, and errors. Optional ntfy tokens and priority, and Generic tokens, can be cleared in review. Send test previews the metadata and requires confirmation before an external request. Unsaved cancellation does not save a draft; cancelling delivery cannot recall an accepted message.
+
+### Telegram and Gotify
+
+For Telegram, create a bot with [BotFather](https://t.me/BotFather), then start a private conversation with it. After sending a message, obtain the numeric chat ID through the [Bot API](https://core.telegram.org/bots/api#getupdates). Stop other update consumers first; an active webhook prevents `getUpdates` from working. For groups, add the bot and permit it to send messages. Enter the bot token in the masked input, then the chat ID. Set an optional forum topic in review. Revoke an exposed token through BotFather before replacing it.
+
+For Gotify, create an application in the server's Apps tab. Enter its application token in the masked input and the server base URL, including any reverse-proxy path, not `/message`. Review the optional priority. See [Gotify setup](https://gotify.net/docs/pushmsg). Revoke an exposed application token through the server and replace it in User settings.
+
+### ntfy, Pushover, Discord, Bark, and Generic webhook
+
+1. For ntfy, subscribe to a topic with your client and configure server authentication and topic ACLs before sending private metadata. Use `https://ntfy.sh` or your own server base. Add the topic, then review the server, optional access token, and optional priority. Revoke exposed tokens in the ntfy account/server and replace them; changing a public topic name does not establish access control.
+2. For Pushover, register an application in your [Pushover account](https://pushover.net/), obtain its application/API token and your user key, and enter both in the masked inputs. Revoke or reset exposed credentials through Pushover account/application management before replacing them; remove an application if required to invalidate its token.
+3. For Discord, create a webhook for a normal text channel through channel or server integration settings, then paste the complete webhook URL into the masked input. Channel/server permissions can restrict creation. Delete a compromised webhook in Discord and create a replacement; changing a label does not change its channel or revoke its URL.
+4. For Bark, install/register the Bark client, copy its device key, and use `https://api.day.app` or your self-hosted server base. Enter the device key in the masked input. Reset or re-register the device key through the client/server if exposed; verify that the old key no longer works before relying on the replacement.
+5. For a Generic webhook, provision a trusted receiver for the fixed payload and, if required, a Bearer token. Enter the complete endpoint URL and optional token in masked inputs. Revoke/rotate the token at the receiver, or disable/replace a secret endpoint URL if exposed.
+
+Keep secrets out of Project files, source control, and Pi chat. Prefer HTTPS and confirm replacements with Send test. Removing or editing a destination does not revoke its old credential. JavaScript memory is not secure credential storage. See the separate [Slack workflow](#slack-setup-and-revocation) for Slack installation and revocation.
+
 ## Slack setup and revocation
 
 1. Create or open an app in [Slack app management](https://api.slack.com/apps) for the commercial workspace that must receive notifications. Workspace policy can require administrator approval.
@@ -73,9 +200,17 @@ Treat an exposed URL as a compromised credential. Revoke or remove that webhook 
 
 Settings operations are ordered within the process, including across store instances for the same user path. Reads wait for pending writes. This is not a cross-process lock: simultaneous menu edits in different Pi processes can conflict.
 
-Writes read the latest valid document, preserve unrelated fields and destination fields, and publish using a same-directory temporary file plus rename. Unknown provider data is retained during unrelated edits. Malformed JSON blocks writes instead of being overwritten with defaults. An existing non-object `destinations` value blocks destination changes. A non-object destination entry cannot be replaced with a new object. Repair these stored structures first; destination setup does not coerce them to empty defaults. A failed save keeps the previous file and effective state; the menu restores the previous displayed setting. A failed operation does not poison subsequent operations. Reload and shutdown await queued settings operations.
+Writes read the latest valid document, preserve unrelated fields and destination fields, and publish using a same-directory temporary file plus rename. User settings writes use private `0600` permissions on POSIX, including replacement files. Unknown provider data is retained during unrelated edits. Malformed JSON blocks writes instead of being overwritten with defaults. An existing non-object `destinations` value blocks destination changes. A non-object destination entry cannot be replaced with a new object. Repair these stored structures first; destination setup does not coerce them to empty defaults. A failed save keeps the previous file and effective state; the menu restores the previous displayed setting. A failed operation does not poison subsequent operations. Reload and shutdown await queued settings operations.
 
 If a file is malformed, repair it manually before saving. Disable notifications in every effective scope to stop new attempts and cancel pending reminders. Unloading the extension aborts owned delivery work, but cannot recall accepted messages. Revoke exposed tokens or Slack webhooks before replacing them in User settings.
+
+### Reverting to a version without the new providers
+
+1. While the new build is still installed, remove the IDs of destinations whose provider is `ntfy`, `pushover`, `discord`, `bark`, or `webhook` from explicit Project selections in every affected project. Clear those overrides or select destinations the older version supports; Project arrays replace User selections.
+2. Remove those IDs from User selections and remove every saved destination with one of these five provider IDs, including unselected destinations. Removal clears User selection atomically, but the current trusted Project must not explicitly select the destination.
+3. Preserve existing Telegram, Gotify, Slack, and unknown fields. Confirm all saved destinations and effective selections are supported by the older version, then install it and reload.
+
+Selections alone are insufficient: unsupported saved destinations disable routing even when unselected. No migration is needed for existing destinations. Revoke discarded credentials at each service separately; removing JSON does not revoke them. If the older version also lacks Slack, follow the Slack steps below.
 
 ### Reverting to a version without Slack
 
@@ -103,9 +238,9 @@ The coordinator observes `before_agent_start`, with `agent_start` as a fallback,
 
 Metadata is collected at settlement through bounded Git subprocesses. Missing Git information is omitted. Pending metadata work is cancelled with its reminder. Once a delivery attempt starts, new user work does not cancel it; session replacement, reload, shutdown, or explicit test cancellation does. Late results cannot replace newer per-destination status. Test delivery bypasses automatic enablement and inactivity, requires explicit confirmation, and never changes automatic arming or history.
 
-The provider contract validates destinations and sends a provider-neutral notification with a cancellation signal. Providers do not read sessions, change settings, schedule timers, or decide notification policy. The built-in provider map contains Telegram, Gotify, and Slack. Transport results distinguish accepted, failed with a safe code, and cancelled; retry-after is diagnostic, not an automatic retry instruction.
+The provider contract validates destinations and sends a provider-neutral notification with a cancellation signal. Providers do not read sessions, change settings, schedule timers, or decide notification policy. The built-in provider map contains Telegram, Gotify, Slack, ntfy, Pushover, Discord, Bark, and Generic webhook. Transport results distinguish accepted, failed with a safe code, and cancelled; retry-after is diagnostic, not an automatic retry instruction.
 
-All three transports reject redirects, use a 10-second timeout covering the request and response read, make one attempt, and cap success response reads at 65536 bytes. Errors expose only fixed codes, never tokens, request URLs, response bodies, or raw transport exceptions.
+All transports reject redirects, use a 10-second deadline covering the request and response read, make one attempt, and cap success response reads at 65,536 bytes. Errors expose only fixed codes, never tokens, request URLs, response bodies, or raw transport exceptions. The five new providers report HTTP 429 as `rate-limit`, with a positive integer `Retry-After` in seconds when available; fractional Discord retry values are not displayed. Retry-after is diagnostic only. Service acceptance does not prove device receipt, downstream delivery, or reading. Text clipping preserves Unicode code points; the [provider limits](#new-provider-fields) specify each byte or UTF-16 budget.
 
 Telegram requests use its fixed HTTPS origin and do not enable paid broadcasts. Text is clipped to at most 4096 UTF-16 code units without splitting a Unicode code point. Telegram's JSON `ok` field and HTTP status are both checked.
 
@@ -129,6 +264,11 @@ Slack combines the title and body into one section block with a `plain_text` tex
 - [Slack message formatting](https://docs.slack.dev/messaging/formatting-message-text/#escaping): escaping control characters and disabling markup with `plain_text` and `mrkdwn: false`; desktop notifications can extract block text, while mobile notifications use top-level text.
 - [Slack message posting](https://docs.slack.dev/reference/methods/chat.postMessage/): notification/screen-reader fallback text, parsing, link unfurling, and text limits; Incoming Webhooks follow Slack's messaging format.
 - [Slack rate limits](https://docs.slack.dev/apis/web-api/rate-limits/): Incoming Webhooks, HTTP 429, and `Retry-After` seconds.
+- [ntfy publishing](https://docs.ntfy.sh/publish/): JSON publishing, topic names, priority, and size limits; [access control](https://docs.ntfy.sh/config/#access-control): authentication, topic permissions, and access tokens.
+- [Pushover Messages API](https://pushover.net/api): fixed endpoint, application/user credentials, normal priority, message limits, and numeric status responses.
+- [Discord Execute Webhook](https://discord.com/developers/docs/resources/webhook#execute-webhook): endpoint, `wait=true`, content limits, Message response, and flags; [allowed mentions](https://discord.com/developers/docs/resources/message#allowed-mentions-object): explicit empty mention parsing.
+- [Bark tutorial](https://bark.day.app/#/tutorial) and official server source at commit `640deaa151ddf79193202927b35ca2f14f65ee1d`: [JSON API](https://github.com/Finb/bark-server/blob/640deaa151ddf79193202927b35ca2f14f65ee1d/docs/API_V2.md), [push handler](https://github.com/Finb/bark-server/blob/640deaa151ddf79193202927b35ca2f14f65ee1d/route_push.go), [router](https://github.com/Finb/bark-server/blob/640deaa151ddf79193202927b35ca2f14f65ee1d/router.go), and [Basic authentication](https://github.com/Finb/bark-server/blob/640deaa151ddf79193202927b35ca2f14f65ee1d/route_auth.go). These establish `/push`, `device_key`, numeric acceptance, body logging, and the unsupported native Basic-auth mode.
+- [Apple APNs payloads](https://developer.apple.com/documentation/usernotifications/generating-a-remote-notification): the 4096-byte regular notification payload limit; Bark's smaller local text budgets leave envelope space.
 - [Pi extension lifecycle](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/extensions.md#agent_start--agent_end--agent_before_settle--agent_settled).
 
 Input classification follows the installed Pi `ProcessTerminal` and `StdinBuffer` sequence splitting, Pi's `parseKey`/`isKeyRelease`, and `TuiAltScreen` SGR mouse handling. Pure classifier tests cover keyboard, Unicode, paste, focus, press/release, motion, wheel, legacy mouse, CSI/OSC/DCS/APC replies, and unknown input. These tests do not prove that an event reaches the extension. Installed-runtime tests also pass events through real regular/fullscreen Pi renderers and check listener order, viewport keys, and focused-overlay branches. Physical terminal and multiplexer behavior remains unverified.

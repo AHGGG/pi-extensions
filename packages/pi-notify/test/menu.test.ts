@@ -171,7 +171,8 @@ it("keeps setup transactional, masked, and cancellable with remapped keys", asyn
   const running = h.run();
   await h.tui.waitForOpen();
   await h.choose(0);
-  await h.choose(0);
+  await h.choose(0); // Add destination…
+  await h.choose(0); // Telegram
   h.tui.send(`\x1b[200~${token}\x1b[201~`);
   expect(h.tui.render().join("\n")).not.toContain(token);
   expect(h.tui.isFocusable).toBe(true);
@@ -188,7 +189,8 @@ it.each(["use", "save only"])(
     const running = h.run();
     await h.tui.waitForOpen();
     await h.choose(0);
-    await h.choose(0);
+    await h.choose(0); // Add destination…
+    await h.choose(0); // Telegram
     h.tui.send(`\x1b[200~${token}\x1b[201~`);
     await h.transition(() => h.tui.press("tui.input.submit"));
     expect(h.tui.render().join("\n")).toContain("Telegram chat ID");
@@ -388,7 +390,8 @@ it.each(["use", "save only"])("adds a masked Gotify destination transactionally:
   const running = h.run();
   await h.tui.waitForOpen();
   await h.choose(0);
-  await h.choose(1);
+  await h.choose(0); // Add destination…
+  await h.choose(1); // Gotify
   expect(h.tui.render().join("\n")).toContain("Gotify application token");
   h.tui.send(`\x1b[200~${gotifyToken}X\x1b[201~`);
   h.tui.send("\x7f");
@@ -513,7 +516,8 @@ it.each(["token", "serverUrl", "review"])("cancels Gotify setup at %s without sa
   const running = h.run();
   await h.tui.waitForOpen();
   await h.choose(0);
-  await h.choose(1);
+  await h.choose(0); // Add destination…
+  await h.choose(1); // Gotify
   h.tui.send(`\x1b[200~${gotifyToken}\x1b[201~`);
   expect(h.tui.render().join("\n")).not.toContain(gotifyToken);
   if (stage !== "token") {
@@ -554,8 +558,15 @@ it("shows mixed destinations and sends a confirmed preview only through Gotify",
   const destinations = h.tui.render().join("\n");
   expect(destinations).toContain("Telegram · 123 · token configured");
   expect(destinations).toContain("Gotify · https://notify.example/gotify · token configured");
-  expect(destinations).toContain("Add Telegram destination");
-  expect(destinations).toContain("Add Gotify destination");
+  expect(destinations.match(/Add destination…/g)).toHaveLength(1);
+  expect(destinations).not.toContain("Add Telegram destination");
+  expect(destinations).not.toContain("Add Gotify destination");
+  await h.choose(2); // Shared add action follows the two saved destinations.
+  const addDestinations = h.tui.render().join("\n");
+  expect(addDestinations).toContain("Add destination · User");
+  expect(addDestinations).toContain("Add Telegram destination");
+  expect(addDestinations).toContain("Add Gotify destination");
+  await h.transition(() => h.tui.press("tui.select.cancel"));
   expect(destinations).not.toContain(gotifyToken);
   expect(destinations).not.toContain(token);
   await h.transition(() => h.tui.press("tui.select.cancel"));
@@ -612,7 +623,7 @@ it("redacts raw delivery errors from Gotify test notices", async () => {
   expect(JSON.stringify(h.notify.mock.calls)).not.toContain(gotifyToken);
   expect(JSON.stringify(h.notify.mock.calls)).not.toContain("https://user:");
 });
-it("keeps destinations named add and addGotify distinct from both add actions", async () => {
+it("keeps destinations named add and addGotify distinct from the shared add action", async () => {
   await saveDestination(
     store,
     "add",
@@ -630,13 +641,16 @@ it("keeps destinations named add and addGotify distinct from both add actions", 
   await h.choose(1);
   expect(h.tui.render().join("\n")).toContain("Label: Saved Gotify");
   await h.transition(() => h.tui.send("\x11"));
-  await h.choose(2);
+  await h.choose(2); // add:destination cannot be shadowed by either saved ID.
+  expect(h.tui.render().join("\n")).toContain("Add destination · User");
+  await h.choose(0); // Telegram
   expect(h.tui.render().join("\n")).toContain("Telegram bot token");
   h.tui.type(token);
   await h.transition(() => h.tui.press("tui.input.submit"));
   expect(h.tui.render().join("\n")).toContain("Telegram chat ID");
   await h.transition(() => h.tui.send("\x11"));
-  await h.choose(3);
+  expect(h.tui.render().join("\n")).toContain("Add destination · User");
+  await h.choose(1); // Gotify on the shared provider selector.
   expect(h.tui.render().join("\n")).toContain("Gotify application token");
   h.tui.type(gotifyToken);
   await h.transition(() => h.tui.press("tui.input.submit"));
@@ -750,10 +764,11 @@ it.each([`${webhookUrl} `, `${webhookUrl}?secret=invalid`])(
     const running = h.run();
     await h.tui.waitForOpen();
     await h.choose(0);
-    await h.choose(2);
+    await h.choose(0); // Add destination…
+    await h.choose(2); // Slack
     h.tui.send(`\x1b[200~${value}\x1b[201~`);
     await h.transition(() => h.tui.press("tui.input.submit"));
-    expect(h.tui.render().join("\n")).toContain("Destinations · User");
+    expect(h.tui.render().join("\n")).toContain("Add destination · User");
     expect(h.tui.render().join("\n")).not.toContain(webhookUrl);
     expect(JSON.stringify(h.notify.mock.calls)).not.toContain(webhookUrl);
     expect(store.snapshot.effective.destinations).toEqual({});
@@ -767,7 +782,8 @@ it.each(["use", "save only"])("adds a masked Slack destination with explicit sel
   const running = h.run();
   await h.tui.waitForOpen();
   await h.choose(0);
-  await h.choose(2);
+  await h.choose(0); // Add destination…
+  await h.choose(2); // Slack
   expect(h.tui.render().join("\n")).toContain("Slack webhook URL");
   h.tui.send(`\x1b[200~${webhookUrl}X\x1b[201~`);
   h.tui.send("\x7f");
@@ -839,12 +855,13 @@ it.each(["secret", "review", "dispose", "replace"])("cancels Slack setup at %s w
   const running = h.run();
   await h.tui.waitForOpen();
   await h.choose(0);
-  await h.choose(2);
+  await h.choose(0); // Add destination…
+  await h.choose(2); // Slack
   h.tui.send(`\x1b[200~${webhookUrl}\x1b[201~`);
   if (stage === "review") await h.transition(() => h.tui.press("tui.input.submit"));
   if (stage === "dispose") {
     await h.transition(() => h.tui.dispose());
-    expect(h.tui.render().join("\n")).toContain("Destinations · User");
+    expect(h.tui.render().join("\n")).toContain("Add destination · User");
     h.tui.press("ctrl+c");
   } else if (stage === "replace") owner.abort();
   else h.tui.press("ctrl+c");

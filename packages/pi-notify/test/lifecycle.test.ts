@@ -5,6 +5,7 @@ import { join, resolve } from "node:path";
 import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { createTuiHarness } from "@narumitw/pi-tui-kit/testing";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import type { Destination } from "../src/provider.js";
 
 type Handler = (event: never, ctx: ExtensionContext) => unknown;
 let directory: string;
@@ -12,6 +13,30 @@ let originalAgentDir: string | undefined;
 let fetcher: ReturnType<typeof vi.fn<typeof fetch>>;
 const token = `123:${"s".repeat(30)}`;
 const webhookUrl = "https://hooks.slack.com/services/T01234567/B01234567/secretWebhookValue";
+const lifecycleDestinations: Record<string, Destination> = {
+  gotify: { provider: "gotify", label: "Gotify", serverUrl: "https://push.example.com", appToken: "A-token" },
+  slack: { provider: "slack", label: "Slack", webhookUrl },
+  ntfy: {
+    provider: "ntfy",
+    label: "ntfy",
+    serverUrl: "https://ntfy.example/base",
+    topic: "builds",
+    accessToken: "ntfy-secret",
+  },
+  pushover: { provider: "pushover", label: "Pushover", appToken: "A".repeat(30), userKey: "U".repeat(30) },
+  discord: {
+    provider: "discord",
+    label: "Discord",
+    webhookUrl: "https://discord.com/api/webhooks/123456789012345678/DiscordSecret",
+  },
+  bark: { provider: "bark", label: "Bark", serverUrl: "https://bark.example/base", deviceKey: "bark-secret" },
+  webhook: {
+    provider: "webhook",
+    label: "Generic webhook",
+    webhookUrl: "https://webhook.example/SecretEndpoint",
+    bearerToken: "webhook-secret",
+  },
+};
 beforeEach(async () => {
   directory = await fs.mkdtemp(join(tmpdir(), "pi-notify-life-"));
   originalAgentDir = process.env.PI_CODING_AGENT_DIR;
@@ -155,25 +180,24 @@ it("delivers one settled work period to Telegram, Gotify, and Slack from the bui
   ).toBe(true);
   await h.emit("session_shutdown", ctx);
 });
-it.each(["gotify", "slack"])(
+it.each(Object.keys(lifecycleDestinations))(
   "aborts %s delivery on session replacement and shutdown without stale warnings",
   async (provider) => {
     await fs.writeFile(
       join(directory, "pi-notify.json"),
       JSON.stringify({
-        targetIds: ["gotify"],
-        destinations: {
-          gotify:
-            provider === "gotify"
-              ? { provider: "gotify", label: "Gotify", serverUrl: "https://push.example.com", appToken: "A-token" }
-              : { provider: "slack", label: "Slack", webhookUrl },
-        },
+        targetIds: ["one"],
+        destinations: { one: lifecycleDestinations[provider] },
       }),
     );
     fetcher.mockImplementation(
       async (_url, init) =>
         new Promise((_resolve, reject) => {
-          init?.signal?.addEventListener("abort", () => reject(new Error(webhookUrl)), { once: true });
+          init?.signal?.addEventListener(
+            "abort",
+            () => reject(new Error(JSON.stringify(lifecycleDestinations[provider]))),
+            { once: true },
+          );
         }),
     );
     const h = await setup();
@@ -193,6 +217,53 @@ it.each(["gotify", "slack"])(
     expect(h.notifyUI).not.toHaveBeenCalled();
   },
 );
+it("delivers one settled work period through all five new built-in providers", async () => {
+  const ids = ["ntfy", "pushover", "discord", "bark", "webhook"];
+  await fs.writeFile(
+    join(directory, "pi-notify.json"),
+    JSON.stringify({
+      targetIds: ids,
+      destinations: Object.fromEntries(ids.map((id) => [id, lifecycleDestinations[id]])),
+    }),
+  );
+  fetcher.mockImplementation(async (url) => {
+    if (String(url).startsWith("https://ntfy.example"))
+      return Response.json({ id: "event", time: 1, event: "message", topic: "builds", message: "accepted" });
+    if (String(url).startsWith("https://api.pushover.net")) return Response.json({ status: 1 });
+    if (String(url).startsWith("https://discord.com")) return Response.json({ id: "123", channel_id: "456", type: 0 });
+    if (String(url).startsWith("https://bark.example")) return Response.json({ code: 200 });
+    return new Response(null, { status: 202 });
+  });
+  const h = await setup();
+  const ctx = h.context("rpc");
+  await h.emit("session_start", ctx);
+  await h.emit("before_agent_start", ctx);
+  await h.emit("message_end", ctx, {
+    message: { role: "assistant", stopReason: "stop", content: "private transcript" },
+  });
+  await h.emit("agent_settled", ctx, { aborted: false });
+  await vi.waitFor(() => expect(fetcher).toHaveBeenCalledTimes(5), { interval: 1 });
+  expect(fetcher.mock.calls.map(([url]) => url)).toEqual([
+    "https://ntfy.example/base",
+    "https://api.pushover.net/1/messages.json",
+    "https://discord.com/api/webhooks/123456789012345678/DiscordSecret?wait=true",
+    "https://bark.example/base/push",
+    "https://webhook.example/SecretEndpoint",
+  ]);
+  const payloads = fetcher.mock.calls.map(([, init]) => JSON.parse(String(init?.body)));
+  for (const payload of payloads) {
+    expect(JSON.stringify(payload)).toContain("Example");
+    expect(JSON.stringify(payload)).not.toContain("private transcript");
+  }
+  expect(payloads[2].allowed_mentions).toEqual({ parse: [] });
+  expect(Object.keys(payloads[4])).toEqual(["id", "title", "body", "settledAt"]);
+  expect(payloads[4].settledAt).toBeTypeOf("number");
+  await h.emit("agent_settled", ctx, { aborted: false });
+  expect(fetcher).toHaveBeenCalledTimes(5);
+  await h.emit("session_shutdown", ctx);
+  expect(h.notifyUI).not.toHaveBeenCalled();
+});
+
 it("suppresses aborts even when final assistant error remains after retry cancellation", async () => {
   await enable();
   const h = await setup();

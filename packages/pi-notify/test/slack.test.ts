@@ -114,7 +114,16 @@ describe("Slack validation", () => {
     expect(createSlackProvider().validate(value)).toBeUndefined();
   });
   it("registers Slack without changing other providers and returns only owned fields", () => {
-    expect([...providers.keys()]).toEqual(["telegram", "gotify", "slack"]);
+    expect([...providers.keys()]).toEqual([
+      "telegram",
+      "gotify",
+      "slack",
+      "ntfy",
+      "pushover",
+      "discord",
+      "bark",
+      "webhook",
+    ]);
     expect(providers.get("slack")?.label).toBe("Slack");
     expect(validateDestination({ ...destination, future: true, channel: "not-an-override" }, providers)).toEqual(
       destination,

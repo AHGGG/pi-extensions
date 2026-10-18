@@ -4,12 +4,12 @@
 [![Pi extension](https://img.shields.io/badge/Pi-extension-blue)](https://pi.dev)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
 
-Send Telegram, Gotify, or Slack reminders when Pi stops automatic work, so you can return to review its result.
+Send reminders through Telegram, Gotify, Slack, ntfy, Pushover, Discord, Bark, or a Generic webhook when Pi stops automatic work.
 
 ## ✨ Features
 
-- Notify Telegram private chats, groups, supergroups, and forum topics, self-hosted Gotify applications, or Slack channels through Incoming Webhooks.
-- Select multiple destinations across all three providers.
+- Notify Telegram chats and forum topics, Gotify applications, Slack or Discord channels, ntfy topics, Pushover users, Bark devices, or your own webhook.
+- Select multiple destinations across all eight providers.
 - Identify the computer, session, repository, branch, and worktree without forwarding conversations.
 - Choose immediate notifications or reminders after terminal inactivity.
 - Configure and test destinations through a masked, menu-first setup flow.
@@ -18,7 +18,7 @@ Telegram uses bold titles and repository names, with inline monospace for branch
 
 ## 📦 Install
 
-Extensions run with Pi's permissions. Enable this extension only if the notification metadata may leave your computer. Notification tokens and complete Slack webhook URLs are secrets stored in a private User settings file, not Project settings.
+Extensions run with Pi's permissions. Enable this extension only if the notification metadata may leave your computer. Notification tokens, device keys, and complete Slack, Discord, and Generic webhook URLs are secrets stored in a private User settings file, not Project settings.
 
 From a local checkout, run these commands from the repository root:
 
@@ -39,13 +39,13 @@ Restart Pi or run `/reload` after persistent installation. The extension uses Pi
 
 ## 🚀 Quick start
 
-For Telegram, create a bot with Telegram's [BotFather](https://t.me/BotFather), then start a private conversation with it. Obtain that conversation's numeric chat ID through the [Bot API](https://core.telegram.org/bots/api#getupdates) after sending a message; keep the bot token private. For a group, add the bot and permit it to send messages. Stop any other update consumer before manually using `getUpdates`; an active webhook also prevents that method from working.
+1. Subscribe to a topic in your ntfy client. A topic name is not access control: configure [server authentication and topic permissions](https://docs.ntfy.sh/config/#access-control) before sending private metadata. Public topics can expose messages and permit unwanted publishers.
+2. Run `/notify`, open destination management, and add an ntfy destination. Enter the topic. In the review, set your server base URL, an optional access token in the masked input, and an optional priority from 1 to 5. Clear priority to use the server default.
+3. Choose Save and use to save and select the destination for User notifications, or Save only to store it without selecting it. Use Send test to preview the metadata and confirm one external request.
 
-For Gotify, create an application in your server's Apps tab and copy its application token. Use the server base URL, including any reverse-proxy path, not the `/message` endpoint. See [Gotify setup](https://gotify.net/docs/pushmsg).
+Automatic notifications are on by default, so the next eligible settled work period sends a reminder. Settings lets you pause delivery or change selections. Existing Off settings and explicit Project selections are preserved. See [provider setup and revocation](./docs/settings.md#provider-setup-and-revocation) for Telegram, Gotify, ntfy, Pushover, Discord, Bark, and Generic webhook setup.
 
 For Slack, create a [Slack app](https://api.slack.com/apps), enable Incoming Webhooks, and choose Add New Webhook to Workspace. Authorize the channel that must receive notifications and copy its webhook URL. Enter it only in the masked setup input or User settings, never in Pi chat. The installation fixes the channel; a destination cannot override it. See [Slack setup and revocation](./docs/settings.md#slack-setup-and-revocation).
-
-Run `/notify`, add a destination for your provider, and enter its token or complete Slack webhook URL in the masked input. For Telegram or Gotify, also enter the chat ID or server URL, then confirm the review. Labels are generated automatically. You can change the label, set a Telegram forum topic, or set a Gotify priority. Use Send test to preview the disclosed metadata and explicitly send a test. Choose Save and use to save and select the destination for User notifications, or Save only to store it without selecting it. Automatic notifications are on by default, so the next eligible settled work period sends a reminder. Settings lets you pause automatic notifications or change the selected destinations. Existing Off settings and explicit Project selections are preserved.
 
 ## 💬 Commands
 
@@ -67,10 +67,12 @@ Notifications default to enabled, with immediate mode and a stored inactivity du
   "targetIds": ["personal"],
   "destinations": {
     "personal": {
-      "provider": "telegram",
-      "label": "Personal Telegram",
-      "botToken": "<bot-token>",
-      "chatId": "123456789"
+      "provider": "ntfy",
+      "label": "Personal ntfy",
+      "serverUrl": "https://ntfy.sh",
+      "topic": "replace-with-your-topic",
+      "accessToken": "<access-token>",
+      "priority": 3
     }
   }
 }
@@ -80,31 +82,35 @@ See the bundled [settings and behavior reference](./docs/settings.md) for accept
 
 ## 🔒 Security and privacy
 
-Notifications send the operating-system hostname, session name and ID, working directory, available Git repository/worktree/branch, elapsed time, and settlement timestamp to the selected Telegram chats, Gotify servers, or Slack channels. Gotify messages are visible to the user who owns the application; Slack messages are visible to people with access to the installed channel. Paths shorten the home prefix to `~` when possible, but names and paths can still disclose private information. They describe the host running Pi, which can differ from your SSH client computer.
+Notifications send the operating-system hostname, session name and ID, working directory, available Git repository/worktree/branch, elapsed time, and settlement timestamp to the selected notification services or webhook endpoints. Gotify messages are visible to the user who owns the application; Slack messages are visible to people with access to the installed channel. Paths shorten the home prefix to `~` when possible, but names and paths can still disclose private information. They describe the host running Pi, which can differ from your SSH client computer.
 
-No prompts, assistant answers, code, tool output, Git remotes, or raw provider errors are sent. Dynamic metadata is bounded and terminal controls are removed; `@` is replaced with `＠` to avoid accidental mentions. Telegram link previews are disabled. Gotify sends plain text without Markdown extras. Slack uses `plain_text` blocks without mention or link expansion and a generic fallback. Slack desktop notifications can still show metadata from the blocks. Credential values, including Slack webhook paths, never appear in review, preview, status, or error output. POSIX settings writes use `0600` permissions and temporary-file-plus-rename publication. JavaScript memory is not secure credential storage; revoke exposed tokens through BotFather or your Gotify server, or revoke the webhook in Slack before replacing its User setting. Removing a saved destination does not revoke its credential.
+No prompts, assistant answers, code, tool output, Git remotes, or raw provider errors are sent. Dynamic metadata is bounded and terminal controls are removed; `@` is replaced with `＠` to avoid accidental mentions. Telegram link previews are disabled. Gotify sends plain text without Markdown extras. Slack uses `plain_text` blocks without mention or link expansion and a generic fallback. Slack desktop notifications can still show metadata from the blocks. Discord disables mention parsing and link previews, but does not suppress notifications. Credential values, including complete Slack, Discord, and Generic webhook URLs, never appear in review, preview, status, or error output. POSIX settings writes use `0600` permissions and temporary-file-plus-rename publication. JavaScript memory is not secure credential storage; revoke exposed tokens through BotFather or your Gotify server, or revoke the webhook in Slack before replacing its User setting. Removing a saved destination does not revoke its credential. See [provider revocation instructions](./docs/settings.md#provider-setup-and-revocation) for the new services.
 
 Gotify sends its application token in the `X-Gotify-Key` header, never in the URL. Use HTTPS: HTTP is supported for private self-hosted servers but sends the token and metadata without encryption. Server URLs cannot contain credentials, query strings, or fragments. Redirects are rejected.
 
+Prefer HTTPS for ntfy, Bark, and Generic webhooks too: HTTP sends credentials and metadata without encryption. User-configured endpoints can reach local/private addresses on the Pi host's network; Project settings cannot supply endpoints. ntfy topic secrecy is not access control, and access tokens have the user's full access. Configure server ACLs. Bark JSON keeps keys and messages out of URLs but does not prevent the official server from logging request bodies. Do not send metadata to servers you do not trust.
+
 ## 🚧 Limitations
 
-Telegram, Gotify, and Slack are built in; third-party provider plugins are not loaded. Slack supports commercial Incoming Webhooks at `https://hooks.slack.com/services/...` only, with the channel selected during installation. GovSlack, channel overrides, OAuth, bot tokens, replies, and file uploads are not supported. No Slack SDK or extension-specific environment variables are required. Gotify uses application tokens, not client tokens or user passwords. It sends messages only; it does not subscribe to messages or manage applications.
+The eight listed providers are built in; third-party provider plugins are not loaded. Slack supports commercial Incoming Webhooks at `https://hooks.slack.com/services/...` only, with the channel selected during installation. GovSlack, channel overrides, OAuth, bot tokens, replies, and file uploads are not supported. No Slack SDK or extension-specific environment variables are required. Gotify uses application tokens, not client tokens or user passwords. It sends messages only; it does not subscribe to messages or manage applications.
+
+Pushover uses normal priority only, without emergency delivery, acknowledgement, or retry parameters. Discord supports official webhooks for normal text channels, not forum/media channels or thread selection. ntfy and Generic webhooks support no authentication or Bearer authentication only; Bark supports its device key, not native server Basic authentication. No custom headers, templates, scripts, or extension-specific environment variables are supported. See [provider fields and limits](./docs/settings.md#new-provider-fields) for exact URL, credential, and payload bounds.
 
 Telegram messages are limited to 4,096 UTF-16 code units without splitting a Unicode code point; longer messages end with an unformatted ellipsis. Gotify sends the title and body in separate fields; server and proxy limits apply. Slack clips plain-text blocks to its documented limits without splitting Unicode code points; see the [payload and delivery reference](./docs/settings.md#work-periods-and-delivery).
 
 Inactivity means no input reached this extension, not proof that you are away. Pi handles fullscreen focus, mouse, scrolling, and search before extension input listeners. Those actions do not reliably cancel a reminder. Reading without typing can still produce one. Type a key that reaches the editor to cancel a pending reminder. Focus or mouse events count only if Pi forwards them; terminal support alone is not sufficient. This extension does not change Pi's listener order, enable focus reporting, or detect screen locks. RPC, print, and JSON cannot observe terminal input, so inactivity mode delivers at settlement instead.
 
-Notification delivery is best effort with one attempt and a 10-second request timeout. There is no automatic retry, persistent queue, or replay after reload. Accepted means the provider accepted a message, not that someone read it. Rate limits can reject rapid runs; Status reports a safe error code and available retry-after time. Immediate shutdown can cancel an in-flight notification, especially in a short-lived headless session.
+Notification delivery is best effort with one attempt and a 10-second deadline covering the request and response body, capped at 65,536 bytes. There is no automatic retry, persistent queue, or replay after reload. Accepted means the provider accepted a message, not that someone read it. Rate limits can reject rapid runs; Status reports a safe error code and available retry-after time. Immediate shutdown can cancel an in-flight notification, especially in a short-lived headless session.
 
 Manual aborts and interactive confirmation prompts do not notify. `agent_settled` means Pi will not continue automatically, not that the requested task succeeded. Preflight errors that do not produce a settled work period cannot generate a completion notification. No cooldown suppresses distinct eligible work periods.
 
-Before reverting to a version without Slack support, remove Slack IDs from User and Project selections and remove the Slack destinations while the current version is installed. Older versions disable automatic delivery for unsupported destinations, even when unselected. See [rollback steps](./docs/settings.md#persistence-and-recovery).
+Before reverting to a version without the five new providers, remove their IDs from every affected Project selection, User selections, and saved destinations while the current version is installed. Before reverting to a version without Slack support, remove Slack IDs from User and Project selections and remove the Slack destinations while the current version is installed. Older versions disable automatic delivery for unsupported destinations, even when unselected. See [rollback steps](./docs/settings.md#persistence-and-recovery).
 
 ## 🗂️ Package layout
 
 - `src/index.ts`: Pi entrypoint forwarding to `src/notify.ts`.
 - `src/`: session coordination, metadata, settings, menu, and provider contract.
-- `src/providers/`: Telegram, Gotify, and Slack transports.
+- `src/providers/`: provider-specific transports and shared bounded HTTP handling.
 - `docs/`: installed settings and behavior reference.
 - `test/`: repository-only deterministic tests.
 
@@ -112,7 +118,7 @@ The package publishes TypeScript source, documentation, and its license. It does
 
 ## 🔎 Keywords
 
-Pi coding agent, Telegram bot, Gotify, Slack Incoming Webhooks, self-hosted notifications, completion notification, inactivity reminder, session, Git worktree.
+Pi coding agent, Telegram bot, Gotify, Slack Incoming Webhooks, ntfy, Pushover, Discord webhook, Bark, Generic webhook, self-hosted notifications, completion notification, inactivity reminder, Git worktree.
 
 ## 📄 License
 

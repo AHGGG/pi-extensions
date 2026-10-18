@@ -2,6 +2,13 @@ import { randomUUID } from "node:crypto";
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { defineMenu, runMenu, runSecretInput, runTask } from "@narumitw/pi-tui-kit";
 import type { Coordinator } from "./coordinator.js";
+import {
+  credentialLabels,
+  destinationDescription,
+  destinationLines,
+  displayServerUrl,
+  providerLabel,
+} from "./destination-ui.js";
 import { displayPath, notificationMetadata, safeText } from "./metadata.js";
 import type { Destination, Notification, Providers } from "./provider.js";
 import {
@@ -19,6 +26,7 @@ import {
 type Screen =
   | "main"
   | "destinations"
+  | "addDestination"
   | "destination"
   | "settings"
   | "targets"
@@ -29,6 +37,7 @@ type Screen =
   | "topic"
   | "serverUrl"
   | "priority"
+  | "ntfyTopic"
   | "review"
   | "remove"
   | "testSelect"
@@ -45,6 +54,14 @@ type Action =
   | "add"
   | "addGotify"
   | "addSlack"
+  | "addNtfy"
+  | "addPushover"
+  | "addDiscord"
+  | "addBark"
+  | "addWebhook"
+  | "userKey"
+  | "bearerToken"
+  | "ntfyTopic"
   | "edit"
   | "select"
   | "token"
@@ -77,6 +94,12 @@ export const helpLines = [
   "Gotify labels are generated automatically. Edit the label or optional safe-integer priority from the destination review. An empty priority uses the server default.",
   "For Slack, enable Incoming Webhooks in a Slack app and add a webhook to your workspace. Its installation fixes the channel. Paste the complete hooks.slack.com URL only into the masked field; never into Pi chat.",
   "Slack webhook URLs are secrets. Reviews and Status show only that a webhook is configured. Revoke an exposed webhook in the Slack app before replacing it.",
+  "For ntfy, subscribe to a topic and configure server authentication and topic permissions. Topic secrecy is not access control. Review the server, optional Bearer token, and priority from 1 to 5.",
+  "For Pushover, enter the application token and user key in masked inputs. Delivery uses normal priority only, without emergency acknowledgement or retries.",
+  "For Discord, paste a normal text-channel webhook URL into the masked input. Mentions and link embeds are disabled; forum/media channels and thread selection are not supported.",
+  "For Bark, enter the device key in the masked input and review the hosted or self-hosted server base. JSON delivery keeps the key and message out of URLs, not server body logs. Native Basic authentication is not supported.",
+  "For Generic webhooks, enter the endpoint in the masked input and set an optional Bearer token in review. The fixed JSON payload has id, title, body, and settledAt (Unix milliseconds); no templates or custom headers.",
+  "Self-hosted ntfy, Bark, and Generic endpoints can reach private networks. Prefer HTTPS; HTTP sends credentials and metadata without encryption. See the bundled docs/settings.md for setup and revocation.",
   "Use a negative group/supergroup chat ID when applicable. Forum topic IDs are optional positive integers.",
   "Destinations are User settings only. Project settings require trust and may select existing destinations but cannot change credentials or addresses.",
   "Notifications disclose hostname, session name/ID, workspace and Git metadata, elapsed time and timestamp. No conversation or code is sent.",
@@ -86,58 +109,6 @@ export const helpLines = [
   "Delivery is best effort, one attempt, with no automatic retries or history replay. Accepted means the provider accepted the message, not that it was read.",
   "Manual file changes require /reload or session start. Repair malformed files before saving. Revoke exposed Telegram tokens through BotFather or Gotify application tokens on your server.",
 ];
-
-const providerLabels: Record<Destination["provider"], string> = {
-  telegram: "Telegram",
-  gotify: "Gotify",
-  slack: "Slack",
-};
-const providerLabel = (destination: Destination) => providerLabels[destination.provider];
-const credentialLabels: Record<Destination["provider"], string> = {
-  telegram: "bot token",
-  gotify: "application token",
-  slack: "webhook URL",
-};
-function displayServerUrl(raw: string): string {
-  try {
-    const url = new URL(raw);
-    // Never include URL credentials, query parameters, or fragments in descriptions.
-    return safeText(`${url.protocol}//${url.host}${url.pathname}`);
-  } catch {
-    return "not configured";
-  }
-}
-function destinationDescription(destination: Destination): string {
-  switch (destination.provider) {
-    case "telegram":
-      return `Telegram · ${safeText(destination.chatId)} · token configured`;
-    case "gotify":
-      return `Gotify · ${displayServerUrl(destination.serverUrl)} · token configured`;
-    case "slack":
-      return "Slack · webhook configured";
-  }
-}
-function destinationLines(destination: Destination): string[] {
-  const label = `Label: ${safeText(destination.label)}`;
-  switch (destination.provider) {
-    case "telegram":
-      return [
-        label,
-        `Chat: ${safeText(destination.chatId)}`,
-        `Topic: ${destination.messageThreadId ?? "none"}`,
-        "Bot token: configured (hidden)",
-      ];
-    case "gotify":
-      return [
-        label,
-        `Server: ${displayServerUrl(destination.serverUrl)}`,
-        `Priority: ${destination.priority ?? "server default"}`,
-        "Application token: configured (hidden)",
-      ];
-    case "slack":
-      return [label, "Channel: fixed by webhook installation", "Webhook URL: configured (hidden)"];
-  }
-}
 
 export async function showNotifyMenu(ctx: ExtensionCommandContext, options: MenuOptions) {
   const { store, coordinator, providers, signal, isCurrent } = options;
@@ -178,9 +149,20 @@ export async function showNotifyMenu(ctx: ExtensionCommandContext, options: Menu
     if (destination.provider !== "telegram") throw new Error("Not a Telegram destination.");
     return destination;
   };
-  const gotifyDraft = () => {
+  const ntfyDraft = () => {
     const destination = assertDraft();
-    if (destination.provider !== "gotify") throw new Error("Not a Gotify destination.");
+    if (destination.provider !== "ntfy") throw new Error("Not an ntfy destination.");
+    return destination;
+  };
+  const serverDraft = () => {
+    const destination = assertDraft();
+    if (destination.provider !== "gotify" && destination.provider !== "ntfy" && destination.provider !== "bark")
+      throw new Error("Not a server destination.");
+    return destination;
+  };
+  const priorityDraft = () => {
+    const destination = serverDraft();
+    if (destination.provider === "bark") throw new Error("Priority is unavailable.");
     return destination;
   };
   const reportError = () => {
@@ -197,6 +179,27 @@ export async function showNotifyMenu(ctx: ExtensionCommandContext, options: Menu
     await apply(saveDestination(store, selectedId, destination, actionSignal, selectNew));
     draft = undefined;
     return { kind: "to", screen: "main" } as const;
+  };
+  const addWebhook = async (provider: "discord" | "webhook", actionSignal: AbortSignal) => {
+    const result = await runSecretInput(menuCtx, {
+      title: `${provider === "discord" ? "Discord" : "Generic webhook"} URL`,
+      signal: actionSignal,
+      isCurrent,
+      onError: reportError,
+    });
+    actionSignal.throwIfAborted();
+    current();
+    if (result.kind === "closed" && result.reason === "close") return { kind: "close" } as const;
+    if (result.kind !== "submitted") return { kind: "stay" } as const;
+    const destination = providers.get(provider)?.validate({
+      provider,
+      label: provider === "discord" ? "Discord notifications" : "Generic webhook notifications",
+      webhookUrl: result.value,
+    });
+    if (!destination) throw new Error("Use a valid webhook URL.");
+    selectedId = randomUUID();
+    draft = destination;
+    return { kind: "to", screen: "review" } as const;
   };
   const menu = defineMenu<State, Screen, Action>({
     start: "main",
@@ -230,9 +233,21 @@ export async function showNotifyMenu(ctx: ExtensionCommandContext, options: Menu
             description: destinationDescription(value),
             action: "select" as const,
           })),
+          { id: "add:destination", label: "Add destination…", to: "addDestination" },
+        ],
+      }),
+      addDestination: () => ({
+        kind: "actions",
+        title: "Add destination · User",
+        items: [
           { id: "add", label: "Add Telegram destination", action: "add" },
           { id: "addGotify", label: "Add Gotify destination", action: "addGotify" },
           { id: "addSlack", label: "Add Slack destination", action: "addSlack" },
+          { id: "addNtfy", label: "Add ntfy destination", action: "addNtfy" },
+          { id: "addPushover", label: "Add Pushover destination", action: "addPushover" },
+          { id: "addDiscord", label: "Add Discord destination", action: "addDiscord" },
+          { id: "addBark", label: "Add Bark destination", action: "addBark" },
+          { id: "addWebhook", label: "Add Generic webhook destination", action: "addWebhook" },
         ],
       }),
       destination: () => ({
@@ -353,18 +368,29 @@ export async function showNotifyMenu(ctx: ExtensionCommandContext, options: Menu
         initialValue: String(telegramDraft().messageThreadId ?? ""),
         action: "topic",
       }),
+      ntfyTopic: () => ({
+        kind: "input",
+        title: "ntfy topic",
+        lines: ["A topic name is not access control. Configure server authentication and topic permissions."],
+        initialValue: ntfyDraft().topic,
+        action: "ntfyTopic",
+      }),
       serverUrl: () => ({
         kind: "input",
-        title: "Gotify server URL",
+        title: `${providerLabel(serverDraft())} server URL`,
         lines: ["HTTP(S) base URL with an optional reverse-proxy path. No credentials, query, or fragment."],
-        initialValue: gotifyDraft().serverUrl,
+        initialValue: serverDraft().serverUrl,
         action: "serverUrl",
       }),
       priority: () => ({
         kind: "input",
-        title: "Gotify priority (optional)",
-        lines: ["Safe integer from -9007199254740991 to 9007199254740991. Leave empty for the server default."],
-        initialValue: String(gotifyDraft().priority ?? ""),
+        title: `${providerLabel(priorityDraft())} priority (optional)`,
+        lines: [
+          priorityDraft().provider === "ntfy"
+            ? "Integer from 1 to 5. Leave empty for the server default."
+            : "Safe integer from -9007199254740991 to 9007199254740991. Leave empty for the server default.",
+        ],
+        initialValue: String(priorityDraft().priority ?? ""),
         action: "priority",
       }),
       review: () => ({
@@ -395,14 +421,25 @@ export async function showNotifyMenu(ctx: ExtensionCommandContext, options: Menu
           ...(assertDraft().provider === "telegram"
             ? [{ id: "chat", label: "Change chat ID…", to: "chat" as const }]
             : []),
-          ...(assertDraft().provider === "gotify"
+          ...(assertDraft().provider === "gotify" ||
+          assertDraft().provider === "ntfy" ||
+          assertDraft().provider === "bark"
             ? [{ id: "serverUrl", label: "Change server URL…", to: "serverUrl" as const }]
             : []),
+          ...(assertDraft().provider === "pushover"
+            ? [{ id: "userKey", label: "Replace user key…", action: "userKey" as const }]
+            : []),
           { id: "label", label: "Change label…", to: "label" },
+          ...(assertDraft().provider === "webhook"
+            ? [{ id: "bearerToken", label: "Set Bearer token (empty for none)…", action: "bearerToken" as const }]
+            : []),
           ...(assertDraft().provider === "telegram"
             ? [{ id: "topic", label: "Set forum topic ID…", to: "topic" as const }]
             : []),
-          ...(assertDraft().provider === "gotify"
+          ...(assertDraft().provider === "ntfy"
+            ? [{ id: "ntfyTopic", label: "Change topic…", to: "ntfyTopic" as const }]
+            : []),
+          ...(assertDraft().provider === "gotify" || assertDraft().provider === "ntfy"
             ? [{ id: "priority", label: "Set priority…", to: "priority" as const }]
             : []),
           ...(!store.snapshot.effective.destinations[selectedId]
@@ -578,6 +615,115 @@ export async function showNotifyMenu(ctx: ExtensionCommandContext, options: Menu
         draft = destination;
         return { kind: "to", screen: "review" };
       },
+      addDiscord: ({ signal: actionSignal }) => addWebhook("discord", actionSignal),
+      addWebhook: ({ signal: actionSignal }) => addWebhook("webhook", actionSignal),
+      addBark: async ({ signal: actionSignal }) => {
+        const result = await runSecretInput(menuCtx, {
+          title: "Bark device key",
+          signal: actionSignal,
+          isCurrent,
+          onError: reportError,
+        });
+        actionSignal.throwIfAborted();
+        current();
+        if (result.kind === "closed" && result.reason === "close") return { kind: "close" };
+        if (result.kind !== "submitted") return { kind: "stay" };
+        const destination = providers.get("bark")?.validate({
+          provider: "bark",
+          label: "Bark notifications",
+          serverUrl: "https://api.day.app",
+          deviceKey: result.value.trim(),
+        });
+        if (!destination) throw new Error("Use a valid Bark device key.");
+        selectedId = randomUUID();
+        draft = destination;
+        return { kind: "to", screen: "review" };
+      },
+      addPushover: async ({ signal: actionSignal }) => {
+        const app = await runSecretInput(menuCtx, {
+          title: "Pushover application token",
+          signal: actionSignal,
+          isCurrent,
+          onError: reportError,
+        });
+        actionSignal.throwIfAborted();
+        current();
+        if (app.kind === "closed" && app.reason === "close") return { kind: "close" };
+        if (app.kind !== "submitted") return { kind: "stay" };
+        const user = await runSecretInput(menuCtx, {
+          title: "Pushover user key",
+          signal: actionSignal,
+          isCurrent,
+          onError: reportError,
+        });
+        actionSignal.throwIfAborted();
+        current();
+        if (user.kind === "closed" && user.reason === "close") return { kind: "close" };
+        if (user.kind !== "submitted") return { kind: "stay" };
+        const destination = providers.get("pushover")?.validate({
+          provider: "pushover",
+          label: "Pushover notifications",
+          appToken: app.value.trim(),
+          userKey: user.value.trim(),
+        });
+        if (!destination) throw new Error("Use a valid application token and user key.");
+        selectedId = randomUUID();
+        draft = destination;
+        return { kind: "to", screen: "review" };
+      },
+      userKey: async ({ signal: actionSignal }) => {
+        const result = await runSecretInput(menuCtx, {
+          title: "Replace Pushover user key",
+          signal: actionSignal,
+          isCurrent,
+          onError: reportError,
+        });
+        actionSignal.throwIfAborted();
+        current();
+        if (result.kind === "closed" && result.reason === "close") return { kind: "close" };
+        if (result.kind === "submitted") {
+          const destination = assertDraft();
+          const valid = providers.get("pushover")?.validate({ ...destination, userKey: result.value.trim() });
+          if (destination.provider !== "pushover" || valid?.provider !== "pushover")
+            throw new Error("Use a valid user key.");
+          destination.userKey = valid.userKey;
+        }
+        return { kind: "stay" };
+      },
+      bearerToken: async ({ signal: actionSignal }) => {
+        const result = await runSecretInput(menuCtx, {
+          title: "Bearer token (empty for none)",
+          required: false,
+          signal: actionSignal,
+          isCurrent,
+          onError: reportError,
+        });
+        actionSignal.throwIfAborted();
+        current();
+        if (result.kind === "closed" && result.reason === "close") return { kind: "close" };
+        if (result.kind === "submitted") {
+          const destination = assertDraft();
+          const valid = providers
+            .get("webhook")
+            ?.validate({ ...destination, bearerToken: result.value.trim() || undefined });
+          if (destination.provider !== "webhook" || valid?.provider !== "webhook")
+            throw new Error("Use a valid Bearer token or leave it empty.");
+          destination.bearerToken = valid.bearerToken;
+        }
+        return { kind: "stay" };
+      },
+      addNtfy: () => {
+        selectedId = randomUUID();
+        draft = { provider: "ntfy", label: "ntfy notifications", serverUrl: "https://ntfy.sh", topic: "" };
+        return { kind: "to", screen: "ntfyTopic" };
+      },
+      ntfyTopic: ({ value }) => {
+        const destination = assertDraft();
+        const valid = providers.get("ntfy")?.validate({ ...destination, topic: value?.trim() });
+        if (destination.provider !== "ntfy" || valid?.provider !== "ntfy") throw new Error("Use a valid ntfy topic.");
+        destination.topic = valid.topic;
+        return { kind: "to", screen: "review" };
+      },
       edit: () => {
         draft = { ...knownDestination() };
         return { kind: "to", screen: "review" };
@@ -585,6 +731,7 @@ export async function showNotifyMenu(ctx: ExtensionCommandContext, options: Menu
       token: async ({ signal: actionSignal }) => {
         const result = await runSecretInput(menuCtx, {
           title: `Replace ${providerLabel(assertDraft())} ${credentialLabels[assertDraft().provider]}`,
+          required: assertDraft().provider !== "ntfy",
           signal: actionSignal,
           isCurrent,
           onError: reportError,
@@ -600,6 +747,33 @@ export async function showNotifyMenu(ctx: ExtensionCommandContext, options: Menu
             case "gotify":
               destination.appToken = result.value.trim();
               break;
+            case "pushover": {
+              const valid = providers.get("pushover")?.validate({ ...destination, appToken: result.value.trim() });
+              if (valid?.provider !== "pushover") throw new Error("Use a valid application token.");
+              destination.appToken = valid.appToken;
+              break;
+            }
+            case "bark": {
+              const valid = providers.get("bark")?.validate({ ...destination, deviceKey: result.value.trim() });
+              if (valid?.provider !== "bark") throw new Error("Use a valid device key.");
+              destination.deviceKey = valid.deviceKey;
+              break;
+            }
+            case "discord":
+            case "webhook": {
+              const valid = providers.get(destination.provider)?.validate({ ...destination, webhookUrl: result.value });
+              if (valid?.provider !== destination.provider) throw new Error("Use a valid webhook URL.");
+              destination.webhookUrl = valid.webhookUrl;
+              break;
+            }
+            case "ntfy": {
+              const valid = providers
+                .get("ntfy")
+                ?.validate({ ...destination, accessToken: result.value.trim() || undefined });
+              if (valid?.provider !== "ntfy") throw new Error("Use a valid access token or leave it empty.");
+              destination.accessToken = valid.accessToken;
+              break;
+            }
             case "slack": {
               const valid = providers.get("slack")?.validate({ ...destination, webhookUrl: result.value });
               if (valid?.provider !== "slack") throw new Error("Use a valid Slack Incoming Webhook URL.");
@@ -632,16 +806,17 @@ export async function showNotifyMenu(ctx: ExtensionCommandContext, options: Menu
         return { kind: "to", screen: "review" };
       },
       serverUrl: ({ value }) => {
-        const destination = gotifyDraft();
-        const normalized = providers.get("gotify")?.validate({
+        const destination = serverDraft();
+        const normalized = providers.get(destination.provider)?.validate({
           ...destination,
           label: destination.label || "Gotify",
           serverUrl: value?.trim(),
         });
-        if (normalized?.provider !== "gotify")
-          throw new Error(
-            "Use a valid Gotify server URL and application token. No URL credentials, query, or fragment.",
-          );
+        if (
+          !normalized ||
+          (normalized.provider !== "gotify" && normalized.provider !== "ntfy" && normalized.provider !== "bark")
+        )
+          throw new Error("Use a valid server URL and credentials. No URL credentials, query, or fragment.");
         destination.serverUrl = normalized.serverUrl;
         if (!destination.label) destination.label = `Gotify ${displayServerUrl(destination.serverUrl)}`.slice(0, 128);
         return { kind: "to", screen: "review" };
@@ -650,8 +825,11 @@ export async function showNotifyMenu(ctx: ExtensionCommandContext, options: Menu
         const priority = value?.trim();
         if (priority && (!/^-?\d+$/.test(priority) || !Number.isSafeInteger(Number(priority))))
           throw new Error("Use a safe-integer priority or leave it empty.");
-        if (priority) gotifyDraft().priority = Number(priority);
-        else delete gotifyDraft().priority;
+        const destination = priorityDraft();
+        if (priority && destination.provider === "ntfy" && (Number(priority) < 1 || Number(priority) > 5))
+          throw new Error("Use a priority from 1 to 5.");
+        if (priority) destination.priority = Number(priority);
+        else delete destination.priority;
         return { kind: "to", screen: "review" };
       },
       save: ({ signal: actionSignal }) => saveDraft(actionSignal, true),
