@@ -62,6 +62,12 @@ Call `subagent_spawn` with a self-contained task and only the work tools that ta
 The call returns a `jobId` immediately, and the job continues in the background.
 Continue useful main-agent work until the result is required or a completion arrives.
 
+In TUI mode, each active-job row shows a preview of its existing `task` after the job ID; no new parameter is required.
+The preview removes terminal controls, collapses whitespace, and uses at most 40 terminal columns, including an ellipsis when shortened.
+It describes the assigned task, not live child activity; the full task sent to the child is unchanged.
+Task text is visible in this local widget, but `subagent_inspect` continues to omit it.
+Rows are clipped to the available terminal width, so trailing state, timing, or tools can be hidden on narrow terminals.
+
 Use messaging only when needed:
 
 - Call `subagent_send` with `recipient: jobId` to ask an active child a question.

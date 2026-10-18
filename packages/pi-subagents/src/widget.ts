@@ -1,5 +1,5 @@
 import type { ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
-import { truncateToWidth } from "@earendil-works/pi-tui";
+import { stripTerminalSequences, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { sanitizeTerminalText } from "./message-broker.js";
 import type { ActiveJobDisplay, SubagentRuntime } from "./runtime.js";
 
@@ -7,6 +7,7 @@ export const SUBAGENT_WIDGET_KEY = "subagents";
 export const SUBAGENT_WIDGET_REFRESH_INTERVAL_MS = 1_000;
 
 const WIDGET_OPTIONS = { placement: "aboveEditor" } as const;
+const TASK_PREVIEW_WIDTH = 40;
 
 export interface SubagentWidgetController {
   start(ctx: ExtensionContext): void;
@@ -86,23 +87,38 @@ function renderJob(job: ActiveJobDisplay, theme: Theme): string {
   const symbol = theme.fg(running ? "accent" : "dim", running ? "▶ " : "○ ");
   const state = theme.fg(running ? "accent" : "muted", job.state);
   const jobId = sanitizeLabel(job.jobId);
+  const taskText = sanitizeTask(job.task);
+  // Pi's truncation adds ANSI resets; remove them before applying the callback theme.
+  const task = stripTerminalSequences(truncateToWidth(taskText, TASK_PREVIEW_WIDTH, "…"));
+  const preview = visibleWidth(task) > 0 ? ` · ${theme.fg("text", task)}` : "";
   const tools = job.tools.length > 0 ? job.tools.map(sanitizeLabel).join(", ") : "none";
   const timeout = job.timeout === undefined ? "no timeout" : formatSeconds(job.timeout);
   const detail = ` · ${formatSeconds(Math.floor(job.elapsedMs / 1_000))} / ${timeout} · tools: ${tools}`;
-  return `${symbol}${theme.fg("text", jobId)} · ${state}${theme.fg("muted", detail)}`;
+  return `${symbol}${theme.fg("text", jobId)}${preview} · ${state}${theme.fg("muted", detail)}`;
 }
 
 function widgetValue(jobs: readonly ActiveJobDisplay[]): string {
   return jobs
     .map(
       (job) =>
-        `${job.jobId}\0${job.state}\0${Math.floor(job.elapsedMs / 1_000)}\0${job.timeout ?? ""}\0${job.tools.join(",")}`,
+        `${job.jobId}\0${job.task}\0${job.state}\0${Math.floor(job.elapsedMs / 1_000)}\0${job.timeout ?? ""}\0${job.tools.join(",")}`,
     )
     .join("\n");
 }
 
 function cloneDisplayJob(job: ActiveJobDisplay): ActiveJobDisplay {
   return { ...job, tools: [...job.tools] };
+}
+
+function sanitizeTask(value: string): string {
+  // Stop sequence bodies at another control introducer so malformed input cannot
+  // repeatedly scan the rest of a maximum-size task, as Pi's escape stripper can.
+  const text = value.replace(
+    // biome-ignore lint/suspicious/noControlCharactersInRegex: Remove untrusted terminal escape sequences before display.
+    /(?:\u001b\[|\u009b)[0-?]*[ -/]*[@-~]|(?:\u001b[\]PX^_]|[\u0090\u0098\u009d-\u009f])[^\u0007\u001b\u0080-\u009f]*(?:\u0007|\u001b\\|\u009c)|\u001b[ -/]*[0-~]/gu,
+    "",
+  );
+  return sanitizeLabel(text.replace(/\p{Bidi_Control}/gu, ""));
 }
 
 function sanitizeLabel(value: string): string {
