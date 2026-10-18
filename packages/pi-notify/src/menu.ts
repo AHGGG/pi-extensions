@@ -44,6 +44,7 @@ type Action =
   | "inheritTargets"
   | "add"
   | "addGotify"
+  | "addSlack"
   | "edit"
   | "select"
   | "token"
@@ -74,6 +75,8 @@ export const helpLines = [
   "Telegram setup needs a bot token and chat ID. Labels are generated automatically. Edit the label or optional forum topic ID from the destination review.",
   "For Gotify, create an application on your server and use its application token, not a client token. Enter the server base URL, including any reverse-proxy path. Prefer HTTPS; HTTP sends credentials without encryption.",
   "Gotify labels are generated automatically. Edit the label or optional safe-integer priority from the destination review. An empty priority uses the server default.",
+  "For Slack, enable Incoming Webhooks in a Slack app and add a webhook to your workspace. Its installation fixes the channel. Paste the complete hooks.slack.com URL only into the masked field; never into Pi chat.",
+  "Slack webhook URLs are secrets. Reviews and Status show only that a webhook is configured. Revoke an exposed webhook in the Slack app before replacing it.",
   "Use a negative group/supergroup chat ID when applicable. Forum topic IDs are optional positive integers.",
   "Destinations are User settings only. Project settings require trust and may select existing destinations but cannot change credentials or addresses.",
   "Notifications disclose hostname, session name/ID, workspace and Git metadata, elapsed time and timestamp. No conversation or code is sent.",
@@ -84,7 +87,17 @@ export const helpLines = [
   "Manual file changes require /reload or session start. Repair malformed files before saving. Revoke exposed Telegram tokens through BotFather or Gotify application tokens on your server.",
 ];
 
-const providerLabel = (destination: Destination) => (destination.provider === "telegram" ? "Telegram" : "Gotify");
+const providerLabels: Record<Destination["provider"], string> = {
+  telegram: "Telegram",
+  gotify: "Gotify",
+  slack: "Slack",
+};
+const providerLabel = (destination: Destination) => providerLabels[destination.provider];
+const credentialLabels: Record<Destination["provider"], string> = {
+  telegram: "bot token",
+  gotify: "application token",
+  slack: "webhook URL",
+};
 function displayServerUrl(raw: string): string {
   try {
     const url = new URL(raw);
@@ -94,24 +107,37 @@ function displayServerUrl(raw: string): string {
     return "not configured";
   }
 }
-const destinationDescription = (destination: Destination) =>
-  destination.provider === "telegram"
-    ? `Telegram · ${safeText(destination.chatId)} · token configured`
-    : `Gotify · ${displayServerUrl(destination.serverUrl)} · token configured`;
-const destinationLines = (destination: Destination) => [
-  `Label: ${safeText(destination.label)}`,
-  ...(destination.provider === "telegram"
-    ? [
+function destinationDescription(destination: Destination): string {
+  switch (destination.provider) {
+    case "telegram":
+      return `Telegram · ${safeText(destination.chatId)} · token configured`;
+    case "gotify":
+      return `Gotify · ${displayServerUrl(destination.serverUrl)} · token configured`;
+    case "slack":
+      return "Slack · webhook configured";
+  }
+}
+function destinationLines(destination: Destination): string[] {
+  const label = `Label: ${safeText(destination.label)}`;
+  switch (destination.provider) {
+    case "telegram":
+      return [
+        label,
         `Chat: ${safeText(destination.chatId)}`,
         `Topic: ${destination.messageThreadId ?? "none"}`,
         "Bot token: configured (hidden)",
-      ]
-    : [
+      ];
+    case "gotify":
+      return [
+        label,
         `Server: ${displayServerUrl(destination.serverUrl)}`,
         `Priority: ${destination.priority ?? "server default"}`,
         "Application token: configured (hidden)",
-      ]),
-];
+      ];
+    case "slack":
+      return [label, "Channel: fixed by webhook installation", "Webhook URL: configured (hidden)"];
+  }
+}
 
 export async function showNotifyMenu(ctx: ExtensionCommandContext, options: MenuOptions) {
   const { store, coordinator, providers, signal, isCurrent } = options;
@@ -206,6 +232,7 @@ export async function showNotifyMenu(ctx: ExtensionCommandContext, options: Menu
           })),
           { id: "add", label: "Add Telegram destination", action: "add" },
           { id: "addGotify", label: "Add Gotify destination", action: "addGotify" },
+          { id: "addSlack", label: "Add Slack destination", action: "addSlack" },
         ],
       }),
       destination: () => ({
@@ -362,16 +389,22 @@ export async function showNotifyMenu(ctx: ExtensionCommandContext, options: Menu
           },
           {
             id: "token",
-            label: assertDraft().provider === "telegram" ? "Replace bot token…" : "Replace application token…",
+            label: `Replace ${credentialLabels[assertDraft().provider]}…`,
             action: "token",
           },
           ...(assertDraft().provider === "telegram"
             ? [{ id: "chat", label: "Change chat ID…", to: "chat" as const }]
-            : [{ id: "serverUrl", label: "Change server URL…", to: "serverUrl" as const }]),
+            : []),
+          ...(assertDraft().provider === "gotify"
+            ? [{ id: "serverUrl", label: "Change server URL…", to: "serverUrl" as const }]
+            : []),
           { id: "label", label: "Change label…", to: "label" },
           ...(assertDraft().provider === "telegram"
             ? [{ id: "topic", label: "Set forum topic ID…", to: "topic" as const }]
-            : [{ id: "priority", label: "Set priority…", to: "priority" as const }]),
+            : []),
+          ...(assertDraft().provider === "gotify"
+            ? [{ id: "priority", label: "Set priority…", to: "priority" as const }]
+            : []),
           ...(!store.snapshot.effective.destinations[selectedId]
             ? [{ id: "saveOnly", label: "Save only", action: "saveOnly" as const }]
             : []),
@@ -524,14 +557,34 @@ export async function showNotifyMenu(ctx: ExtensionCommandContext, options: Menu
         draft = { provider: "gotify", label: "", appToken: result.value.trim(), serverUrl: "" };
         return { kind: "to", screen: "serverUrl" };
       },
+      addSlack: async ({ signal: actionSignal }) => {
+        const result = await runSecretInput(menuCtx, {
+          title: "Slack webhook URL",
+          signal: actionSignal,
+          isCurrent,
+          onError: reportError,
+        });
+        actionSignal.throwIfAborted();
+        current();
+        if (result.kind === "closed" && result.reason === "close") return { kind: "close" };
+        if (result.kind !== "submitted") return { kind: "stay" };
+        const destination = providers.get("slack")?.validate({
+          provider: "slack",
+          label: "Slack notifications",
+          webhookUrl: result.value,
+        });
+        if (destination?.provider !== "slack") throw new Error("Use a valid Slack Incoming Webhook URL.");
+        selectedId = randomUUID();
+        draft = destination;
+        return { kind: "to", screen: "review" };
+      },
       edit: () => {
         draft = { ...knownDestination() };
         return { kind: "to", screen: "review" };
       },
       token: async ({ signal: actionSignal }) => {
         const result = await runSecretInput(menuCtx, {
-          title:
-            assertDraft().provider === "telegram" ? "Replace Telegram bot token" : "Replace Gotify application token",
+          title: `Replace ${providerLabel(assertDraft())} ${credentialLabels[assertDraft().provider]}`,
           signal: actionSignal,
           isCurrent,
           onError: reportError,
@@ -540,8 +593,20 @@ export async function showNotifyMenu(ctx: ExtensionCommandContext, options: Menu
         current();
         if (result.kind === "submitted") {
           const destination = assertDraft();
-          if (destination.provider === "telegram") destination.botToken = result.value.trim();
-          else destination.appToken = result.value.trim();
+          switch (destination.provider) {
+            case "telegram":
+              destination.botToken = result.value.trim();
+              break;
+            case "gotify":
+              destination.appToken = result.value.trim();
+              break;
+            case "slack": {
+              const valid = providers.get("slack")?.validate({ ...destination, webhookUrl: result.value });
+              if (valid?.provider !== "slack") throw new Error("Use a valid Slack Incoming Webhook URL.");
+              destination.webhookUrl = valid.webhookUrl;
+              break;
+            }
+          }
         }
         if (result.kind === "closed" && result.reason === "close") return { kind: "close" };
         return { kind: "stay" };
