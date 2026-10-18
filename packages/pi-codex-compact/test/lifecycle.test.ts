@@ -314,7 +314,7 @@ test("configured custom Codex Responses APIs compact and replay only while curre
     getBranch: () => [...entries, compactionEntry],
   };
   const replayContext = createMockContext({
-    model: { ...customModel, provider: "second-codex-proxy" },
+    model: customModel,
     sessionManager: replaySessionManager,
   }).ctx;
   const summaryMessage = {

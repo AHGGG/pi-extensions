@@ -36,7 +36,7 @@ Warning: Checkpoint recovery could not complete; compaction cancelled and histor
 
 ## Repair and regression coverage
 
-The repair removes both exact-model comparisons and retains API/profile authorization, summary identity, retained-history fingerprints, marker validation, and branch/session ownership. A model change during an in-flight compaction still cancels that operation. The stored `modelId` remains creator provenance; a subsequent checkpoint records the currently selected model. Backend errors still follow the existing recovery policy.
+The repair removes both exact-model comparisons within the issuing provider and retains API/profile authorization, summary identity, retained-history fingerprints, marker validation, and branch/session ownership. A model change during an in-flight compaction still cancels that operation. The stored `modelId` remains creator provenance; a subsequent checkpoint records the currently selected model. Backend errors still follow the existing recovery policy.
 
 | File | Change |
 | --- | --- |
@@ -93,3 +93,5 @@ On the publication branch, package build, package typecheck, focused Biome, and 
 The local verification environment reused focused dependencies, including Pi 1.3.0 and the published TUI Kit, rather than a complete lockfile installation of every workspace. Rebuilding the newer workspace TUI Kit failed with `TS2305` for `highlight.js`'s `HLJSApi` export. Both required root gates were attempted separately and failed during unrelated workspace builds, including missing React/Radix and Langfuse dependencies. **Full-monorepo validation is not claimed.** These environment failures do not replace the need for upstream CI.
 
 To repeat the live scenario, use a backend that supports the selected compaction protocol and both models, put an assistant-only fact before the retained suffix, and run the four operations above. Verify opaque output, selected-model provenance, plaintext absence, and exact recall; successful HTTP status alone is insufficient. Backend-specific configuration and credentials are deliberately not included here.
+
+Provider changes are a separate encryption boundary. See [provider-switch validation](provider-switch-validation.md) for the subsequent failure, issuer-mediated transfer, and current combined test results.
