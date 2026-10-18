@@ -960,6 +960,9 @@ export class GoalRuntime {
       this.pendingGoalPromptMarkers.delete(pending.marker);
       return false;
     }
+    // A busy agent queues the prompt as a followUp, so before_agent_start cannot persist the
+    // contract until the current run ends; until then every request would append it at the tail.
+    if (ctx.isIdle?.() === false) this.ensureGoalContextContract(ctx, this.activeGoal);
     return true;
   }
 
