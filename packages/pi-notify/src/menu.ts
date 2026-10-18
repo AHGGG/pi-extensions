@@ -59,6 +59,8 @@ type Action =
   | "addDiscord"
   | "addBark"
   | "addWebhook"
+  | "addLine"
+  | "recipientId"
   | "userKey"
   | "bearerToken"
   | "ntfyTopic"
@@ -94,6 +96,7 @@ export const helpLines = [
   "Gotify labels are generated automatically. Edit the label or optional safe-integer priority from the destination review. An empty priority uses the server default.",
   "For Slack, enable Incoming Webhooks in a Slack app and add a webhook to your workspace. Its installation fixes the channel. Paste the complete hooks.slack.com URL only into the masked field; never into Pi chat.",
   "Slack webhook URLs are secrets. Reviews and Status show only that a webhook is configured. Revoke an exposed webhook in the Slack app before replacing it.",
+  "For LINE, enable Messaging API on an Official Account and enter its channel access token and user/group/room ID in masked inputs. Recipient eligibility and account quotas apply. LINE Notify is not supported. See docs/settings.md for setup and revocation.",
   "For ntfy, subscribe to a topic and configure server authentication and topic permissions. Topic secrecy is not access control. Review the server, optional Bearer token, and priority from 1 to 5.",
   "For Pushover, enter the application token and user key in masked inputs. Delivery uses normal priority only, without emergency acknowledgement or retries.",
   "For Discord, paste a normal text-channel webhook URL into the masked input. Mentions and link embeds are disabled; forum/media channels and thread selection are not supported.",
@@ -248,6 +251,7 @@ export async function showNotifyMenu(ctx: ExtensionCommandContext, options: Menu
           { id: "addDiscord", label: "Add Discord destination", action: "addDiscord" },
           { id: "addBark", label: "Add Bark destination", action: "addBark" },
           { id: "addWebhook", label: "Add Generic webhook destination", action: "addWebhook" },
+          { id: "addLine", label: "Add LINE destination", action: "addLine" },
         ],
       }),
       destination: () => ({
@@ -428,6 +432,9 @@ export async function showNotifyMenu(ctx: ExtensionCommandContext, options: Menu
             : []),
           ...(assertDraft().provider === "pushover"
             ? [{ id: "userKey", label: "Replace user key…", action: "userKey" as const }]
+            : []),
+          ...(assertDraft().provider === "line"
+            ? [{ id: "recipientId", label: "Replace recipient ID…", action: "recipientId" as const }]
             : []),
           { id: "label", label: "Change label…", to: "label" },
           ...(assertDraft().provider === "webhook"
@@ -615,6 +622,57 @@ export async function showNotifyMenu(ctx: ExtensionCommandContext, options: Menu
         draft = destination;
         return { kind: "to", screen: "review" };
       },
+      addLine: async ({ signal: actionSignal }) => {
+        const token = await runSecretInput(menuCtx, {
+          title: "LINE channel access token",
+          signal: actionSignal,
+          isCurrent,
+          onError: reportError,
+        });
+        actionSignal.throwIfAborted();
+        current();
+        if (token.kind === "closed" && token.reason === "close") return { kind: "close" };
+        if (token.kind !== "submitted") return { kind: "stay" };
+        const recipient = await runSecretInput(menuCtx, {
+          title: "LINE recipient ID (user, group, or room)",
+          signal: actionSignal,
+          isCurrent,
+          onError: reportError,
+        });
+        actionSignal.throwIfAborted();
+        current();
+        if (recipient.kind === "closed" && recipient.reason === "close") return { kind: "close" };
+        if (recipient.kind !== "submitted") return { kind: "stay" };
+        const destination = providers.get("line")?.validate({
+          provider: "line",
+          label: "LINE notifications",
+          channelAccessToken: token.value.trim(),
+          recipientId: recipient.value.trim(),
+        });
+        if (!destination) throw new Error("Use a valid LINE token and recipient ID.");
+        selectedId = randomUUID();
+        draft = destination;
+        return { kind: "to", screen: "review" };
+      },
+      recipientId: async ({ signal: actionSignal }) => {
+        const result = await runSecretInput(menuCtx, {
+          title: "Replace LINE recipient ID",
+          signal: actionSignal,
+          isCurrent,
+          onError: reportError,
+        });
+        actionSignal.throwIfAborted();
+        current();
+        if (result.kind === "closed" && result.reason === "close") return { kind: "close" };
+        if (result.kind === "submitted") {
+          const destination = assertDraft();
+          const valid = providers.get("line")?.validate({ ...destination, recipientId: result.value.trim() });
+          if (destination.provider !== "line" || valid?.provider !== "line")
+            throw new Error("Use a valid LINE user, group, or room ID.");
+          destination.recipientId = valid.recipientId;
+        }
+        return { kind: "stay" };
+      },
       addDiscord: ({ signal: actionSignal }) => addWebhook("discord", actionSignal),
       addWebhook: ({ signal: actionSignal }) => addWebhook("webhook", actionSignal),
       addBark: async ({ signal: actionSignal }) => {
@@ -757,6 +815,14 @@ export async function showNotifyMenu(ctx: ExtensionCommandContext, options: Menu
               const valid = providers.get("bark")?.validate({ ...destination, deviceKey: result.value.trim() });
               if (valid?.provider !== "bark") throw new Error("Use a valid device key.");
               destination.deviceKey = valid.deviceKey;
+              break;
+            }
+            case "line": {
+              const valid = providers
+                .get("line")
+                ?.validate({ ...destination, channelAccessToken: result.value.trim() });
+              if (valid?.provider !== "line") throw new Error("Use a valid LINE channel access token.");
+              destination.channelAccessToken = valid.channelAccessToken;
               break;
             }
             case "discord":

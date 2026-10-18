@@ -36,6 +36,12 @@ const lifecycleDestinations: Record<string, Destination> = {
     webhookUrl: "https://webhook.example/SecretEndpoint",
     bearerToken: "webhook-secret",
   },
+  line: {
+    provider: "line",
+    label: "LINE",
+    channelAccessToken: "line-secret-token",
+    recipientId: `U${"a".repeat(32)}`,
+  },
 };
 beforeEach(async () => {
   directory = await fs.mkdtemp(join(tmpdir(), "pi-notify-life-"));
@@ -217,8 +223,8 @@ it.each(Object.keys(lifecycleDestinations))(
     expect(h.notifyUI).not.toHaveBeenCalled();
   },
 );
-it("delivers one settled work period through all five new built-in providers", async () => {
-  const ids = ["ntfy", "pushover", "discord", "bark", "webhook"];
+it("delivers one settled work period through mixed existing and LINE providers", async () => {
+  const ids = ["ntfy", "pushover", "discord", "bark", "webhook", "line"];
   await fs.writeFile(
     join(directory, "pi-notify.json"),
     JSON.stringify({
@@ -232,6 +238,8 @@ it("delivers one settled work period through all five new built-in providers", a
     if (String(url).startsWith("https://api.pushover.net")) return Response.json({ status: 1 });
     if (String(url).startsWith("https://discord.com")) return Response.json({ id: "123", channel_id: "456", type: 0 });
     if (String(url).startsWith("https://bark.example")) return Response.json({ code: 200 });
+    if (url === "https://api.line.me/v2/bot/message/push")
+      return Response.json({ sentMessages: [{ id: "461230966842064897" }] });
     return new Response(null, { status: 202 });
   });
   const h = await setup();
@@ -242,13 +250,14 @@ it("delivers one settled work period through all five new built-in providers", a
     message: { role: "assistant", stopReason: "stop", content: "private transcript" },
   });
   await h.emit("agent_settled", ctx, { aborted: false });
-  await vi.waitFor(() => expect(fetcher).toHaveBeenCalledTimes(5), { interval: 1 });
+  await vi.waitFor(() => expect(fetcher).toHaveBeenCalledTimes(ids.length), { interval: 1 });
   expect(fetcher.mock.calls.map(([url]) => url)).toEqual([
     "https://ntfy.example/base",
     "https://api.pushover.net/1/messages.json",
     "https://discord.com/api/webhooks/123456789012345678/DiscordSecret?wait=true",
     "https://bark.example/base/push",
     "https://webhook.example/SecretEndpoint",
+    "https://api.line.me/v2/bot/message/push",
   ]);
   const payloads = fetcher.mock.calls.map(([, init]) => JSON.parse(String(init?.body)));
   for (const payload of payloads) {
@@ -258,8 +267,11 @@ it("delivers one settled work period through all five new built-in providers", a
   expect(payloads[2].allowed_mentions).toEqual({ parse: [] });
   expect(Object.keys(payloads[4])).toEqual(["id", "title", "body", "settledAt"]);
   expect(payloads[4].settledAt).toBeTypeOf("number");
+  expect(payloads[5].to).toBe(`U${"a".repeat(32)}`);
+  expect(payloads[5].messages).toMatchObject([{ type: "text" }]);
+  expect(new Headers(fetcher.mock.calls[5]?.[1]?.headers).get("authorization")).toBe("Bearer line-secret-token");
   await h.emit("agent_settled", ctx, { aborted: false });
-  expect(fetcher).toHaveBeenCalledTimes(5);
+  expect(fetcher).toHaveBeenCalledTimes(ids.length);
   await h.emit("session_shutdown", ctx);
   expect(h.notifyUI).not.toHaveBeenCalled();
 });
@@ -278,12 +290,23 @@ it("suppresses aborts even when final assistant error remains after retry cancel
 });
 it.each(["rpc", "print", "json"])("uses settlement fallback in %s, rejects or explains non-TUI setup", async (mode) => {
   await enable("after-inactivity");
+  const path = join(directory, "pi-notify.json");
+  const settings = JSON.parse(await fs.readFile(path, "utf8"));
+  settings.destinations.line = lifecycleDestinations.line;
+  settings.targetIds.push("line");
+  await fs.writeFile(path, JSON.stringify(settings));
+  fetcher.mockImplementation(async (url) =>
+    String(url).startsWith("https://api.telegram.org")
+      ? Response.json({ ok: true, result: {} })
+      : Response.json({ sentMessages: [{ id: "461230966842064897" }] }),
+  );
   const h = await setup();
   const ctx = h.context(mode);
   await h.emit("session_start", ctx);
   await h.emit("before_agent_start", ctx);
   await h.emit("agent_settled", ctx, { aborted: false });
-  await vi.waitFor(() => expect(fetcher).toHaveBeenCalledTimes(1), { interval: 1 });
+  await vi.waitFor(() => expect(fetcher).toHaveBeenCalledTimes(2), { interval: 1 });
+  expect(h.tui.openCount).toBe(0);
   const command = h.commands.get("notify");
   assert.ok(command);
   if (mode === "rpc") {
@@ -291,6 +314,8 @@ it.each(["rpc", "print", "json"])("uses settlement fallback in %s, rejects or ex
     expect(h.notifyUI).toHaveBeenCalled();
   } else await expect(command.handler("", ctx as ExtensionCommandContext)).rejects.toThrow("requires TUI");
   await expect(command.handler("settings trailing", ctx as ExtensionCommandContext)).rejects.toThrow("Usage");
+  expect(h.tui.openCount).toBe(0);
+  expect(JSON.stringify(h.notifyUI.mock.calls)).not.toMatch(/line-secret|U[a-f0-9]{32}/);
   await h.emit("session_shutdown", ctx);
 });
 it("isolates headless sessions sharing one UI and ignores untrusted project routing", async () => {

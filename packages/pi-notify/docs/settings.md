@@ -14,7 +14,7 @@ Use `/notify` for setup or edit the canonical user JSON file. Settings load on s
 
 Destination IDs contain 1–64 ASCII letters, digits, underscores, or hyphens, starting with a letter or digit; `constructor`, `prototype`, and `__proto__` are reserved. The menu creates IDs automatically.
 
-Telegram setup requires a bot token and chat ID; Gotify setup requires an application token and server URL; Slack setup requires a complete Incoming Webhook URL. The five additional providers use the [fields below](#new-provider-fields). Add destinations through the provider-choice screen in `/notify`. The menu generates a label and opens a review for edits before saving. Editing an existing destination opens the same review with its current values. Destination changes take effect only after confirmation. For a new destination, Save and use adds it to User `targetIds` in the same atomic save; Save only stores it without selecting it. Editing an existing destination preserves its selection state. Explicit Project selections and saved `enabled: false` values are unchanged. Automatic notifications default to On; Off pauses automatic delivery but still allows manual tests. No delivery occurs without a selected destination.
+Telegram setup requires a bot token and chat ID; Gotify setup requires an application token and server URL; Slack setup requires a complete Incoming Webhook URL. The other providers use the [fields below](#new-provider-fields). Add destinations through the provider-choice screen in `/notify`. The menu generates a label and opens a review for edits before saving. Editing an existing destination opens the same review with its current values. Destination changes take effect only after confirmation. For a new destination, Save and use adds it to User `targetIds` in the same atomic save; Save only stores it without selecting it. Editing an existing destination preserves its selection state. Explicit Project selections and saved `enabled: false` values are unchanged. Automatic notifications default to On; Off pauses automatic delivery but still allows manual tests. No delivery occurs without a selected destination.
 
 Each Telegram destination has `provider: "telegram"`, a nonempty `label` of at most 128 characters, `botToken`, a numeric string `chatId`, and optional positive safe-integer `messageThreadId`. A group or supergroup ID can be negative. Store IDs as strings, not JSON numbers. Forum topic IDs use Telegram's `message_thread_id` field. Other Telegram chat products with additional required fields are not supported.
 
@@ -37,7 +37,7 @@ Each Gotify destination has `provider: "gotify"`, a nonempty `label` of at most 
 
 Each Slack destination has `provider: "slack"`, a nonempty `label` of at most 128 characters, and `webhookUrl`. The complete URL is a credential and belongs only in the canonical User file. The channel comes from the webhook installation, not the label or a settings field. URLs must be at most 2048 characters and match `https://hooks.slack.com/services/T[A-Z0-9]+/B[A-Z0-9]+/[A-Za-z0-9]+` exactly: a `T` workspace segment, a `B` installation segment, and an alphanumeric secret. Ports, URL credentials, query strings, fragments, redirects, alternate hosts, whitespace, control characters, backslashes, and encoded or normalized URL alternatives are rejected. GovSlack is not supported.
 
-A User file can select all eight providers together. For example, with existing `personal` Telegram and `gotify` destinations, add a Slack destination and select their IDs:
+A User file can select all nine providers together. For example, with existing `personal` Telegram and `gotify` destinations, add a Slack destination and select their IDs:
 
 ```json
 {
@@ -69,6 +69,7 @@ All destinations require `provider` and a nonempty `label` of at most 128 charac
 | `discord` | `webhookUrl` | None |
 | `bark` | `serverUrl`, `deviceKey` | None |
 | `webhook` | `webhookUrl` | `bearerToken` |
+| `line` | `channelAccessToken`, `recipientId` | None |
 
 For ntfy and Bark, enter the server base URL including any reverse-proxy base path. Do not append the topic or `/push`. Generic `webhookUrl` is the complete receiving endpoint. These configurable URLs must be absolute HTTP(S) URLs, at most 2048 characters both before and after normalization. URL user information, whitespace, control characters, encoded controls, backslashes (including encoded backslashes), malformed percent escapes, query strings, and fragments are rejected. Bark server bases remove trailing slashes before appending `/push`. ntfy publish URLs and Generic webhook endpoints preserve trailing slashes because they can select a different route. Literal or encoded dot segments and noncanonical numeric IPv4 aliases are rejected instead of silently selecting a different path or host. Prefer HTTPS; HTTP does not encrypt credentials or metadata. Explicit local/private addresses are allowed and can reach the Pi host's network. Use only trusted endpoints.
 
@@ -121,6 +122,31 @@ Local title and body caps are 256 and 2048 UTF-8 bytes. The encoded `{title,body
 ```
 
 `settledAt` is Unix epoch milliseconds, not seconds. No internal emphasis, destination credentials, or configurable fields are added. Any HTTP 2xx response counts as endpoint acceptance, including empty or non-JSON responses, after the bounded response read completes. This is not proof of downstream delivery. An oversized or stalled 2xx response body can still fail with `response` or `timeout`.
+
+### LINE
+
+Use `provider: "line"`, a `channelAccessToken`, and a `recipientId`. LINE Notify tokens and public LINE IDs are not accepted. The token must contain 1–8192 characters in the Bearer token alphabet (`A–Z`, `a–z`, digits, `-._~+/`, with optional trailing `=`), without whitespace. The 8192-character cap is a local header safety bound, not a LINE service limit. A user ID must match `U[0-9a-f]{32}`. Group and room IDs must start with `C` or `R`; the provider accepts an opaque suffix of 1–128 printable ASCII characters without spaces. Both the ASCII restriction and suffix cap are local safety policies, not a claimed LINE group/room ID grammar. Use the complete ID from LINE, not a shortened example. The token and raw recipient ID stay hidden in all menus, previews, Status, and errors.
+
+The transport posts one `{ "type": "text", "text": "..." }` message to `https://api.line.me/v2/bot/message/push`, with the recipient in `to` and the token only in the Authorization header. Title and metadata body are combined, terminal controls removed, and text clipped to 5,000 UTF-16 code units, including an ellipsis when clipped, without splitting Unicode code points. No mention objects, formatting, silent-delivery fields, or emphasis offsets are sent. Client automatic links are not suppressed.
+
+Only HTTP 200 with a legacy empty JSON object or a valid current `sentMessages` response counts as accepted. The current response must contain 1–5 message objects with a nonempty string or nonnegative integer `id`; `quoteToken` is an optional string. Empty/non-JSON, unrelated, malformed, or oversized success bodies fail safely. HTTP 429 can indicate a rate limit or an exhausted account allowance; retry-after is diagnostic only and no retry occurs.
+
+For example, add this fragment to the existing User document and include `line-personal` in `targetIds` if automatic notifications should use it. Replace both private placeholders outside Pi chat; do not replace unrelated destinations or settings.
+
+```json
+{
+  "destinations": {
+    "line-personal": {
+      "provider": "line",
+      "label": "Personal LINE",
+      "channelAccessToken": "<channel-access-token>",
+      "recipientId": "<complete-user-group-or-room-id>"
+    }
+  }
+}
+```
+
+Recipient eligibility and message allowances apply. A user generally must be a friend of the Official Account or have messaged it in a one-to-one chat within the past seven days; group/room delivery requires the account to participate. HTTP 200 does not prove receipt: blocked or deleted accounts and ineligible users can still produce acceptance without delivery. Monthly allowances, pricing, and group message counting depend on the account's region and plan. Check the account before enabling automatic notifications. The extension does not obtain recipient IDs, run an inbound webhook, inspect quota, or manage account access.
 
 ### Mixed User settings example
 
@@ -196,6 +222,15 @@ To change channels, authorize a webhook for the new channel and replace the save
 
 Treat an exposed URL as a compromised credential. Revoke or remove that webhook through Slack app management before replacing it in User settings; ask the workspace administrator if you cannot manage the installation. Slack can also revoke leaked webhooks automatically. Merely editing or removing a destination does not revoke the old webhook. Confirm a replacement with Send test. A disabled webhook, archived channel, or workspace restriction can prevent delivery; repair the installation instead of expecting a retry. Cancelling a request cannot recall a message Slack has already accepted.
 
+## LINE setup and revocation
+
+1. Create a [LINE Official Account](https://developers.line.biz/en/docs/messaging-api/getting-started/) and enable Messaging API from its administration interface. Open the linked channel in LINE Developers Console and obtain a channel access token. Account policy, plan, and region can restrict availability or message allowance.
+2. For personal delivery, add the account as a friend and use your developer-console user ID for the same provider. For groups or rooms, permit the account to join and obtain the full `groupId` or `roomId` from an authorized webhook event through an existing receiver. See [user ID discovery](https://developers.line.biz/en/docs/messaging-api/getting-user-ids/) and [group chats](https://developers.line.biz/en/docs/messaging-api/group-chats/). The extension does not install a receiver or discover IDs. A display name or public LINE ID is not the recipient ID.
+3. Run `/notify`, add a LINE destination, and enter the token and recipient ID in separate masked inputs. Review the generated label. Replace either private value from review; replacement inputs start empty and never display the saved value. Cancellation leaves the draft unsaved.
+4. Choose Save only or Save and use, then Send test. Check the metadata preview before confirming the external request, and check the receiving LINE chat after acceptance. Confirm account allowance and recipient eligibility before expecting automatic delivery.
+
+For exposed credentials, follow the [channel token rules](https://developers.line.biz/en/docs/basics/channel-access-token/) for that token type: revoke a revocable token and replace it, or reissue a long-lived token and end any old-token grace period. Stateless tokens cannot be revoked and expire after their short validity period. Do not rely on removing a destination to revoke a token. Recheck receipt after replacement; cancellation cannot recall an accepted push. Recipient IDs are private identifiers, not authentication credentials; do not publish them with example settings.
+
 ## Persistence and recovery
 
 Settings operations are ordered within the process, including across store instances for the same user path. Reads wait for pending writes. This is not a cross-process lock: simultaneous menu edits in different Pi processes can conflict.
@@ -203,6 +238,10 @@ Settings operations are ordered within the process, including across store insta
 Writes read the latest valid document, preserve unrelated fields and destination fields, and publish using a same-directory temporary file plus rename. User settings writes use private `0600` permissions on POSIX, including replacement files. Unknown provider data is retained during unrelated edits. Malformed JSON blocks writes instead of being overwritten with defaults. An existing non-object `destinations` value blocks destination changes. A non-object destination entry cannot be replaced with a new object. Repair these stored structures first; destination setup does not coerce them to empty defaults. A failed save keeps the previous file and effective state; the menu restores the previous displayed setting. A failed operation does not poison subsequent operations. Reload and shutdown await queued settings operations.
 
 If a file is malformed, repair it manually before saving. Disable notifications in every effective scope to stop new attempts and cancel pending reminders. Unloading the extension aborts owned delivery work, but cannot recall accepted messages. Revoke exposed tokens or Slack webhooks before replacing them in User settings.
+
+### Reverting to a version without LINE
+
+While this version is installed, remove LINE destination IDs from explicit Project selections in every affected project, then remove them from User selections and delete all saved LINE destinations, including unselected ones. Preserve the other eight providers and unrelated fields. Confirm the older version supports every saved destination and selected ID before installing it and reloading. Removing selections alone is insufficient: an unsupported unselected destination also disables older routing. Revoke unused or exposed channel tokens separately through LINE.
 
 ### Reverting to a version without the new providers
 
@@ -238,9 +277,9 @@ The coordinator observes `before_agent_start`, with `agent_start` as a fallback,
 
 Metadata is collected at settlement through bounded Git subprocesses. Missing Git information is omitted. Pending metadata work is cancelled with its reminder. Once a delivery attempt starts, new user work does not cancel it; session replacement, reload, shutdown, or explicit test cancellation does. Late results cannot replace newer per-destination status. Test delivery bypasses automatic enablement and inactivity, requires explicit confirmation, and never changes automatic arming or history.
 
-The provider contract validates destinations and sends a provider-neutral notification with a cancellation signal. Providers do not read sessions, change settings, schedule timers, or decide notification policy. The built-in provider map contains Telegram, Gotify, Slack, ntfy, Pushover, Discord, Bark, and Generic webhook. Transport results distinguish accepted, failed with a safe code, and cancelled; retry-after is diagnostic, not an automatic retry instruction.
+The provider contract validates destinations and sends a provider-neutral notification with a cancellation signal. Providers do not read sessions, change settings, schedule timers, or decide notification policy. The built-in provider map contains Telegram, Gotify, Slack, ntfy, Pushover, Discord, Bark, Generic webhook, and LINE. Transport results distinguish accepted, failed with a safe code, and cancelled; retry-after is diagnostic, not an automatic retry instruction.
 
-All transports reject redirects, use a 10-second deadline covering the request and response read, make one attempt, and cap success response reads at 65,536 bytes. Errors expose only fixed codes, never tokens, request URLs, response bodies, or raw transport exceptions. The five new providers report HTTP 429 as `rate-limit`, with a positive integer `Retry-After` in seconds when available; fractional Discord retry values are not displayed. Retry-after is diagnostic only. Service acceptance does not prove device receipt, downstream delivery, or reading. Text clipping preserves Unicode code points; the [provider limits](#new-provider-fields) specify each byte or UTF-16 budget.
+All transports reject redirects, use a 10-second deadline covering the request and response read, make one attempt, and cap success response reads at 65,536 bytes. Errors expose only fixed codes, never tokens, request URLs, response bodies, or raw transport exceptions. ntfy, Pushover, Discord, Bark, Generic webhook, and LINE report HTTP 429 as `rate-limit`, with a positive integer `Retry-After` in seconds when available; fractional Discord retry values are not displayed. Retry-after is diagnostic only. Service acceptance does not prove device receipt, downstream delivery, or reading. Text clipping preserves Unicode code points; the [provider limits](#new-provider-fields) specify each byte or UTF-16 budget.
 
 Telegram requests use its fixed HTTPS origin and do not enable paid broadcasts. Text is clipped to at most 4096 UTF-16 code units without splitting a Unicode code point. Telegram's JSON `ok` field and HTTP status are both checked.
 
@@ -269,6 +308,9 @@ Slack combines the title and body into one section block with a `plain_text` tex
 - [Discord Execute Webhook](https://discord.com/developers/docs/resources/webhook#execute-webhook): endpoint, `wait=true`, content limits, Message response, and flags; [allowed mentions](https://discord.com/developers/docs/resources/message#allowed-mentions-object): explicit empty mention parsing.
 - [Bark tutorial](https://bark.day.app/#/tutorial) and official server source at commit `640deaa151ddf79193202927b35ca2f14f65ee1d`: [JSON API](https://github.com/Finb/bark-server/blob/640deaa151ddf79193202927b35ca2f14f65ee1d/docs/API_V2.md), [push handler](https://github.com/Finb/bark-server/blob/640deaa151ddf79193202927b35ca2f14f65ee1d/route_push.go), [router](https://github.com/Finb/bark-server/blob/640deaa151ddf79193202927b35ca2f14f65ee1d/router.go), and [Basic authentication](https://github.com/Finb/bark-server/blob/640deaa151ddf79193202927b35ca2f14f65ee1d/route_auth.go). These establish `/push`, `device_key`, numeric acceptance, body logging, and the unsupported native Basic-auth mode.
 - [Apple APNs payloads](https://developer.apple.com/documentation/usernotifications/generating-a-remote-notification): the 4096-byte regular notification payload limit; Bark's smaller local text budgets leave envelope space.
+- [LINE push messages](https://developers.line.biz/en/reference/messaging-api/#send-push-message) and [text character count](https://developers.line.biz/en/docs/messaging-api/text-character-count/): fixed endpoint, eligibility, UTF-16 budget, and response conditions.
+- [LINE OpenAPI](https://github.com/line/line-openapi/blob/main/messaging-api.yml) and [official SDK push tests](https://github.com/line/line-bot-sdk-nodejs/blob/master/test/line-bot-client.spec.ts): current `sentMessages` and legacy empty-object acceptance.
+- [LINE channel access tokens](https://developers.line.biz/en/docs/basics/channel-access-token/), [user IDs](https://developers.line.biz/en/docs/messaging-api/getting-user-ids/), [group chats](https://developers.line.biz/en/docs/messaging-api/group-chats/), and [pricing](https://developers.line.biz/en/docs/messaging-api/pricing/): setup, revocation, recipient acquisition, and account-dependent message allowance.
 - [Pi extension lifecycle](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/extensions.md#agent_start--agent_end--agent_before_settle--agent_settled).
 
 Input classification follows the installed Pi `ProcessTerminal` and `StdinBuffer` sequence splitting, Pi's `parseKey`/`isKeyRelease`, and `TuiAltScreen` SGR mouse handling. Pure classifier tests cover keyboard, Unicode, paste, focus, press/release, motion, wheel, legacy mouse, CSI/OSC/DCS/APC replies, and unknown input. These tests do not prove that an event reaches the extension. Installed-runtime tests also pass events through real regular/fullscreen Pi renderers and check listener order, viewport keys, and focused-overlay branches. Physical terminal and multiplexer behavior remains unverified.
