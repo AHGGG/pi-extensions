@@ -1,5 +1,12 @@
 # @narumitw/pi-notify
 
+## 0.4.0
+
+### Minor Changes
+
+- 515841d: Add LINE Messaging API destinations with masked token and recipient setup, confirmed tests, Unicode-safe text limits, and bounded one-attempt delivery. Preserve private User settings and existing provider behavior.
+- bf9de4f: Add Microsoft Teams Workflows destinations with masked signed-URL setup, confirmed tests, literal Adaptive Card text, a local encoded-payload budget, and bounded one-attempt delivery. Support commercial Anyone-authenticated triggers under an explicit local URL policy; only HTTP 202 counts as trigger acceptance, not a Teams post or receipt. Live interoperability remains unverified. Preserve private User settings and existing provider behavior.
+
 ## 0.3.0
 
 ### Minor Changes
