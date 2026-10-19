@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { stripVTControlCharacters } from "node:util";
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { initTheme } from "@earendil-works/pi-coding-agent";
-import { type Component, getKeybindings, type TUI } from "@earendil-works/pi-tui";
+import { type Component, getKeybindings, type TUI, TuiAltScreen } from "@earendil-works/pi-tui";
 import { test } from "vitest";
 import { runBtwFullscreen } from "../src/fullscreen-ui.js";
 import { BtwAnsweringView, BtwTranscriptPager } from "../src/transcript-pager.js";
@@ -179,7 +179,8 @@ test.each(cases)(
     assert.ok(harness.styleCalls.some((call) => call.startsWith("bold:needle")));
     const searchFrame = stripVTControlCharacters(harness.writes.join(""));
     assert.match(searchFrame, /needle/);
-    assert.match(searchFrame, /btw · side thread/);
+    assert.ok(sideTui instanceof TuiAltScreen);
+    assert.match(stripVTControlCharacters(sideTui.getScreenLines().at(-2) ?? ""), /^btw/u);
     assert.match(searchFrame, kind === "completed" ? /Ctrl\+C/ : /Answering…/);
 
     harness.writes.length = 0;

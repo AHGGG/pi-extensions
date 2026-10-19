@@ -188,9 +188,9 @@ test("mouse wheel and history keys scroll the native side-thread viewport", asyn
   harness.input("\u001b[<64;1;1M");
   sideTui.renderNow(true);
   const wheelOlderTop = viewport.viewportTop;
-  assert.ok(wheelOlderTop < initialTop, "wheel-up over the fixed header should reveal older history");
+  assert.ok(wheelOlderTop < initialTop, "wheel-up over the transcript should reveal older history");
   const wheelFrame = stripVTControlCharacters(harness.writes.join(""));
-  assert.match(wheelFrame, /btw · side thread/);
+  assert.match(stripVTControlCharacters(viewport.getScreenLines().at(-2) ?? ""), /^btw/u);
   assert.match(wheelFrame, /Ctrl\+C/);
   assert.match(wheelFrame, /PgUp\/PgDn/);
   assert.match(wheelFrame, /↓ Jump to latest message · Ctrl\+End/u);
@@ -259,7 +259,7 @@ test("mouse wheel scrolls transcript history while an answer and composer stay v
   sideTui.renderNow(true);
   assert.ok(viewport.viewportTop < initialTop);
   const wheelFrame = stripVTControlCharacters(harness.writes.join(""));
-  assert.match(wheelFrame, /btw · side thread/);
+  assert.match(stripVTControlCharacters(viewport.getScreenLines().at(-2) ?? ""), /^btw/u);
   assert.match(wheelFrame, /Answering…/);
   assert.match(wheelFrame, /Ctrl\+C/);
   assert.match(wheelFrame, /↓ Jump to latest message · Ctrl\+End/u);

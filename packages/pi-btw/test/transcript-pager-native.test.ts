@@ -548,7 +548,9 @@ test("answering status uses Editor border; queue remains bounded, ordered, and t
   assert.match(text, /Steering next: first[\s\S]*Steering next: second[\s\S]*Steering next: … \+2 more/u);
   assert.doesNotMatch(text, /Steering next: third/u);
   view.setWorkspaceFocus("main", "F6");
-  assert.match(stripVTControlCharacters(view.render(120).join("\n")), /Main focus · F6 switch/u);
+  const focused = stripVTControlCharacters(view.render(120).join("\n"));
+  assert.match(focused, /btw · Main focus/u);
+  assert.match(focused, /F6 switch/u);
   view.invalidate();
   view.finish();
   assert.equal(view.getPrimaryScrollView().scrollbar, "hidden");
