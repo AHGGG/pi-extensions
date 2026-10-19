@@ -1,12 +1,12 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { registerCompletionRenderer } from "./completion-renderer.js";
+import { registerMessageRenderers } from "./message-renderers.js";
 import { registerSubagentTools, type SubagentToolsDependencies } from "./tools.js";
 import { createSubagentWidgetController } from "./widget.js";
 
 export type SubagentsDependencies = SubagentToolsDependencies;
 
 export default function subagents(pi: ExtensionAPI, dependencies: SubagentsDependencies = {}): void {
-  registerCompletionRenderer(pi);
+  registerMessageRenderers(pi);
   const tools = registerSubagentTools(pi, dependencies);
   const widget = createSubagentWidgetController(tools.runtime);
   let activeSession: ExtensionContext["sessionManager"] | undefined;

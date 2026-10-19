@@ -178,7 +178,10 @@ describe("generated Jiti entrypoints", { concurrent: false, shuffle: false }, ()
         const main = loaded.extensions[0];
         assert.ok(main?.handlers.has("session_start"));
         assert.ok(main?.handlers.has("session_shutdown"));
-        assert.deepEqual([...(main?.messageRenderers.keys() ?? [])], ["pi-subagents-completion"]);
+        assert.deepEqual(
+          [...(main?.messageRenderers.keys() ?? [])],
+          ["pi-subagents-completion", "pi-subagents-message"],
+        );
         assert.deepEqual(
           [...(main?.tools.keys() ?? [])],
           ["subagent_spawn", "subagent_inspect", "subagent_cancel", "subagent_wait", "subagent_send"],
