@@ -3,10 +3,9 @@ import { resolveMenuScreen } from "@narumitw/pi-tui-kit";
 import { createTuiHarness } from "@narumitw/pi-tui-kit/testing";
 import { describe, expect, test } from "vitest";
 import { createMockContext } from "../../../test/support.js";
-import extension from "../src/index.js";
-import { createInitialShowcaseState, createShowcaseMenu } from "../src/menu.js";
-import { showTuiKitShowcase } from "../src/runtime.js";
-import { createPiTuiKitShowcaseExtension } from "../src/showcase.js";
+import extension, { createPiTuiKitShowcaseExtension } from "../scripts/showcase/extension.js";
+import { createInitialShowcaseState, createShowcaseMenu } from "../scripts/showcase/menu.js";
+import { showTuiKitShowcase } from "../scripts/showcase/runtime.js";
 
 describe("Pi TUI Kit showcase", () => {
   test("exposes every standard Kit screen from the main menu", () => {

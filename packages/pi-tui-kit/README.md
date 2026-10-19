@@ -140,6 +140,26 @@ Abort owned work on replacement or shutdown, honor each supplied signal, and rev
 Keep raw action payloads separate from sanitized terminal display text.
 Kit's UI lifecycle handling does not replace those responsibilities.
 
+## 🧪 Local showcase
+
+From the repository root, build Kit and start Pi with the local demo extension:
+
+```bash
+npm run showcase:tui-kit
+```
+
+You can also run `node packages/pi-tui-kit/scripts/showcase.mjs` directly.
+Both commands build Kit before starting Pi with automatic extension and skill loading disabled and session persistence off.
+Pi must be available on `PATH`; the launcher loads only the trusted repository demo, which runs with Pi's permissions.
+
+In Pi TUI mode, run `/tui-kit-showcase` without arguments to preview action, detail, browse, choice, settings, input, review, and multi-select screens.
+The menu also includes questionnaire, task, confirmation, and live-choice interactions; it reopens after each standalone interaction.
+All demo state stays in memory and resets on each command or session replacement; no settings are written.
+RPC reports that TUI mode is required, while print and JSON modes reject the command without ad hoc output.
+The demo loads Kit only when the command runs and is not registered in the repository's default extension set.
+
+The launcher and demo source are repository-only files, not part of the published library.
+
 ## 🗂️ Package layout
 
 ```text
@@ -149,7 +169,7 @@ packages/pi-tui-kit/
 │   ├── components/                    # Internal TUI adapters
 │   └── testing/                       # Public test-only drivers
 ├── dist/                              # Published ESM and TypeScript declarations
-├── scripts/build.mjs                  # Library builder
+├── scripts/                           # Library builder and repository-only showcase
 ├── docs/                              # Published reference documentation
 └── test/                              # Behavior and lifecycle coverage
 ```
