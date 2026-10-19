@@ -120,14 +120,16 @@ function priorityRowIndexes(
 ) {
   const indexes = new Set<number>();
   const pinned = Math.max(0, Math.min(rows.length, Math.floor(pinnedRows)));
-  if (pinned > 0 && indexes.size < budget) indexes.add(0);
   const selectedIndex = selectedRowIndex(rows);
   if (selectedIndex >= 0 && indexes.size < budget) indexes.add(selectedIndex);
-  for (let index = 1; index < pinned && indexes.size < budget; index += 1) indexes.add(index);
+  if (selectedIndex >= 0) {
+    for (let index = 0; index < pinned && indexes.size < budget; index += 1) indexes.add(index);
+  }
   const tailStart = Math.max(pinned, rows.length - Math.max(0, Math.floor(priorityTailRows)));
   for (let index = tailStart; index < rows.length && indexes.size < budget; index += 1) {
     indexes.add(index);
   }
+  for (let index = 0; index < pinned && indexes.size < budget; index += 1) indexes.add(index);
   return indexes;
 }
 

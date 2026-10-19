@@ -652,6 +652,8 @@ They remain separate so a custom or legacy current value can focus a safe fallba
 A confirmed row invokes the screen action with its raw `itemId`; moving the cursor only changes selected details.
 Rejected or thrown actions retain the selection.
 Disabled rows stay focusable for their explanation but never invoke the action.
+Action and choice screens wrap the selected description below the list when it does not fit inline.
+At constrained heights, the selected row takes priority; a filtered empty state keeps its recovery guidance ahead of the search field.
 RPC flattens choice rows to unique dialog labels while preserving raw identity.
 
 ```ts
@@ -943,6 +945,10 @@ Use arrows for Kit document navigation, or configure non-conflicting host viewpo
 Plain Home/End remain available to the focused component, including its search input.
 A focused Pi overlay can own viewport input until its owner explicitly transfers focus.
 Kit does not override these host decisions or expose overlay options through `runCustomInteraction()`.
+Built-in interaction hints omit configured keys intercepted by the native host, including modifier aliases and legacy key collisions; a usable configured fallback remains visible.
+Host-owned Space also suppresses the local document-search hint.
+Other extensions can install earlier input listeners that Pi does not expose through a public ownership API; Kit cannot predict those listeners.
+The [selector and host-input audit](./core-alignment-audit.md) records native dispatch evidence and retained cross-mode contracts.
 
 Custom Kit interactions do not currently receive the blocked program-status reporting provided by Pi's native dialogs.
 Kit does not emit terminal program-status codes on Pi's behalf.

@@ -23,6 +23,7 @@ import {
   documentSearchActionMatches,
   documentSearchActivationAvailable,
 } from "./document-search.js";
+import { componentKeyAvailable, componentKeybindings } from "./host-input.js";
 import { componentRows, fitCompactHintSegments, menuHint, renderHorizontalRule, safeMenuText } from "./rendering.js";
 
 const DEFAULT_REVIEW_VIEWPORT_SIZE = 14;
@@ -38,6 +39,7 @@ export type ReviewOptions<ScreenId extends string, ActionId extends string> = Me
 export function createReviewComponent<ScreenId extends string, ActionId extends string>(
   options: ReviewOptions<ScreenId, ActionId>,
 ): MenuScreenComponent {
+  options = { ...options, keybindings: componentKeybindings(options.tui, options.keybindings) };
   let scrollOffset = 0;
   let lastMaximumScroll = 0;
   let lastViewportSize = reviewViewportSize(options.screen);
@@ -60,7 +62,9 @@ export function createReviewComponent<ScreenId extends string, ActionId extends 
   const documentLineCache = createDocumentLineCache(options.theme, Boolean(options.screen.enableSearch));
   const search = options.screen.enableSearch ? new DocumentSearchController() : undefined;
   const searchActivationAvailable = Boolean(
-    search && documentSearchActivationAvailable(options.keybindings, Boolean(options.screen.confirm)),
+    search &&
+      componentKeyAvailable(options.tui, DOCUMENT_SEARCH_ACTIVATE_KEY) &&
+      documentSearchActivationAvailable(options.keybindings, Boolean(options.screen.confirm)),
   );
 
   const moveTo = (offset: number) => {
