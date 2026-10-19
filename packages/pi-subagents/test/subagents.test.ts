@@ -14,6 +14,7 @@ import { createChildCommunicationExtension } from "../src/child-communication-to
 import { MAX_MESSAGE_BYTES, MAX_MESSAGE_LINES, MessageBroker } from "../src/message-broker.js";
 import { MAX_MODEL_TEXT_BYTES, MAX_MODEL_TEXT_LINES } from "../src/model-output.js";
 import { MAX_SKILL_SCAN_DEPTH } from "../src/resource-attachments.js";
+import { SubagentSettingsStore } from "../src/settings.js";
 import subagents, { type SubagentsDependencies } from "../src/subagents.js";
 import type { ChildRequest, ChildResult } from "../src/types.js";
 import { SUBAGENT_WIDGET_KEY } from "../src/widget.js";
@@ -51,6 +52,7 @@ type Mock = ReturnType<typeof createMockPi>;
 type Context = ReturnType<typeof createMockContext>;
 
 const activeSessions: Array<{ mock: Mock; context: Context }> = [];
+const settingsDirectories: string[] = [];
 
 beforeEach(() => {
   delete process.env.PI_SUBAGENT_DEPTH;
@@ -60,6 +62,7 @@ afterEach(async () => {
   for (const session of activeSessions.splice(0)) {
     await emit(session.mock, "session_shutdown", { reason: "quit" }, session.context.ctx);
   }
+  for (const directory of settingsDirectories.splice(0)) rmSync(directory, { recursive: true, force: true });
   delete process.env.PI_SUBAGENT_DEPTH;
   vi.restoreAllMocks();
 });
@@ -155,7 +158,7 @@ test("registers five fixed main-agent tools with stable schemas and explicit lim
       /\b(?:background|bounded)\b/i,
     );
   }
-  assert.deepEqual([...mock.commands.keys()], []);
+  assert.deepEqual([...mock.commands.keys()], ["subagents"]);
   const childMock = createMockPi();
   createChildCommunicationExtension({
     async send() {
@@ -1658,7 +1661,12 @@ async function setup(
     },
     ...contextOverrides,
   });
-  subagents(mock.pi, dependencies);
+  const settingsDirectory = mkdtempSync(path.join(os.tmpdir(), "pi-subagents-test-settings-"));
+  settingsDirectories.push(settingsDirectory);
+  subagents(mock.pi, {
+    settingsStore: new SubagentSettingsStore(path.join(settingsDirectory, "pi-subagents.json")),
+    ...dependencies,
+  });
   await emit(mock, "session_start", { reason: "startup" }, context.ctx);
   activeSessions.push({ mock, context });
   return { mock, context };

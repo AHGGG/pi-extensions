@@ -2,15 +2,17 @@ import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
-import { DefaultResourceLoader, SettingsManager } from "@earendil-works/pi-coding-agent";
+import { DefaultResourceLoader, initTheme, SettingsManager } from "@earendil-works/pi-coding-agent";
+import { createTuiHarness } from "@narumitw/pi-tui-kit/testing";
 import { afterAll, describe, test } from "vitest";
 import { type BuildMetadata, registerRuntimeBuilderContract } from "../../../test/runtime-builder-contract.js";
+import { createMockContext } from "../../../test/support.js";
 import { createLoaderQueue } from "./loader-queue.js";
 
 const { packageRoot, loadBuilder } = registerRuntimeBuilderContract({
   packageId: "pi-subagents",
-  forbiddenEagerInputs: [],
-  forbiddenEagerExternals: [],
+  forbiddenEagerInputs: ["src/menu.ts", "src/settings-ui.ts"],
+  forbiddenEagerExternals: ["@narumitw/pi-tui-kit"],
   entries: {
     index: "src/index.ts",
     "child-communication-bridge": "src/child-communication-bridge.ts",
@@ -193,6 +195,47 @@ describe("generated Jiti entrypoints", { concurrent: false, shuffle: false }, ()
           ),
           ["recipient", "requestId", "message"],
         );
+      },
+    );
+  });
+
+  test("generated commands cross both lazy UI boundaries and preserve lifecycle cleanup", async ({ signal }) => {
+    await ensureFixture();
+    initTheme("dark");
+    await loaders.run(
+      () =>
+        new DefaultResourceLoader({
+          cwd: root,
+          agentDir,
+          settingsManager: SettingsManager.inMemory({}),
+          additionalExtensionPaths: [join(output, "index.ts")],
+        }),
+      signal,
+      async (loader) => {
+        const main = loader.getExtensions().extensions[0];
+        assert.ok(main);
+        const tui = createTuiHarness({ width: 80 });
+        const context = createMockContext({ mode: "tui", custom: tui.custom });
+        const command = main.commands.get("subagents");
+        assert.ok(command);
+        try {
+          for (const handler of main.handlers.get("session_start") ?? []) await handler({}, context.ctx);
+          for (const route of ["", "settings"]) {
+            signal.throwIfAborted();
+            const running = command.handler(route, context.ctx);
+            try {
+              await tui.waitForOpen();
+              assert.match(tui.render().join("\n"), route === "" ? /Jobs/u : /Show widget/u);
+            } finally {
+              tui.press("ctrl+c");
+              await running;
+            }
+          }
+          assert.deepEqual(context.notifications, []);
+          await assert.rejects(() => readFile(join(agentDir, "pi-subagents.json")), { code: "ENOENT" });
+        } finally {
+          for (const handler of main.handlers.get("session_shutdown") ?? []) await handler({}, context.ctx);
+        }
       },
     );
   });

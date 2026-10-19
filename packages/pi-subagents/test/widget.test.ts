@@ -5,6 +5,7 @@ import { afterEach, test, vi } from "vitest";
 import { createMockContext, createMockPi } from "../../../test/support.js";
 import { MessageBroker } from "../src/message-broker.js";
 import { type ActiveJobDisplay, SubagentRuntime } from "../src/runtime.js";
+import { DEFAULT_SUBAGENT_SETTINGS } from "../src/settings.js";
 import type { ChildRequest, ChildResult } from "../src/types.js";
 import { createSubagentWidgetController, renderSubagentWidget, SUBAGENT_WIDGET_KEY } from "../src/widget.js";
 
@@ -197,6 +198,79 @@ test("clears task rows and releases refresh ownership across session replacement
   const writes = vi.spyOn((replacement.ctx as ExtensionContext).ui, "setWidget");
   await runtime.shutdown();
   assert.equal(writes.mock.calls.length, 0, "shutdown must unsubscribe the widget from later job changes");
+});
+
+test.each(
+  [true, false].flatMap((showJobId) =>
+    [true, false].flatMap((showTools) => [true, false].map((showTiming) => ({ showJobId, showTools, showTiming }))),
+  ),
+)("renders independent optional fields: %j", (preferences) => {
+  const settings = { ...DEFAULT_SUBAGENT_SETTINGS, ...preferences };
+  const job = { ...displayJob, timeout: 300 };
+  const text = renderSubagentWidget([job], theme, 200, settings)[2] ?? "";
+  assert.equal(text.includes("job_preview"), preferences.showJobId);
+  assert.equal(text.includes("tools: read, bash"), preferences.showTools);
+  assert.equal(text.includes("2m 3s / 5m"), preferences.showTiming);
+  assert.match(text, /Review authentication tests · running/u);
+  assert.equal(text.includes(" ·  · "), false);
+  assert.equal(text.endsWith(" · "), false);
+  for (const width of [0, 1, 10, 80, 200]) {
+    const lines = renderSubagentWidget([job], theme, width, settings);
+    assert.equal(lines[0], "─".repeat(width));
+    assert.ok(lines.every((line) => visibleWidth(line) <= width));
+  }
+});
+
+test("keeps state readable when all optional fields and the task preview are absent", () => {
+  const settings = { showWidget: true, showJobId: false, showTools: false, showTiming: false };
+  for (const state of ["queued", "running"] as const) {
+    const lines = renderSubagentWidget([{ ...displayJob, task: "\u0007\n", state }], theme, 80, settings);
+    assert.equal(lines[2], `${state === "running" ? "▶" : "○"} ${state}`);
+  }
+  assert.deepEqual(renderSubagentWidget([displayJob], theme, 80, { ...settings, showWidget: false }), []);
+});
+
+test("applies display settings immediately and preserves active jobs, payloads, and completions", async () => {
+  const { context, runtime, controller, children, mock } = await setupWidget();
+  const first = runtime.start(jobInput("Keep running when hidden"));
+  const second = runtime.start(jobInput("Finish while hidden"));
+  await Promise.resolve();
+  const preferences = { ...DEFAULT_SUBAGENT_SETTINGS, showJobId: false, showTools: false, showTiming: false };
+  const original = widgetComponent(context);
+  const metadata = runtime.inspectJobs();
+  controller.update(context.ctx, preferences);
+  const rows = widgetComponent(context).render(200);
+  assert.doesNotMatch(rows.join("\n"), /job_|tools:|no timeout/u);
+  assert.match(rows[2] ?? "", /▶ Keep running when hidden · running/u);
+  assert.match(original.render(200)[2] ?? "", /job_.*tools:/u, "old snapshots stay independent");
+  controller.update(context.ctx, { ...preferences, showWidget: false });
+  assert.equal(context.widgets.get(SUBAGENT_WIDGET_KEY), undefined);
+  assert.deepEqual(runtime.inspectJobs(), metadata);
+  assert.equal(children.get("Keep running when hidden")?.request.signal.aborted, false);
+  children
+    .get("Finish while hidden")
+    ?.finish({ state: "completed", result: "done", limitations: [], truncated: false });
+  assert.equal((await runtime.wait(second.jobId, undefined)).state, "completed");
+  assert.equal(context.widgets.get(SUBAGENT_WIDGET_KEY), undefined);
+  assert.ok(mock.sentMessages.some(({ message }) => JSON.stringify(message).includes(second.jobId)));
+  controller.update(context.ctx, preferences);
+  const restored = widgetComponent(context).render(200);
+  assert.equal(restored.length, 3);
+  assert.match(restored[2] ?? "", /Keep running when hidden · running/u);
+  assert.doesNotMatch(restored.join("\n"), /job_|tools:|no timeout/u);
+  assert.equal(children.get("Keep running when hidden")?.request.task, "Keep running when hidden");
+  await runtime.cancel(first.jobId);
+});
+
+test("clears the previous widget on replacement and ignores stale settings updates", async () => {
+  const { context, runtime, controller } = await setupWidget();
+  runtime.start(jobInput("Old owner"));
+  const replacement = createMockContext({ mode: "tui" });
+  controller.start(replacement.ctx);
+  cleanups.push(async () => controller.shutdown(replacement.ctx));
+  assert.equal(context.widgets.get(SUBAGENT_WIDGET_KEY), undefined);
+  controller.update(context.ctx, { ...DEFAULT_SUBAGENT_SETTINGS, showWidget: false });
+  assert.match(widgetComponent(replacement).render(200)[2] ?? "", /Old owner/u);
 });
 
 async function setupWidget() {
