@@ -19,6 +19,8 @@ import {
   VStack,
 } from "@earendil-works/pi-tui";
 import { test } from "vitest";
+import { createMockPi } from "../../../test/support.js";
+import btw from "../src/btw.js";
 import { type BtwFullscreenTuiFactory, runBtwFullscreen } from "../src/fullscreen-ui.js";
 import { BtwAnsweringView, BtwTranscriptPager, type TranscriptPagerAction } from "../src/transcript-pager.js";
 
@@ -62,6 +64,10 @@ function createHarness(
     parentOverlayHideError?: Error;
     parentStartError?: Error;
     signal?: AbortSignal;
+    signalError?: Error;
+    parentMode?: "regular" | "fullscreen";
+    parentLayout?: unknown;
+    viewportResetError?: Error;
   } = {},
 ) {
   const events: string[] = [];
@@ -69,7 +75,8 @@ function createHarness(
   let outerDone: ((value: unknown) => void) | undefined;
   let editorText = "main draft";
   const parent = {
-    mode: "regular",
+    mode: options.parentMode ?? "regular",
+    layoutRoot: options.parentLayout,
     terminal: { rows: 24, columns: 80 },
     getShowHardwareCursor: () => false,
     stop: (options?: { preserveScreen?: boolean }) => {
@@ -105,6 +112,9 @@ function createHarness(
       active = component;
       if (component && options.layoutMountError) throw options.layoutMountError;
     },
+    setViewportTarget(target: ScrollView | undefined) {
+      if (!target && options.viewportResetError) throw options.viewportResetError;
+    },
     setFocus(component: Component | null) {
       events.push(component ? "fullscreen.focus" : "fullscreen.unfocus");
     },
@@ -135,7 +145,10 @@ function createHarness(
   const createTui: BtwFullscreenTuiFactory = () => fullscreen;
   const notifications: string[] = [];
   const ctx = {
-    signal: options.signal,
+    get signal() {
+      if (options.signalError) throw options.signalError;
+      return options.signal;
+    },
     ui: {
       custom: async (
         factory: (...args: never[]) => FakeComponent,
@@ -2028,14 +2041,14 @@ test.each([
     copy: (_text: string): Promise<void> => {
       throw new Error("clipboard unavailable");
     },
-    feedback: "Copy failed",
+    feedback: "clipboard unavailable",
   },
   {
     name: "rejected host copy",
     copy: async (_text: string) => {
       throw new Error("clipboard rejected");
     },
-    feedback: "Copy failed",
+    feedback: "clipboard rejected",
   },
 ])("default fullscreen reports $name and restores its parent", async ({ copy, feedback }) => {
   const { harness, running, sideTui, closeSide } = await startClipboardSelection(copy);
@@ -2164,7 +2177,7 @@ test("manual fullscreen contains clipboard failure and reports it", async () => 
   harness.input(copyInput);
   await flushAsyncWork();
   sideTui.renderNow(true);
-  assert.equal(harness.writes.join("").includes("Copy failed"), true);
+  assert.equal(harness.writes.join("").includes("clipboard unavailable"), true);
   closeSide();
   assert.equal(await running, "closed");
 });
@@ -2396,6 +2409,203 @@ test("default fullscreen activates OSC-8 links through the configured URL opener
 
   assert.equal(await running, "closed");
   assert.deepEqual(openedBeforeClose, [url]);
+});
+
+test.each(["left-pane", "right-pane"] as const)(
+  "native %s keyboard transfer selects the active editor and viewport",
+  async (layout) => {
+    const keys = createBtwTestKeybindings();
+    const previous = getKeybindings();
+    setKeybindings(keys);
+    const harness = createInputHandoffHarness(keys, { fullscreenParent: true });
+    harness.terminal.columns = 120;
+    const side = new ScrollableSideInput();
+    let sideTui!: TUI;
+    let close!: () => void;
+    const running = runBtwFullscreen(
+      harness.ctx,
+      (ctx) =>
+        ctx.ui.custom<"closed">((tui, _theme, _keys, done) => {
+          sideTui = tui;
+          close = () => done("closed");
+          return side;
+        }),
+      { layout, keybindings: { switchPane: "f9" } },
+    );
+    try {
+      await flushAsyncWork();
+      sideTui.renderNow(true);
+      assert.equal(side.scrollView.primary, true);
+      const sideTop = side.scrollView.scrollTop;
+      harness.terminal.send("\u001b[20~");
+      sideTui.renderNow(true);
+      assert.equal(harness.mainInput.focused, true);
+      assert.equal(harness.mainScrollView?.primary, true);
+      assert.equal(side.scrollView.primary, false);
+      harness.terminal.send("main");
+      assert.equal(harness.mainInput.text, "main");
+      harness.terminal.send("\u001b[1;5H");
+      assert.equal(harness.mainScrollView?.scrollTop, 0);
+      assert.equal(side.scrollView.scrollTop, sideTop);
+      const overlay = sideTui.showOverlay({ render: () => ["overlay"], handleInput() {}, invalidate() {} });
+      harness.terminal.send("\u001b[20~");
+      assert.equal(harness.mainScrollView?.primary, true);
+      overlay.hide();
+      harness.terminal.send("\u001b[20~");
+      sideTui.renderNow(true);
+      assert.equal(side.focused, true);
+      assert.equal(side.scrollView.primary, true);
+      assert.equal(harness.mainScrollView?.primary, false);
+      harness.terminal.send("\u001b[1;5H");
+      assert.equal(side.scrollView.scrollTop, 0);
+      assert.equal(harness.mainScrollView?.scrollTop, 0);
+      close();
+      assert.equal(await running, "closed");
+      assert.equal(harness.mainScrollView?.primary, true);
+    } finally {
+      close?.();
+      await running;
+      harness.parent.stop();
+      setKeybindings(previous);
+    }
+  },
+);
+
+test("the registered command forwards its session signal through the real fullscreen context proxy", async () => {
+  const harness = createHarness();
+  const mock = createMockPi();
+  let received: AbortSignal | undefined;
+  btw(mock.pi, {
+    loadSettings: async () => ({}),
+    resolveModel: async () =>
+      ({ kind: "selected", selected: { model: { id: "test", provider: "test", reasoning: false } } }) as never,
+    runFullscreen: (ctx, run, options) => runBtwFullscreen(ctx, run, options, { createTui: harness.createTui }),
+    runThread: async ({ ctx }) => {
+      received = ctx.signal;
+      return { kind: "closed" };
+    },
+  });
+  const command = mock.commands.get("btw");
+  assert.ok(command);
+  const ctx = Object.assign(Object.create(harness.ctx), {
+    mode: "tui",
+    hasUI: true,
+    sessionManager: { getBranch: () => [] },
+  }) as never;
+  await command.handler("question", ctx);
+  assert.ok(received);
+  assert.equal(received.aborted, false);
+  assert.equal(harness.events.filter((event) => event === "parent.start").length, 1);
+});
+
+test.each([undefined, {}, { render: () => [] }])(
+  "incompatible fullscreen parent layout %j fails before terminal handoff",
+  async (parentLayout) => {
+    const harness = createHarness({ parentMode: "fullscreen", parentLayout });
+    await assert.rejects(
+      runBtwFullscreen(harness.ctx, async () => "unused", { layout: "left-pane" }, { createTui: harness.createTui }),
+      /cannot compose/u,
+    );
+    assert.deepEqual(harness.events, []);
+  },
+);
+
+test("missing native viewport fails before terminal handoff", async () => {
+  const harness = createHarness({ parentMode: "fullscreen", parentLayout: { render: () => [], invalidate() {} } });
+  await assert.rejects(
+    runBtwFullscreen(harness.ctx, async () => "unused", { layout: "right-pane" }, { createTui: harness.createTui }),
+    /cannot identify/u,
+  );
+  assert.deepEqual(harness.events, []);
+});
+
+test("a stale signal getter settles a queued host without terminal handoff", async () => {
+  const harness = createHarness({ signalError: new Error("stale context") });
+  await assert.rejects(
+    runBtwFullscreen(harness.ctx, async () => "unused", {}, { createTui: harness.createTui }),
+    /stale context/u,
+  );
+  assert.deepEqual(harness.events, []);
+});
+
+test("split viewport cleanup failure still clears layout and disposes the component", async () => {
+  const harness = createHarness({ viewportResetError: new Error("viewport cleanup failed") });
+  let close!: () => void;
+  const running = runBtwFullscreen(
+    harness.ctx,
+    (ctx) =>
+      ctx.ui.custom((_tui, _theme, _keys, done) => {
+        close = () => done("closed");
+        return {
+          render: () => ["side"],
+          invalidate() {},
+          dispose() {
+            harness.events.push("component.dispose");
+          },
+        };
+      }),
+    { layout: "left-pane" },
+    { createTui: harness.createTui },
+  );
+  const rejected = assert.rejects(running, /viewport cleanup failed/u);
+  await flushAsyncWork();
+  close();
+  await rejected;
+  assert.equal(harness.events.includes("fullscreen.layout.clear"), true);
+  assert.equal(harness.events.filter((event) => event === "component.dispose").length, 1);
+  assert.equal(harness.events.filter((event) => event === "parent.start").length, 1);
+});
+
+test("cancellation releases signal-ignoring work and rejects late captured UI writes", async () => {
+  const harness = createHarness();
+  const owner = new AbortController();
+  let write!: (text: string) => void;
+  let release!: () => void;
+  const running = runBtwFullscreen(
+    harness.ctx,
+    async (ctx) => {
+      write = ctx.ui.setEditorText;
+      await new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      return "late";
+    },
+    { signal: owner.signal },
+    { createTui: harness.createTui },
+  );
+  const rejected = assert.rejects(running, /disposed/u);
+  await flushAsyncWork();
+  owner.abort();
+  await rejected;
+  assert.throws(() => write("stale draft"), /disposed/u);
+  assert.equal(harness.editorText, "main draft");
+  assert.equal(harness.events.filter((event) => event === "parent.start").length, 1);
+  release();
+  await flushAsyncWork();
+  assert.equal(harness.events.filter((event) => event === "parent.start").length, 1);
+});
+
+test("quit ownership stops the side renderer without restarting the parent", async () => {
+  const harness = createHarness();
+  const owner = new AbortController();
+  let restoreAllowed = true;
+  const running = runBtwFullscreen(
+    harness.ctx,
+    async () => new Promise<never>(() => {}),
+    { signal: owner.signal, canRestoreParent: () => restoreAllowed },
+    { createTui: harness.createTui },
+  );
+  const rejected = assert.rejects(running, /disposed/u);
+  await flushAsyncWork();
+  restoreAllowed = false;
+  owner.abort();
+  await rejected;
+  assert.equal(harness.events.filter((event) => event === "fullscreen.stop:true").length, 1);
+  assert.equal(harness.events.includes("parent.start"), false);
+  assert.equal(
+    harness.events.some((event) => event.startsWith("parent.renderNow")),
+    false,
+  );
 });
 
 test("dedicated fullscreen owns the terminal while side custom UI runs and restores it afterward", async () => {

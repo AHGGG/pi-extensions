@@ -1,28 +1,28 @@
-import { spawn } from "node:child_process";
 import {
   copyToClipboard as copyToHostClipboard,
   type ExtensionCommandContext,
   type KeybindingsManager,
   type Theme,
 } from "@earendil-works/pi-coding-agent";
+import { type Component, type OverlayHandle, ScrollView, type TUI, truncateToWidth } from "@earendil-works/pi-tui";
 import {
-  type Component,
-  isKeyRelease,
-  isKittyProtocolActive,
-  Key,
-  type OverlayHandle,
-  parseKey,
-  type ScrollView,
-  type TUI,
-  TuiAltScreen,
-  type TuiInputListener,
-  type TuiInputListenerResult,
-  truncateToWidth,
-} from "@earendil-works/pi-tui";
-import { type BtwKeybindingOverrides, BtwPasteGuard, resolveBtwShortcuts, setBtwShortcuts } from "./keybindings.js";
+  type BtwFullscreenTui,
+  createBtwFullscreenTui,
+  hasManualSelectionCopyApi,
+  openUrlInBrowser,
+} from "./fullscreen-renderer.js";
+import {
+  type BtwKeybindingOverrides,
+  BtwPasteGuard,
+  getBtwShortcuts,
+  resolveBtwShortcuts,
+  setBtwHostInputBlockers,
+  setBtwKeybindings,
+  setBtwShortcuts,
+} from "./keybindings.js";
 import type { BtwMainThreadUpdateSubscription } from "./main-thread-updates.js";
 import type { BtwLayout } from "./settings.js";
-import { formatKeyLabel, sanitizeSingleLine } from "./text.js";
+import { sanitizeSingleLine } from "./text.js";
 import { type BtwFullscreenLayoutComponent, BtwMainThreadInput, BtwSplitPane } from "./workspace-layout.js";
 
 type BtwCustomOptions = Parameters<ExtensionCommandContext["ui"]["custom"]>[1];
@@ -33,20 +33,13 @@ type BtwCustomFactory<T> = (
   done: (result: T) => void,
 ) => (Component & { dispose?(): void }) | Promise<Component & { dispose?(): void }>;
 
-type BtwFullscreenTui = TUI & {
-  flash?: (message: string, durationMs?: number) => void;
-  setLayoutRoot(component: Component | undefined): void;
-  hasFocusedOverlay?(): boolean;
-  addInputListenerBeforeAll?(listener: TuiInputListener): () => void;
-  addInputListenerBeforeViewport?(listener: TuiInputListener): () => void;
-  setViewportTarget?(scrollView: ScrollView | undefined): void;
-};
-
 type FocusInspectableTui = TUI & {
   getFocusedComponent?(): Component | null;
 };
 
 export interface BtwFullscreenOptions {
+  signal?: AbortSignal;
+  canRestoreParent?(): boolean;
   keybindings?: BtwKeybindingOverrides;
   copyOnSelect?: boolean;
   layout?: BtwLayout;
@@ -115,6 +108,10 @@ export async function runBtwFullscreen<T>(
         run,
         (value) => {
           try {
+            if (options.canRestoreParent?.() === false) {
+              done(value);
+              return;
+            }
             liveEditorText = ctx.ui.getEditorText();
             restoreEditor = true;
           } catch {
@@ -132,7 +129,7 @@ export async function runBtwFullscreen<T>(
       onHandle: (handle) => host?.setParentOverlay(handle),
     },
   );
-  if (restoreEditor) {
+  if (restoreEditor && options.canRestoreParent?.() !== false) {
     try {
       if (ctx.ui.getEditorText() !== liveEditorText) ctx.ui.setEditorText(liveEditorText);
     } catch {
@@ -141,287 +138,6 @@ export async function runBtwFullscreen<T>(
   }
   if (outcome.kind === "failed") throw outcome.error;
   return outcome.value;
-}
-
-type BtwInputListeners = {
-  beforeAll: Set<TuiInputListener>;
-  beforeViewport: Set<TuiInputListener>;
-  regular: Set<TuiInputListener>;
-};
-
-const btwInputListeners = new WeakMap<BtwTuiAltScreen, BtwInputListeners>();
-
-function dispatchBtwInput(listeners: BtwInputListeners, data: string): TuiInputListenerResult {
-  let current = data;
-  for (const group of [listeners.beforeAll, listeners.beforeViewport, listeners.regular]) {
-    for (const listener of group) {
-      const result = listener(current);
-      if (result?.consume) return result;
-      if (result?.data !== undefined) current = result.data;
-    }
-  }
-  return current === data ? undefined : { data: current };
-}
-
-class BtwTuiAltScreen extends TuiAltScreen {
-  hasFocusedOverlay(): boolean {
-    return this.isOverlayFocused();
-  }
-
-  setViewportTarget(scrollView: ScrollView | undefined): void {
-    if (!scrollView) return;
-    const layout = Reflect.get(this, "currentLayout") as { primaryScrollView?: ScrollView } | undefined;
-    if (layout) layout.primaryScrollView = scrollView;
-  }
-
-  override addInputListener(listener: TuiInputListener): () => void {
-    let listeners = btwInputListeners.get(this);
-    if (!listeners) {
-      const registeredListeners: BtwInputListeners = {
-        beforeAll: new Set(),
-        beforeViewport: new Set(),
-        regular: new Set(),
-      };
-      btwInputListeners.set(this, registeredListeners);
-      super.addInputListener((data) => dispatchBtwInput(registeredListeners, data));
-      listeners = registeredListeners;
-    }
-    listeners.regular.add(listener);
-    return () => listeners.regular.delete(listener);
-  }
-
-  addInputListenerBeforeAll(listener: TuiInputListener): () => void {
-    const listeners = btwInputListeners.get(this);
-    if (!listeners) return super.addInputListener(listener);
-    listeners.beforeAll.add(listener);
-    return () => listeners.beforeAll.delete(listener);
-  }
-
-  addInputListenerBeforeViewport(listener: TuiInputListener): () => void {
-    const listeners = btwInputListeners.get(this);
-    if (!listeners) return super.addInputListener(listener);
-    listeners.beforeViewport.add(listener);
-    return () => listeners.beforeViewport.delete(listener);
-  }
-
-  override removeInputListener(listener: TuiInputListener): void {
-    const listeners = btwInputListeners.get(this);
-    if (!listeners) {
-      super.removeInputListener(listener);
-      return;
-    }
-    listeners.beforeAll.delete(listener);
-    listeners.beforeViewport.delete(listener);
-    listeners.regular.delete(listener);
-  }
-}
-
-const BRACKETED_PASTE_START = "\u001b[200~";
-const BRACKETED_PASTE_END = "\u001b[201~";
-
-// TuiAltScreen evaluates these actions before bottom, so shared keys cannot jump to latest.
-const ALT_SCREEN_ACTIONS_BEFORE_BOTTOM = [
-  "tui.altScreen.search",
-  "tui.altScreen.searchNext",
-  "tui.altScreen.searchPrevious",
-  "tui.altScreen.searchClose",
-  "tui.altScreen.pageUp",
-  "tui.altScreen.pageDown",
-  "tui.altScreen.halfPageUp",
-  "tui.altScreen.halfPageDown",
-  "tui.altScreen.lineUp",
-  "tui.altScreen.lineDown",
-  "tui.altScreen.previousPrompt",
-  "tui.altScreen.nextPrompt",
-  "tui.altScreen.top",
-] as const;
-const KEY_MODIFIER_ORDER = ["shift", "ctrl", "alt", "super"] as const;
-const MATCHABLE_SPECIAL_KEYS = new Set([
-  "space",
-  "tab",
-  "enter",
-  "backspace",
-  "delete",
-  "insert",
-  "home",
-  "end",
-  "pageup",
-  "pagedown",
-  "up",
-  "down",
-  "left",
-  "right",
-]);
-const MATCHABLE_SYMBOL_KEYS = new Set("`-=[]\\;',./!@#$%^&*()_+|~{}:<>?");
-
-function normalizedKeyId(key: string): string {
-  const parts = key.toLowerCase().split("+");
-  const base = parts.at(-1);
-  if (!base) return "";
-  const configuredModifiers = parts.slice(0, -1);
-  if (
-    new Set(configuredModifiers).size !== configuredModifiers.length ||
-    configuredModifiers.some((modifier) => !KEY_MODIFIER_ORDER.includes(modifier as never))
-  )
-    return "";
-  const normalizedBase = base === "esc" ? "escape" : base === "return" ? "enter" : base;
-  const modifiers = KEY_MODIFIER_ORDER.filter((modifier) => parts.includes(modifier));
-  return [...modifiers, normalizedBase].join("+");
-}
-
-function formatEffectiveKeyLabel(key: string): string {
-  const parts = key.split("+");
-  const base = parts.at(-1);
-  if (base === "pageup") parts[parts.length - 1] = "pageUp";
-  if (base === "pagedown") parts[parts.length - 1] = "pageDown";
-  return formatKeyLabel(parts.join("+"));
-}
-
-function canMatchKeyInput(key: string): boolean {
-  const parts = key.split("+");
-  const base = parts.at(-1) ?? "";
-  const modifiers = parts.slice(0, -1);
-  if (base === "escape") return modifiers.length === 0;
-  if (base === "clear") {
-    return modifiers.length === 0 || (modifiers.length === 1 && (modifiers[0] === "shift" || modifiers[0] === "ctrl"));
-  }
-  if (/^f(?:[1-9]|1[0-2])$/u.test(base)) return modifiers.length === 0;
-  return (
-    MATCHABLE_SPECIAL_KEYS.has(base) ||
-    (base.length === 1 && (/^[a-z0-9]$/u.test(base) || MATCHABLE_SYMBOL_KEYS.has(base)))
-  );
-}
-
-function rawCtrlInput(base: string): string | undefined {
-  if (base.length !== 1) return undefined;
-  const rawBase = base === "-" ? "_" : base;
-  if (!"abcdefghijklmnopqrstuvwxyz[\\]_".includes(rawBase)) return undefined;
-  return String.fromCharCode(rawBase.charCodeAt(0) & 0x1f);
-}
-
-function legacyRawInput(key: string): string | undefined {
-  const parts = key.split("+");
-  const base = parts.at(-1) ?? "";
-  if (parts.length === 2 && parts[0] === "ctrl") return rawCtrlInput(base);
-  if (isKittyProtocolActive()) return undefined;
-  if (parts.length === 2 && parts[0] === "alt" && base.length === 1) return `\u001b${base}`;
-  if (parts.length === 3 && parts[0] === "ctrl" && parts[1] === "alt") {
-    const input = rawCtrlInput(base);
-    return input ? `\u001b${input}` : undefined;
-  }
-  return undefined;
-}
-
-// Mirror matchesKey(), using parseKey() to canonicalize IDs that share legacy raw input.
-function keyInputIdentity(key: string): string {
-  const identity = normalizedKeyId(key);
-  const input = legacyRawInput(identity);
-  return input ? normalizedKeyId(parseKey(input) ?? identity) : identity;
-}
-
-function hasManualSelectionCopyApi(): boolean {
-  return (
-    typeof TuiAltScreen.prototype.hasActiveSelection === "function" &&
-    typeof TuiAltScreen.prototype.copyActiveSelectionToClipboard === "function"
-  );
-}
-
-function createBtwFullscreenTui(
-  parent: TUI,
-  theme: Theme,
-  keybindings: KeybindingsManager,
-  copyOnSelect: boolean,
-  manualSelectionCopySupported: boolean,
-  openUrl: (url: string) => void,
-  copyToClipboard: (text: string) => Promise<void>,
-): BtwFullscreenTui {
-  if (!copyOnSelect && !manualSelectionCopySupported) {
-    throw new Error(
-      "Manual fullscreen selection copying is unavailable in this Pi version; update Pi or enable automatic selection copying.",
-    );
-  }
-  const styleSearchMatch = (text: string) => theme.bg("searchMatchBg", theme.fg("searchMatchText", text));
-  const fullscreen = new BtwTuiAltScreen(parent.terminal, parent.getShowHardwareCursor(), undefined, {
-    mouse: true,
-    copyOnSelect,
-    searchMatchStyle: (text) => theme.underline(styleSearchMatch(text)),
-    scrollToEndIndicator: () => {
-      const unavailableKeyIdentities = new Set<string>([keyInputIdentity(Key.ctrl("c"))]);
-      for (const action of ALT_SCREEN_ACTIONS_BEFORE_BOTTOM) {
-        for (const actionKey of keybindings.getKeys(action)) {
-          unavailableKeyIdentities.add(keyInputIdentity(String(actionKey)));
-        }
-      }
-      if (!copyOnSelect) {
-        for (const copyKey of keybindings.getKeys("app.message.copy")) {
-          unavailableKeyIdentities.add(keyInputIdentity(String(copyKey)));
-        }
-      }
-      const key = keybindings
-        .getKeys("tui.altScreen.bottom")
-        .map((candidate) => keyInputIdentity(String(candidate)))
-        .find(
-          (identity) =>
-            identity &&
-            canMatchKeyInput(identity) &&
-            !unavailableKeyIdentities.has(identity) &&
-            formatEffectiveKeyLabel(identity),
-        );
-      const label = theme.fg("text", " ↓ Jump to latest message");
-      const shortcut = key ? theme.fg("muted", ` · ${formatEffectiveKeyLabel(key)}`) : "";
-      return theme.bg("selectedBg", `${label}${shortcut} `);
-    },
-    searchCurrentMatchStyle: (text) => theme.bold(theme.inverse(styleSearchMatch(text))),
-    openUrl,
-    copySelection: async (text) => {
-      try {
-        await copyToClipboard(text);
-        return true;
-      } catch {
-        return false;
-      }
-    },
-  });
-  if (!copyOnSelect) {
-    let isInBracketedPaste = false;
-    fullscreen.addInputListenerBeforeViewport((data) => {
-      const wasInBracketedPaste = isInBracketedPaste;
-      const startsBracketedPaste = data.includes(BRACKETED_PASTE_START);
-      if (startsBracketedPaste) isInBracketedPaste = true;
-      if (isInBracketedPaste && data.includes(BRACKETED_PASTE_END)) {
-        isInBracketedPaste = false;
-      }
-      if (
-        wasInBracketedPaste ||
-        startsBracketedPaste ||
-        fullscreen.hasFocusedOverlay() ||
-        isKeyRelease(data) ||
-        !keybindings.matches(data, "app.message.copy")
-      ) {
-        return undefined;
-      }
-      if (!fullscreen.hasActiveSelection()) {
-        fullscreen.flash("No selection to copy");
-        return { consume: true };
-      }
-      void fullscreen.copyActiveSelectionToClipboard().catch(() => fullscreen.flash("Copy failed"));
-      return { consume: true };
-    });
-  }
-  return fullscreen;
-}
-
-// Pi does not export its browser opener, so mirror its shell-free launcher for this isolated TUI.
-function openUrlInBrowser(target: string): void {
-  const [command, args] =
-    process.platform === "darwin"
-      ? ["open", [target]]
-      : process.platform === "win32"
-        ? ["rundll32", ["url.dll,FileProtocolHandler", target]]
-        : ["xdg-open", [target]];
-  spawn(command, args, { stdio: "ignore", detached: true })
-    .on("error", () => {})
-    .unref();
 }
 
 class BtwFullscreenHost<T> implements Component {
@@ -487,16 +203,24 @@ class BtwFullscreenHost<T> implements Component {
     if (this.disposed || this.finished) return;
     this.disposed = true;
     this.lifetimeController.abort();
-    this.cancelActiveCustom?.();
+    try {
+      this.cancelActiveCustom?.();
+    } finally {
+      this.queueParentRestore();
+    }
   }
 
   private async start(): Promise<void> {
     if (this.started || this.finished) return;
     this.started = true;
-    this.watchUpstreamCancellation();
     let outcome: FullscreenOutcome<T>;
     try {
+      this.watchUpstreamCancellation();
       if (this.disposed) throw new FullscreenUiDisposedError();
+      if ((this.options.layout ?? "fullscreen") !== "fullscreen") {
+        getParentFullscreenLayout(this.parent);
+        getParentFullscreenScrollView(this.parent);
+      }
       this.parent.stop({ preserveScreen: true });
       this.parentStopped = true;
       if (this.disposed) throw new FullscreenUiDisposedError();
@@ -510,6 +234,11 @@ class BtwFullscreenHost<T> implements Component {
         this.options.copyOnSelect ?? true,
       );
       setBtwShortcuts(this.fullscreen, shortcuts);
+      setBtwKeybindings(this.fullscreen, this.keybindings);
+      setBtwHostInputBlockers(
+        this.fullscreen,
+        this.options.copyOnSelect === false ? this.keybindings.getKeys("app.message.copy") : [],
+      );
       // Negotiate before warning when possible: the first dispatched user input uses
       // the current mode. Recheck each input, including later mode transitions.
       let previousWarnings: readonly string[] = [];
@@ -547,7 +276,7 @@ class BtwFullscreenHost<T> implements Component {
         }
         return { consume: true };
       });
-      const value = await this.run(this.createContext());
+      const value = await this.runUntilCancelled();
       await this.waitForSidePaneWrites();
       outcome = { kind: "completed", value };
     } catch (error) {
@@ -567,8 +296,35 @@ class BtwFullscreenHost<T> implements Component {
     this.done(outcome);
   }
 
+  private async runUntilCancelled(): Promise<T> {
+    const signal = this.lifetimeController.signal;
+    let removeAbort: (() => void) | undefined;
+    let cancellation: ReturnType<typeof setImmediate> | undefined;
+    const cancelled = new Promise<never>((_resolve, reject) => {
+      // Let synchronous root cancellation and its promise continuations settle
+      // normally; abandon only a continuation that ignores the owned signal.
+      const onAbort = () => {
+        cancellation ??= setImmediate(() => reject(new FullscreenUiDisposedError()));
+      };
+      signal.addEventListener("abort", onAbort, { once: true });
+      removeAbort = () => signal.removeEventListener("abort", onAbort);
+      if (signal.aborted) onAbort();
+    });
+    try {
+      // Observe late failures even when cancellation settles the owning UI first.
+      if (signal.aborted) throw new FullscreenUiDisposedError();
+      return await Promise.race([this.run(this.createContext()), cancelled]);
+    } finally {
+      removeAbort?.();
+      if (cancellation) clearImmediate(cancellation);
+    }
+  }
+
   private watchUpstreamCancellation(): void {
-    const signal = this.ctx.signal;
+    const signals = [this.ctx.signal, this.options.signal].filter(
+      (signal): signal is AbortSignal => signal !== undefined,
+    );
+    const signal = signals.length ? AbortSignal.any(signals) : undefined;
     if (!signal) return;
     const onAbort = () => this.dispose();
     signal.addEventListener("abort", onAbort, { once: true });
@@ -615,7 +371,11 @@ class BtwFullscreenHost<T> implements Component {
     } catch (error) {
       this.cleanupError ??= error;
     }
-    this.mainThreadInput.dispose();
+    try {
+      this.mainThreadInput.dispose();
+    } catch (error) {
+      this.cleanupError ??= error;
+    }
     const removeUpstreamAbortListener = this.removeUpstreamAbortListener;
     this.removeUpstreamAbortListener = undefined;
     try {
@@ -648,6 +408,7 @@ class BtwFullscreenHost<T> implements Component {
     }
     try {
       this.parentRestoreAttempted = true;
+      if (this.options.canRestoreParent?.() === false) return;
       this.parent.start();
       this.parent.renderNow(false);
     } catch (error) {
@@ -664,13 +425,26 @@ class BtwFullscreenHost<T> implements Component {
         }
         if (property === "notify") {
           return (message: string, level?: Parameters<ExtensionCommandContext["ui"]["notify"]>[1]) => {
+            if (this.disposed || this.finished) return;
             target.notify(message, level);
             const display = sanitizeSingleLine(message);
             if (display) this.fullscreen?.flash?.(display);
           };
         }
         const value = Reflect.get(target, property, target) as unknown;
-        return typeof value === "function" ? value.bind(target) : value;
+        return typeof value === "function"
+          ? (...args: unknown[]) => {
+              if (
+                this.disposed ||
+                this.finished ||
+                this.lifetimeController.signal.aborted ||
+                this.options.canRestoreParent?.() === false
+              ) {
+                throw new FullscreenUiDisposedError();
+              }
+              return Reflect.apply(value, target, args);
+            }
+          : value;
       },
     });
     const signal = this.ctx.signal
@@ -726,7 +500,11 @@ class BtwFullscreenHost<T> implements Component {
         } catch (error) {
           cleanupError = error;
         }
-        splitPane?.dispose();
+        try {
+          splitPane?.dispose();
+        } catch (error) {
+          cleanupError ??= error;
+        }
         splitPane = undefined;
         try {
           if (overlay) overlay.hide();
@@ -850,9 +628,11 @@ class BtwFullscreenHost<T> implements Component {
                 sideLayout,
                 mainThread: this.parent,
                 mainLayout: getParentFullscreenLayout(this.parent),
+                mainScrollView: getParentFullscreenScrollView(this.parent),
                 mainInput: this.mainThreadInput,
                 sideScrollView: isFullscreenLayoutComponent(component) ? component.getPrimaryScrollView?.() : undefined,
                 layout: workspaceLayout,
+                shortcuts: getBtwShortcuts(fullscreen),
                 theme: this.theme,
                 terminalColumns: () => fullscreen.terminal.columns,
                 terminalRows: () => fullscreen.terminal.rows,
@@ -943,7 +723,21 @@ function getFocusedComponent(tui: TUI): Component | null {
 function getParentFullscreenLayout(tui: TUI): Component | undefined {
   if (tui.mode !== "fullscreen") return undefined;
   const layoutRoot = Reflect.get(tui, "layoutRoot") as unknown;
-  return isComponent(layoutRoot) ? layoutRoot : undefined;
+  if (!isComponent(layoutRoot)) {
+    throw new Error("Pi BTW cannot compose this fullscreen layout; use the fullscreen BTW layout or update Pi.");
+  }
+  return layoutRoot;
+}
+
+// Use the viewport chosen by Pi's actual layout pass. A children walk cannot
+// reproduce native visibility, zero-width allocation, or nested scroll ordering.
+function getParentFullscreenScrollView(tui: TUI): ScrollView | undefined {
+  if (tui.mode !== "fullscreen") return undefined;
+  const layout = Reflect.get(tui, "currentLayout") as { primaryScrollView?: unknown } | undefined;
+  if (!layout || !(layout.primaryScrollView instanceof ScrollView)) {
+    throw new Error("Pi BTW cannot identify this fullscreen viewport; use the fullscreen BTW layout or update Pi.");
+  }
+  return layout.primaryScrollView;
 }
 
 function isComponent(value: unknown): value is Component {
