@@ -17,8 +17,11 @@ Opening and closing without a new result does not reorder them.
 
 ## Read, select, and search
 
-The dedicated workspace keeps answers above the editor in a scrollable transcript and reserves space for the active input cursor before optional headers, queue previews, and key hints.
-Its existing header identifies BTW and the current thinking level; a split workspace also shows **BTW focus** or **Main focus**.
+The dedicated workspace places the scrollable transcript above pending questions, the editor, and a compact footer.
+The footer identifies BTW and shows the selected side model and thinking level when space permits; a split workspace also shows **BTW focus** or **Main focus**.
+Reachable shortcut hints appear below the editor, not above it.
+At constrained sizes, the active input cursor takes priority over queue previews, metadata, and hints; zero-sized views remain empty.
+The [appearance reference](./native-appearance.md) records native-default comparisons and limits.
 The default **Fullscreen** layout gives the side thread the complete workspace.
 **Side thread left** and **Side thread right** place it beside Pi's native, live main-thread rendering; terminals narrower than 80 columns show only the side thread.
 A single muted divider separates the panes; click either pane or use the displayed pane-switch key to move keyboard focus.
@@ -40,7 +43,7 @@ The view reports `No selection to copy`, `Copied!`, or a sanitized clipboard err
 Right-click clipboard paste is not installed because Pi has no public clipboard-read callback for this workspace.
 Ctrl+C always cancels the side flow, even if `app.message.copy` is also mapped to Ctrl+C.
 
-Use Pi's effective transcript-search binding (`Ctrl+Shift+F` by default) to search completed or in-progress transcript text, excluding the fixed header and footer.
+Use Pi's effective transcript-search binding (`Ctrl+Shift+F` by default) to search completed or in-progress transcript text, excluding the footer.
 The default next-match keys are Enter or `Ctrl+G`; previous-match keys are `Shift+Enter` or `Ctrl+Shift+G`.
 Pi's effective search-close binding, Escape by default, closes search and returns focus to the composer.
 
@@ -53,16 +56,17 @@ Click it or use Pi's effective `tui.altScreen.bottom` binding (`Ctrl+End` by def
 
 ## Thinking and queued questions
 
-The header shows the current side-thread thinking level.
-Use the thinking-cycle shortcut shown in the composer to cycle supported levels for later questions.
+The footer shows the current side-thread thinking level when space permits.
+Use the thinking-cycle shortcut shown below the editor to cycle supported levels for later questions.
 It inherits Pi's `app.thinking.cycle` (`Shift+Tab` by default) unless overridden in [Keybindings](../README.md#keybindings).
 Whether that change is remembered depends on [Settings](../README.md#-settings); it never changes the main session's thinking level.
 
-During a response, submit another question to queue it as `Steering next`.
+During a response, the editor's top border shows `Answering…` with a spinner.
+Submit another question to queue it as `Steering next`.
 Queued questions run in order after the current response, using the thinking level effective when each turn starts.
 They do not interrupt the current provider response or enter Pi's main-session steering/follow-up queue.
 A failed response remains visible without discarding later queued questions.
-The bounded preview shows queued questions in order and an omitted-item count when needed.
+The bounded preview above the editor shows queued questions in order and an omitted-item count when needed.
 Steering does not append to the main conversation or editor.
 
 The configured exit shortcut, or the permanent Ctrl+C hard-cancel key, cancels the active response and discards the current draft and steering queue.
@@ -94,5 +98,6 @@ Unsent drafts, steering queues, interrupted answers, and model credentials are n
 ## Core compatibility and verification
 
 The [core-alignment handoff](./core-alignment.md) records finding dispositions, deterministic evidence, retained workspace deviations, and proposed Pi APIs.
-Its package-directory smoke is non-interactive and does not contact a provider.
+The [appearance reference](./native-appearance.md) contains native CLI reference frames, before/after BTW frames, public API reuse decisions, and terminal-review instructions.
+The package-directory smoke is non-interactive and does not contact a provider.
 Terminal-specific mouse, clipboard, IME, keyboard-protocol, and visual acceptance still require a terminal operator.

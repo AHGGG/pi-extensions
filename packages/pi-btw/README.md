@@ -10,6 +10,7 @@ Only context you explicitly bring back is loaded into the main editor.
 - Starts a side thread immediately with `/btw <question>` or opens the manager with `/btw`.
 - Uses any persisted main-session branch as context without switching branches.
 - Supports scrollable answers, transcript search, a clickable jump-to-latest control, follow-up questions, queued steering, and in-memory resume.
+- Uses Pi's message components, a native-style working editor border, and a compact footer below the editor.
 - Offers fullscreen, side-thread-left, and side-thread-right workspaces with Pi's live main-thread view, mouse or keyboard pane focus, and a draggable remembered divider.
 - Renders supported Mermaid fences as width-safe, themed Unicode diagrams without a browser or network request.
 - Keeps side questions and answers out of the main conversation by default.
@@ -117,7 +118,8 @@ Pi-btw does not inherit Pi core's setting of the same name because Pi's public e
 Accepted values are `fullscreen`, `left-pane`, and `right-pane`.
 The pane names identify the side thread's position; the other pane reuses Pi's native main-thread rendering at pane width and stays current while BTW is open.
 A single muted divider separates the panes; click either pane or use the pane-switch shortcut to move keyboard focus.
-The existing BTW header shows **BTW focus** or **Main focus** and the available switch key.
+The footer below the editor shows **BTW focus** or **Main focus** and the available switch key.
+It also shows the selected side model and thinking level when space permits; narrow or short views omit optional fields and hints before the active input row.
 Drag the divider with the primary mouse button to resize both panes.
 The side-thread share is limited to 20–80% and saved as `sidePaneRatio` when the button is released, independent of whether the side thread is on the left or right.
 If the save fails, the workspace restores the last saved ratio and reports the error.
@@ -186,6 +188,7 @@ The file is read for every `/btw` invocation, so edits apply without `/reload`.
 - Clipboard access depends on Pi's host helper, the operating system, and the terminal.
 - The live workspace still uses a BTW-owned terminal handoff and private host-layout access because Pi has no public workspace-composition API; see the [core-alignment handoff](./docs/core-alignment.md) for tested safeguards, exact limits, and proposed APIs.
 - Pi does not expose all effective renderer options or a public clipboard-read callback. BTW uses native automatic wheel behavior but does not inherit private host wheel overrides or right-click clipboard paste.
+- Conversation appearance follows native defaults, not custom host editor/footer extensions or private padding settings. BTW uses one-cell message padding and zero-cell editor padding; see the [appearance reference and before/after frames](./docs/native-appearance.md).
 - Malformed, unsupported, or oversized Mermaid diagrams remain readable as fenced source; partial parses also show a warning.
 - Pi versions before 0.85 omit the clickable jump-to-latest control.
 
@@ -197,7 +200,7 @@ packages/pi-btw/
 │   ├── index.ts                       # Thin Pi entrypoint
 │   └── btw.ts                         # Side-thread lifecycle and command
 ├── dist/                              # Generated Jiti runtime
-├── docs/                              # Workflows, controls, and core-alignment handoff
+├── docs/                              # Workflows, appearance evidence, and core-alignment handoff
 ├── scripts/build-runtime.mjs          # Runtime builder
 └── test/                              # Behavior and lifecycle coverage
 ```

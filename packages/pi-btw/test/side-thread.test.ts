@@ -1587,9 +1587,10 @@ test("empty transcript composer accepts the first side-thread question", () => {
   composer.focused = true;
   const emptyLines = composer.render(40);
   const emptyView = emptyLines.join("\n");
-  assert.match(emptyLines[0] ?? "", /─ btw · side thread/);
+  assert.match(emptyLines[0] ?? "", /^─+$/u);
+  assert.match(emptyLines.at(-2) ?? "", /^btw/u);
   assert.doesNotMatch(emptyView, /turns|Q1|You:|Assistant:|%|history/);
-  assert.match(emptyView, /btw • Enter send • Ctrl\+C exit/);
+  assert.match(emptyLines.at(-1) ?? "", /Enter send • Ctrl\+C exit/);
   assert.equal(emptyView.includes(CURSOR_MARKER), true);
   for (const character of "first question") composer.handleInput(character);
   composer.handleInput("\r");
@@ -1624,7 +1625,8 @@ test("transcript cycles its local thinking level with Pi's configured thinking s
     },
   );
 
-  assert.match(pager.render(80).join("\n"), /thinking low.*T cycle/i);
+  assert.match(pager.render(80).join("\n"), /thinking low/i);
+  assert.match(pager.render(80).join("\n"), /T thinking/i);
   pager.handleInput("t");
 
   assert.deepEqual(changes, ["high"]);
@@ -2127,7 +2129,7 @@ test("constrained composer keeps an earlier editor cursor visible", () => {
   assert.doesNotMatch(rendered, /Ctrl\+C/);
 });
 
-test("side-thread header stays fixed across narrow renders and history scrolling", () => {
+test("side-thread footer stays below the editor across narrow renders and history scrolling", () => {
   initTheme("dark");
   const tui = { terminal: { rows: 10 }, requestRender() {} };
   const theme = {
@@ -2151,13 +2153,14 @@ test("side-thread header stays fixed across narrow renders and history scrolling
   pager.handleInput("\u001b[5~");
   const scrolled = pager.render(80);
   const narrow = pager.render(8);
-  assert.match(initial[0] ?? "", /─ btw · side thread/);
-  assert.match(scrolled[0] ?? "", /─ btw · side thread/);
-  assert.match(narrow[0] ?? "", /btw/);
+  assert.match(initial.at(-2) ?? "", /^btw/u);
+  assert.equal(scrolled.at(-2), initial.at(-2));
+  assert.match(narrow.at(-2) ?? "", /^btw/u);
+  assert.doesNotMatch(initial.join("\n"), /─ btw · side thread/u);
   assert.ok(narrow.every((line) => visibleWidth(line) <= 8));
 });
 
-test("side-thread header is presentation-only", () => {
+test("side-thread footer identity is presentation-only", () => {
   initTheme("dark");
   const tui = { terminal: { rows: 24 }, requestRender() {} };
   const theme = {
@@ -2178,7 +2181,7 @@ test("side-thread header is presentation-only", () => {
   const snapshot = structuredClone(thread.turns);
   const pager = new BtwTranscriptPager(tui as never, theme as never, thread.turns, () => undefined);
 
-  assert.match(pager.render(80)[0] ?? "", /btw · side thread/);
+  assert.match(pager.render(80).at(-2) ?? "", /^btw/u);
   assert.deepEqual(thread.turns, snapshot);
   assert.doesNotMatch(JSON.stringify(buildSideThreadMessages(thread, "next question")), /side thread/);
 });
@@ -2211,7 +2214,7 @@ test("transcript pager starts later turns at the bottom and respects narrow widt
   assert.ok(lines.every((line) => visibleWidth(line) <= 20));
   assert.ok(lines.length <= tui.terminal.rows - 3);
   assert.doesNotMatch(lines.join("\n"), /Q1|You:|Assistant:|turns|%|history/);
-  assert.match(lines[0] ?? "", /btw/);
+  assert.match(lines.at(-2) ?? "", /^btw/u);
   assert.match(lines.join("\n"), /Enter.*Ctrl\+C/);
 });
 
@@ -2436,11 +2439,12 @@ test("answering view preserves the transcript and offers compact cancellation", 
   );
   try {
     const rendered = view.render(80).join("\n");
-    assert.match(rendered, /─ btw · side thread/);
+    assert.doesNotMatch(rendered, /─ btw · side thread/);
+    assert.match(view.render(80).at(-2) ?? "", /^btw/u);
     assert.match(rendered, /Earlier question/);
     assert.match(rendered, /Earlier answer/);
     assert.match(rendered, /Current question/);
-    assert.match(rendered, /Answering….*Ctrl\+C cancel/);
+    assert.match(rendered, /Answering…[\s\S]*Ctrl\+C cancel/);
     assert.doesNotMatch(rendered, /openai|codex|provider|model/i);
     view.handleInput("\u0003");
     assert.equal(cancelled, 1);

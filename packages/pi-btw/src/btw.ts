@@ -12,6 +12,7 @@ import {
   getAnsweredTurns,
   summarizeBringToMain,
 } from "./bring-to-main.js";
+import type { BtwDisplayModel } from "./conversation-chrome.js";
 import { buildConversationContext } from "./conversation-context.js";
 import { type RunBtwFullscreen, runBtwFullscreen } from "./fullscreen-ui.js";
 import { registerBtwMainThreadUpdates } from "./main-thread-updates.js";
@@ -489,7 +490,10 @@ export async function runBtwThread({
     while (true) {
       if (ctx.signal?.aborted) return { kind: "closed" };
       if (!pendingQuestion) {
-        const action = await interact(thread, thread.turns.length > 0, ctx, composerDraft, createThinkingControl());
+        const action = await interact(thread, thread.turns.length > 0, ctx, composerDraft, createThinkingControl(), {
+          id: selected.model.id,
+          provider: selected.model.provider,
+        });
         if (ctx.signal?.aborted || action.kind === "close") return { kind: "closed" };
         if (action.kind === "bringToMain") {
           const choice = await chooseBringToMainAction(thread, ctx);
@@ -840,6 +844,7 @@ async function askThreadQuestion(
       },
       thinkingLevel,
       {
+        model: { id: selected.model.id, provider: selected.model.provider },
         markdownTransformers: createMarkdownTransformers(theme),
         steering: {
           questions: steering.questions,
@@ -872,6 +877,7 @@ async function showThreadComposer(
   ctx: ExtensionCommandContext,
   initialQuestion: string | undefined,
   thinking: BtwThreadThinkingControl,
+  model?: BtwDisplayModel,
 ): Promise<TranscriptPagerAction> {
   const createMarkdownTransformers = await prepareCurrentTranscriptMarkdown(thread, initialQuestion, ctx);
   if (!createMarkdownTransformers || ctx.signal?.aborted) return { kind: "close" };
@@ -880,6 +886,7 @@ async function showThreadComposer(
       new BtwTranscriptPager(tui, theme, thread.turns, done, {
         startAtBottom,
         initialQuestion,
+        model,
         markdownTransformers: createMarkdownTransformers(theme),
         thinking: { ...thinking, keybindings },
       }),

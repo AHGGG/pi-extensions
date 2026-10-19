@@ -23,6 +23,11 @@ Rendered test frames are structural evidence, not screenshots or acceptance on a
 Neither a print/RPC package load nor an in-memory menu test proves terminal negotiation, clipboard integration, or IME placement.
 Kit can filter hints for public native host bindings, but it cannot infer unrelated extension input listeners that Pi does not expose.
 
+The later [native appearance reference](./native-appearance.md) records the appearance-only follow-up against the preserved `89b0502a` baseline.
+Its native reference is an actual bounded CLI/PTY capture through public `TuiAltScreen.getScreenLines()`; its BTW frames use a simulated terminal with the same runtime and callback theme.
+That follow-up moves the former header and pre-editor hints below the editor, so references to the existing header in the historical findings and frames below describe the earlier alignment change.
+It does not replace the input, lifecycle, settings, queue, or bring-to-main evidence retained here.
+
 ## Finding dispositions
 
 The final disposition records local corrections separately from retained behavior and external dependencies.
@@ -110,6 +115,15 @@ Enter queue next • Ctrl+C cancel
 
 ────────────────────────────────────────────────────────────
 ```
+
+## Appearance-only follow-up
+
+The current conversation order is transcript, pending questions, native-style editor, then at most two footer rows.
+Identity, truthful side-model metadata, thinking level, textual pane focus, and reachable hints replace the former top header and pre-editor hint row.
+`BtwComposer` remains the logical input adapter over public `Editor`; public native message components remain unchanged.
+The [appearance reference](./native-appearance.md#public-reuse-boundary) records exact public exports and the local working-border fallback.
+No private renderer setting, main-session usage statistic, fake session, new dependency, tool, or streaming capability was added for appearance.
+The private workspace dependencies listed below remain unchanged.
 
 ## F11: Existing queue and bring-to-main behavior
 
@@ -200,6 +214,7 @@ Confirmation and context-selection policy remain extension-owned; atomic editor 
 ### Effective renderer options
 
 Pi should expose the effective, validated renderer options needed by a workspace, including wheel policy, selection-copy policy, right-click behavior, search-navigation theme roles, and clipboard/open-link callbacks.
+The appearance follow-up also needs public effective message/editor padding and editor/status theme capabilities; current fallback values match native defaults rather than private host overrides.
 The contract should identify unavailable capabilities and define whether a workspace receives a snapshot or live updates.
 It must report clipboard failures through a safe, mode-appropriate result without requiring direct terminal output or access to private settings.
 Host paste must target the active editable surface, expand clipboard text through normal editor semantics, and do nothing to a read-only viewport.
