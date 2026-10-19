@@ -11,6 +11,7 @@ import {
   type TuiMouseEventResult,
   truncateToWidth,
 } from "@earendil-works/pi-tui";
+import { componentKeybindings } from "./components/host-input.js";
 import { runCustomInteraction } from "./custom-interaction.js";
 import { formatInteractionHints } from "./interaction-hints.js";
 import { sanitizeTerminalText } from "./terminal-text.js";
@@ -54,13 +55,14 @@ export async function runSecretInput<Context extends MenuContext = ExtensionComm
       const input = new MaskedInput(keybindings);
       let inputRow = -1;
       let renderedWidth = 0;
-      const interactionHint = formatInteractionHints(keybindings, [
+      const hintKeys = componentKeybindings(tui, keybindings);
+      const interactionHint = formatInteractionHints(hintKeys, [
         {
-          keys: keybindings.getKeys("tui.input.submit").filter((key) => !hasControlCharacter(key)),
+          keys: hintKeys.getKeys("tui.input.submit").filter((key) => !hasControlCharacter(key)),
           label: "continue",
         },
         {
-          keys: [...keybindings.getKeys("tui.select.cancel").filter((key) => !hasControlCharacter(key)), "ctrl+c"],
+          keys: [...hintKeys.getKeys("tui.select.cancel").filter((key) => !hasControlCharacter(key)), "ctrl+c"],
           label: "cancel",
         },
       ]);

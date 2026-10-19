@@ -27,6 +27,7 @@ import {
   documentSearchActionMatches,
   documentSearchActivationAvailable,
 } from "./document-search.js";
+import { componentKeyAvailable } from "./host-input.js";
 import { componentRows, handleSearchInput, renderHorizontalRule, safeMenuText } from "./rendering.js";
 import { reviewDialogPages } from "./review.js";
 
@@ -49,7 +50,9 @@ export function createBrowseComponent<ScreenId extends string, ActionId extends 
   const searchInput = new Input();
   const detailSearch = options.screen.enableDetailSearch ? new DocumentSearchController() : undefined;
   const detailSearchActivationAvailable = Boolean(
-    detailSearch && documentSearchActivationAvailable(options.keybindings, false),
+    detailSearch &&
+      componentKeyAvailable(options.tui, DOCUMENT_SEARCH_ACTIVATE_KEY) &&
+      documentSearchActivationAvailable(options.keybindings, false),
   );
   const allItems: SearchableItem[] = options.screen.items.map((item) => ({
     item,
@@ -439,7 +442,7 @@ function listRows<ScreenId extends string, ActionId extends string>(
   if (options.screen.items.length === 0) {
     return [options.theme.fg("dim", "  No items available")];
   }
-  if (items.length === 0) return [options.theme.fg("dim", "  No matching items")];
+  if (items.length === 0) return [options.theme.fg("dim", "  No matching items; edit search")];
   return items.slice(viewportStart, viewportStart + viewportRows).map((candidate, offset) => {
     const index = viewportStart + offset;
     const prefix = index === selectedIndex ? "› " : "  ";

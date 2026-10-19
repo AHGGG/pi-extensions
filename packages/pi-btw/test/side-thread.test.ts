@@ -79,6 +79,7 @@ function keybindings(mapping: Record<string, string> = {}) {
     "tui.select.pageUp": "\u001b[5~",
     "tui.select.pageDown": "\u001b[6~",
     "tui.select.confirm": "\r",
+    "tui.input.submit": "\r",
     "tui.select.cancel": "\u001b",
     "app.thinking.cycle": "\u001b[Z",
   };
@@ -88,6 +89,7 @@ function keybindings(mapping: Record<string, string> = {}) {
     "tui.select.pageUp": "pageUp",
     "tui.select.pageDown": "pageDown",
     "tui.select.confirm": "enter",
+    "tui.input.submit": "enter",
     "tui.select.cancel": "escape",
     "app.thinking.cycle": "shift+tab",
   };
@@ -539,6 +541,8 @@ test("custom text ranges pass their exact formatted draft through preview", asyn
   let selectorCustomOptions: unknown;
   let editor = "main draft";
   const ctx = {
+    mode: "tui",
+    hasUI: true,
     ui: {
       getEditorText: () => editor,
       setEditorText: (text: string) => {
@@ -547,9 +551,12 @@ test("custom text ranges pass their exact formatted draft through preview", asyn
       custom: async (_factory: unknown, customOptions?: unknown) => {
         selectorCustomOptions = customOptions;
         return {
-          kind: "bringToMain",
-          draft: exactDraft,
-          summary: { lines: 1, messages: 1, tokens: 4 },
+          kind: "completed",
+          value: {
+            kind: "bringToMain",
+            draft: exactDraft,
+            summary: { lines: 1, messages: 1, tokens: 4 },
+          },
         };
       },
     },
@@ -586,6 +593,8 @@ test("exact text selection survives returning from preview", async () => {
   let editor = "main draft";
   let selectorCount = 0;
   const ctx = {
+    mode: "tui",
+    hasUI: true,
     ui: {
       getEditorText: () => editor,
       setEditorText: (text: string) => {
@@ -598,7 +607,7 @@ test("exact text selection survives returning from preview", async () => {
         },
       ) => {
         let result: unknown;
-        const component = factory(
+        const component = await factory(
           { terminal: { rows: 10 }, requestRender() {} } as never,
           {
             fg: (_color: string, text: string) => text,
@@ -2070,7 +2079,7 @@ test("text range selector scrolls raw lines and escapes controls in its display"
   assert.equal(rendered.includes("\u001b[2J"), false);
 });
 
-test("side-thread header and footer remain visible when the editor grows", () => {
+test("constrained side-thread dock gives a growing editor priority over optional chrome", () => {
   initTheme("dark");
   const tui = { terminal: { rows: 10 }, requestRender() {} };
   const theme = {
@@ -2086,10 +2095,13 @@ test("side-thread header and footer remain visible when the editor grows", () =>
   for (const character of "long input ".repeat(30)) composer.handleInput(character);
   const rendered = composer.render(20);
 
-  assert.match(rendered[0] ?? "", /btw/);
-  assert.match(rendered.join("\n"), /Ctrl\+C/);
+  assert.doesNotMatch(rendered[0] ?? "", /btw/);
   assert.equal(rendered.join("\n").includes(CURSOR_MARKER), true);
   assert.ok(rendered.length <= tui.terminal.rows - 3);
+  tui.terminal.rows = 30;
+  const expanded = composer.render(20).join("\n");
+  assert.match(expanded, /btw/);
+  assert.match(expanded, /Ctrl\+C/);
 });
 
 test("constrained composer keeps an earlier editor cursor visible", () => {
@@ -2111,7 +2123,8 @@ test("constrained composer keeps an earlier editor cursor visible", () => {
 
   const rendered = composer.render(20).join("\n");
   assert.equal(rendered.includes(CURSOR_MARKER), true);
-  assert.match(rendered, /Ctrl\+C/);
+  assert.match(rendered, /line 1/u);
+  assert.doesNotMatch(rendered, /Ctrl\+C/);
 });
 
 test("side-thread header stays fixed across narrow renders and history scrolling", () => {
@@ -2198,7 +2211,8 @@ test("transcript pager starts later turns at the bottom and respects narrow widt
   assert.ok(lines.every((line) => visibleWidth(line) <= 20));
   assert.ok(lines.length <= tui.terminal.rows - 3);
   assert.doesNotMatch(lines.join("\n"), /Q1|You:|Assistant:|turns|%|history/);
-  assert.match(lines.join("\n"), /btw.*Enter.*Ctrl\+C/);
+  assert.match(lines[0] ?? "", /btw/);
+  assert.match(lines.join("\n"), /Enter.*Ctrl\+C/);
 });
 
 test("scrollable transcript reveals history controls only when they are useful", () => {
@@ -2222,7 +2236,7 @@ test("scrollable transcript reveals history controls only when they are useful",
   );
 
   const rendered = composer.render(80).join("\n");
-  assert.match(rendered, /↑ older.*PgUp\/PgDn history/);
+  assert.match(rendered, /PgUp\/PgDn history/);
   const compact = composer.render(40).join("\n");
   assert.match(compact, /Ctrl\+R/);
   assert.match(compact, /PgUp\/PgDn/);
@@ -2829,9 +2843,10 @@ test("answering view accepts Pi-style steering while preserving IME focus and ex
     assert.deepEqual(queued, [pasted.trim(), "second steering"]);
     assert.deepEqual(changes, ["high"]);
     const rendered = view.render(100).join("\n");
-    assert.match(rendered, /Steering: steering paste/);
+    assert.match(rendered, /Steering next: steering paste/);
     assert.ok(rendered.indexOf("steering paste") < rendered.indexOf("second steering"));
-    assert.match(rendered, /Answering….*Enter steer.*Ctrl\+C cancel/);
+    assert.match(rendered, /Enter queue next.*Ctrl\+C cancel/);
+    assert.match(rendered, /Answering…/);
     assert.match(rendered, /thinking high/i);
   } finally {
     view.dispose();

@@ -90,6 +90,7 @@ They add lifecycle and mode adapters without exposing component factories; this 
 
 Kit screens follow Pi's fullscreen input ownership rather than replacing its transcript controls.
 See [Fullscreen input and custom UI limits](./docs/api.md#fullscreen-input-and-custom-ui-limits) for paging, overlay focus, and program-status constraints.
+The [selector and host-input audit](./docs/core-alignment-audit.md) records corrections, retained contracts, native-renderer tests, and unverified terminal paths.
 
 ## ⚡ Runtime performance
 
