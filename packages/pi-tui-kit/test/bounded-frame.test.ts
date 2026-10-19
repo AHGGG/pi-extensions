@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { stripVTControlCharacters } from "node:util";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { test } from "vitest";
-import { type BoundedFrameOptions, renderBoundedFrame } from "../src/index.js";
+import { type BoundedFrameOptions, renderBoundedFrame } from "../src/bounded-frame.js";
 
 const options: BoundedFrameOptions = {
   width: 80,
