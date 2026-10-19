@@ -1,6 +1,6 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { COMPLETION_MESSAGE_TYPE } from "./completion-renderer.js";
 import { type BrokerSendAcknowledgement, type MessageBroker, sanitizeTerminalText } from "./message-broker.js";
+import { COMPLETION_MESSAGE_TYPE } from "./message-renderers.js";
 import { modelVisibleJson, requireBoundedModelText } from "./model-output.js";
 import { runChild as defaultRunChild } from "./process.js";
 import type { ExtensionAttachment } from "./resource-attachments.js";

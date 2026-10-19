@@ -74,7 +74,9 @@ Use messaging only when needed:
 - If `subagent_wait` returns `reason: "subagent_message"`, handle the visible request or response and wait for the job again only when needed.
 - Answer a child-originated request by calling `subagent_send` with its `requestId`.
 
-Completion messages follow Pi's global tool-output expansion state and the `app.tools.expand` binding (`Ctrl+O` by default).
+Completion messages and child requests and responses follow Pi's global tool-output expansion state and the `app.tools.expand` binding (`Ctrl+O` by default).
+Collapsed messages show a summary and the configured expansion key; expanded messages show the full content.
+This display state does not change the content sent to the model.
 
 In TUI mode, the above-editor widget shows each queued or running job's ID, state, elapsed time, timeout, and selected core and extension tool names.
 It omits fixed communication tools, attachment paths, and resource totals, disappears when no jobs remain active, and clears when the session ends.

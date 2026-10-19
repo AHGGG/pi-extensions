@@ -67,6 +67,7 @@ afterEach(async () => {
 test("registers five fixed main-agent tools with stable schemas and explicit limits", async () => {
   const { mock, context } = await setup({ runChild: waitForCancellation });
   assert.ok(mock.messageRenderers.has("pi-subagents-completion"));
+  assert.ok(mock.messageRenderers.has("pi-subagents-message"));
   const tools = mock.tools as unknown as RegisteredTool[];
   assert.deepEqual(
     tools.map((candidate) => candidate.name),
@@ -184,52 +185,58 @@ test("registers five fixed main-agent tools with stable schemas and explicit lim
   await cancelJob(mock, context, String(spawned.details.jobId));
 });
 
-test("completion renderer follows Pi's tool-output expansion state", async () => {
-  const { mock } = await setup();
-  const renderer = mock.messageRenderers.get("pi-subagents-completion");
-  assert.ok(renderer);
-  const message = {
-    customType: "pi-subagents-completion",
-    content: `Subagent job completion:
+test.each(["pi-subagents-completion", "pi-subagents-message"])(
+  "%s renderer follows Pi's tool-output expansion state",
+  async (messageType) => {
+    const { mock } = await setup();
+    const renderer = mock.messageRenderers.get(messageType);
+    assert.ok(renderer);
+    const message = {
+      customType: messageType,
+      content: `Subagent job completion:
 {
   "result": "full child result\u0007"
 }`,
-    display: true,
-    details: { result: "raw details must not render" },
-  };
-  const theme = {
-    fg: (_role: string, text: string) => text,
-    bg: (_role: string, text: string) => text,
-    bold: (text: string) => text,
-  } as Theme;
-  const collapsed = renderer(message, { expanded: false, outputPad: 1 }, theme) as Component;
-  const collapsedLines = collapsed.render(80);
-  const collapsedText = collapsedLines.join("\n");
-  assert.match(collapsedText, /to expand/i);
-  assert.doesNotMatch(collapsedText, /full child result|raw details must not render/i);
-  assert.ok(collapsedLines.every((line) => visibleWidth(line) <= 80));
+      display: true,
+      details: { result: "raw details must not render" },
+    };
+    const theme = {
+      fg: (_role: string, text: string) => text,
+      bg: (_role: string, text: string) => text,
+      bold: (text: string) => text,
+    } as Theme;
+    const collapsed = renderer(message, { expanded: false, outputPad: 1 }, theme) as Component;
+    const collapsedLines = collapsed.render(80);
+    const collapsedText = collapsedLines.join("\n");
+    assert.match(collapsedText, /to expand/i);
+    assert.doesNotMatch(collapsedText, /full child result|raw details must not render/i);
+    assert.ok(collapsedLines.every((line) => visibleWidth(line) <= 80));
 
-  const expanded = renderer(message, { expanded: true, outputPad: 1 }, theme) as Component;
-  const expandedLines = expanded.render(80);
-  const expandedText = expandedLines.join("\n");
-  assert.match(expandedText, /full child result/i);
-  assert.equal(expandedText.includes(String.fromCharCode(7)), false);
-  assert.doesNotMatch(expandedText, /to expand|raw details must not render/i);
-  assert.ok(expandedLines.every((line) => visibleWidth(line) <= 80));
+    const expanded = renderer(message, { expanded: true, outputPad: 1 }, theme) as Component;
+    const expandedLines = expanded.render(80);
+    const expandedText = expandedLines.join("\n");
+    assert.match(expandedText, /full child result/i);
+    assert.equal(expandedText.includes(String.fromCharCode(7)), false);
+    assert.doesNotMatch(expandedText, /to expand|raw details must not render/i);
+    assert.ok(expandedLines.every((line) => visibleWidth(line) <= 80));
 
-  for (const [width, outputPad] of [
-    [1, 1],
-    [2, 4],
-    [3, 4],
-  ] as const) {
-    for (const expandedState of [false, true]) {
-      const narrow = renderer(message, { expanded: expandedState, outputPad }, theme) as Component;
-      const narrowLines = narrow.render(width);
-      assert.ok(narrowLines.length > 0);
-      assert.ok(narrowLines.every((line) => visibleWidth(line) <= width));
+    for (const [width, outputPad] of [
+      [1, 1],
+      [2, 4],
+      [3, 4],
+    ] as const) {
+      for (const expandedState of [false, true]) {
+        const narrow = renderer(message, { expanded: expandedState, outputPad }, theme) as Component;
+        const narrowLines = narrow.render(width);
+        assert.ok(narrowLines.length > 0);
+        assert.ok(narrowLines.every((line) => visibleWidth(line) <= width));
+        narrow.invalidate();
+        assert.deepEqual(narrow.render(width), narrowLines);
+        assert.deepEqual(narrow.render(0), []);
+      }
     }
-  }
-});
+  },
+);
 
 test("spawns jobs with default and explicit tools and thinking levels", async () => {
   const requests: ChildRequest[] = [];

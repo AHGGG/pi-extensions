@@ -11,6 +11,7 @@ import {
   sanitizeTerminalText,
   validateMessage,
 } from "./message-broker.js";
+import { BROKER_MESSAGE_TYPE } from "./message-renderers.js";
 import { modelVisibleJson, requireBoundedModelText } from "./model-output.js";
 import { assertChildCommandCapacity } from "./process.js";
 import {
@@ -32,7 +33,6 @@ import {
 
 const MAX_TASK_BYTES = 50 * 1024;
 const MAX_TOOLS = MAX_SELECTED_TOOLS;
-const MESSAGE_TYPE = "pi-subagents-message";
 const CHILD_CORE_TOOL_SET = new Set<string>(CHILD_CORE_TOOL_NAMES);
 const THINKING_LEVEL_SET = new Set<string>(SUBAGENT_THINKING_LEVELS);
 
@@ -347,7 +347,7 @@ function deliverMessage(pi: ExtensionAPI, message: BrokerInboundMessage): void {
   );
   pi.sendMessage(
     {
-      customType: MESSAGE_TYPE,
+      customType: BROKER_MESSAGE_TYPE,
       content,
       display: true,
       details: {
