@@ -37,16 +37,12 @@ export interface HerdrWidgetObserver {
   shutdown(ctx: ExtensionContext): Promise<void>;
 }
 
-const MAX_PENDING_EVENTS = 1024;
-
 class HerdrTopologyChangedError extends Error {}
 
-function requiresResubscribe(event: HerdrPaneEvent): boolean {
-  return event.type === "created" || event.type === "moved" || event.type === "agent_detected";
-}
-
 function isRelevantEvent(model: HerdrWidgetModel, event: HerdrPaneEvent): boolean {
-  if (event.type === "created") return model.isCurrentWorkspace(event.pane.workspaceId);
+  if (event.type === "created" || event.type === "updated") {
+    return model.isCurrentWorkspace(event.pane.workspaceId);
+  }
   if (event.type === "moved") {
     return (
       model.isCurrentPane(event.previousPaneId) ||
@@ -54,7 +50,7 @@ function isRelevantEvent(model: HerdrWidgetModel, event: HerdrPaneEvent): boolea
       model.isCurrentWorkspace(event.pane.workspaceId)
     );
   }
-  return model.isCurrentWorkspace(event.workspaceId);
+  return "workspaceId" in event && model.isCurrentWorkspace(event.workspaceId);
 }
 
 function subscriptionFingerprint(currentPane: HerdrPane, panes: readonly HerdrPane[]): string {
@@ -165,7 +161,13 @@ export function createHerdrWidgetObserver(options: HerdrObserverOptions): HerdrW
       ),
     ]);
     if (!owns(ctx, expectedGeneration) || signal.aborted) return undefined;
-    const namesByPane = new Map(parseAgentListResult(agentResult).map((pane) => [pane.paneId, pane.agentName]));
+    const panes = parsePaneListResult(listResult);
+    const paneIds = new Set(panes.map((pane) => pane.paneId));
+    const namesByPane = new Map(
+      parseAgentListResult(agentResult)
+        .filter((pane) => pane.workspaceId === currentPane.workspaceId && paneIds.has(pane.paneId))
+        .map((pane) => [pane.paneId, pane.agentName]),
+    );
     const withAgentName = (pane: HerdrPane): HerdrPane => ({
       ...pane,
       agentName: namesByPane.get(pane.paneId) ?? pane.agentName,
@@ -176,7 +178,7 @@ export function createHerdrWidgetObserver(options: HerdrObserverOptions): HerdrW
     }
     return {
       currentPane: withAgentName(currentPane),
-      panes: parsePaneListResult(listResult).map(withAgentName),
+      panes: panes.map(withAgentName),
       workspace,
     };
   };
@@ -193,62 +195,27 @@ export function createHerdrWidgetObserver(options: HerdrObserverOptions): HerdrW
     const signal = attemptController.signal;
     let attemptActive = true;
     let subscription: HerdrSubscription | undefined;
-    let refreshTask: Promise<void> | undefined;
+    let failure: Error | undefined;
+    let wake: (() => void) | undefined;
+    const wakeRefresh = () => {
+      const resolve = wake;
+      wake = undefined;
+      resolve?.();
+    };
+    signal.addEventListener("abort", wakeRefresh);
+    const failAttempt = (error: Error) => {
+      if (!attemptActive || signal.aborted) return;
+      failure = error;
+      if (owns(ctx, expectedGeneration)) clearWidget(ctx);
+      attemptController.abort(error);
+    };
     try {
       const discovered = await loadPaneSet(ctx, expectedGeneration, signal);
       if (!discovered) return;
       const subscribedFingerprint = subscriptionFingerprint(discovered.currentPane, discovered.panes);
       const model = new HerdrWidgetModel();
       model.reset(discovered.currentPane, discovered.panes, discovered.workspace);
-      const pendingEvents: HerdrPaneEvent[] = [];
-      const pendingStatusEvents: HerdrPaneEvent[] = [];
-      let initialized = false;
-      let topologyPending = false;
-      let refreshingTopology = false;
-      let refreshAgain = false;
-      let rejectReconfigure!: (error: Error) => void;
-      let reconfigureSettled = false;
-      const reconfigure = new Promise<never>((_resolve, reject) => {
-        rejectReconfigure = reject;
-      });
-      void reconfigure.catch(() => undefined);
-      const failAttempt = (error: Error) => {
-        if (reconfigureSettled) return;
-        reconfigureSettled = true;
-        rejectReconfigure(error);
-      };
-      const scheduleTopologyRefresh = () => {
-        if (!initialized || !attemptActive || signal.aborted) return;
-        if (refreshTask) {
-          refreshAgain = true;
-          return;
-        }
-        refreshTask = (async () => {
-          do {
-            refreshAgain = false;
-            refreshingTopology = true;
-            const refreshed = await loadPaneSet(ctx, expectedGeneration, signal);
-            if (!refreshed || !attemptActive || signal.aborted) return;
-            model.reset(refreshed.currentPane, refreshed.panes, refreshed.workspace);
-            for (const event of pendingStatusEvents.splice(0)) {
-              if (isRelevantEvent(model, event)) model.apply(event);
-            }
-            refreshingTopology = false;
-            publish(ctx, model, expectedGeneration);
-            if (subscriptionFingerprint(refreshed.currentPane, refreshed.panes) !== subscribedFingerprint) {
-              failAttempt(new HerdrTopologyChangedError());
-              return;
-            }
-          } while (refreshAgain && attemptActive && !signal.aborted);
-        })()
-          .catch((error) => {
-            failAttempt(error instanceof Error ? error : new Error(String(error)));
-          })
-          .finally(() => {
-            refreshingTopology = false;
-            refreshTask = undefined;
-          });
-      };
+      let dirty = true;
 
       subscription = await subscribe(
         options.environment.socketEndpoint,
@@ -259,64 +226,51 @@ export function createHerdrWidgetObserver(options: HerdrObserverOptions): HerdrW
         },
         signal,
         (frame) => {
+          if (!attemptActive || !owns(ctx, expectedGeneration) || signal.aborted) return;
           const event = parseHerdrPaneEvent(frame);
-          if (!initialized) {
-            if (!event || !isRelevantEvent(model, event)) return;
-            if (requiresResubscribe(event)) {
-              topologyPending = true;
-              return;
-            }
-            if (pendingEvents.length >= MAX_PENDING_EVENTS) {
-              throw new Error("Too many Herdr events arrived during initialization");
-            }
-            pendingEvents.push(event);
-            return;
-          }
-
-          if (!event || !owns(ctx, expectedGeneration) || signal.aborted || !isRelevantEvent(model, event)) {
-            return;
-          }
-          if (requiresResubscribe(event)) {
-            scheduleTopologyRefresh();
-            return;
-          }
-          if (refreshingTopology) {
-            if (pendingStatusEvents.length >= MAX_PENDING_EVENTS) {
-              throw new Error("Too many Herdr status events arrived during refresh");
-            }
-            pendingStatusEvents.push(event);
-            return;
-          }
-          model.apply(event);
-          publish(ctx, model, expectedGeneration);
+          if (!event || !isRelevantEvent(model, event)) return;
+          dirty = true;
+          wakeRefresh();
         },
+      ).catch(async (error: unknown) => {
+        if (!owns(ctx, expectedGeneration) || signal.aborted) throw error;
+        // A pane can disappear between discovery and subscription acceptance.
+        // Verify a changed target set before exempting this from outage retries.
+        const latest = await loadPaneSet(ctx, expectedGeneration, signal);
+        if (latest && subscriptionFingerprint(latest.currentPane, latest.panes) !== subscribedFingerprint) {
+          throw new HerdrTopologyChangedError();
+        }
+        throw error;
+      });
+      void subscription.closed.then(
+        () => failAttempt(new Error("Herdr subscription ended")),
+        (error) => failAttempt(error instanceof Error ? error : new Error(String(error))),
       );
-      if (!owns(ctx, expectedGeneration) || signal.aborted) return;
 
-      const reconciled = await loadPaneSet(ctx, expectedGeneration, signal);
-      if (!reconciled) return;
-      model.reset(reconciled.currentPane, reconciled.panes, reconciled.workspace);
-      for (const event of pendingEvents.splice(0)) {
-        if (isRelevantEvent(model, event)) model.apply(event);
+      while (owns(ctx, expectedGeneration) && !signal.aborted) {
+        dirty = false;
+        const refreshed = await loadPaneSet(ctx, expectedGeneration, signal);
+        if (!refreshed || signal.aborted) break;
+        // Events and reads have no common sequence boundary. Never replay event
+        // payloads over a read, or publish a read invalidated while in flight.
+        if (dirty) continue;
+        if (subscriptionFingerprint(refreshed.currentPane, refreshed.panes) !== subscribedFingerprint) {
+          throw new HerdrTopologyChangedError();
+        }
+        model.reset(refreshed.currentPane, refreshed.panes, refreshed.workspace);
+        publish(ctx, model, expectedGeneration);
+        await new Promise<void>((resolve) => {
+          wake = resolve;
+          if (dirty || signal.aborted) wakeRefresh();
+        });
       }
-      if (subscriptionFingerprint(reconciled.currentPane, reconciled.panes) !== subscribedFingerprint) {
-        throw new HerdrTopologyChangedError();
-      }
-      initialized = true;
-      publish(ctx, model, expectedGeneration);
-      if (topologyPending) scheduleTopologyRefresh();
-      await Promise.race([
-        subscription.closed.then(() => {
-          if (!signal.aborted) throw new Error("Herdr subscription ended");
-        }),
-        reconfigure,
-      ]);
+      if (failure) throw failure;
     } finally {
       attemptActive = false;
       attemptController.abort(new DOMException("Herdr widget attempt ended", "AbortError"));
+      signal.removeEventListener("abort", wakeRefresh);
       sessionSignal.removeEventListener("abort", abortAttempt);
       subscription?.close();
-      await Promise.allSettled(refreshTask ? [refreshTask] : []);
     }
   };
 
