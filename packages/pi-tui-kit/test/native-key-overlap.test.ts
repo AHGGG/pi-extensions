@@ -1,8 +1,15 @@
 import assert from "node:assert/strict";
-import { type KeybindingsConfig, type KeyId, matchesKey } from "@earendil-works/pi-tui";
+import {
+  isKittyProtocolActive,
+  type KeybindingsConfig,
+  type KeyId,
+  matchesKey,
+  setKittyProtocolActive,
+} from "@earendil-works/pi-tui";
 import { test } from "vitest";
 import { plainTuiText } from "../../../test/tui-text.js";
 import { canonicalKeyId, keysOverlap } from "../src/components/key-matching.js";
+import { canonicalizeConfiguredKey } from "../src/key-matching.js";
 import { runThinkingSelector } from "../src/pi-selectors.js";
 import { createRendererHost } from "./fixtures/renderer-host.js";
 import { rendererTheme } from "./fixtures/renderer-theme.js";
@@ -67,8 +74,48 @@ test("canonical grammar preserves native aliases, modifier permutations, and lit
     ["f12", "f12", "\x1b[24~"],
   ] as const) {
     assert.equal(canonicalKeyId(key), canonical);
+    assert.equal(canonicalizeConfiguredKey(key)?.toLowerCase(), canonical);
     assert.equal(matchesKey(input, key as KeyId), true, key);
     assert.equal(matchesKey(input, canonical as KeyId), true, canonical);
+  }
+});
+
+// A public overlap API is deferred: arbitrary matcher-accepted alternate fields
+// are not an oracle for terminal-generated input. Preserve the narrower private
+// component probes rather than reserve every Ctrl action behind Ctrl+Up.
+test("native functional alternate acceptance does not define terminal collisions", () => {
+  for (const [other, codepoint] of [
+    ["ctrl+x", 120],
+    ["ctrl+space", 32],
+    ["ctrl+backspace", 127],
+  ] as const) {
+    const input = `\x1b[57419::${codepoint};5u`;
+    assert.equal(matchesKey(input, "ctrl+up"), true);
+    assert.equal(matchesKey(input, other), true);
+    for (const enhanced of [false, true]) {
+      assert.equal(keysOverlap("ctrl+up", other, enhanced), false);
+      assert.equal(keysOverlap(other, "ctrl+up", enhanced), false);
+    }
+  }
+});
+
+test("Kitty mode still accepts raw Ctrl aliases excluded by private enhanced hint policy", () => {
+  const previous = isKittyProtocolActive();
+  setKittyProtocolActive(true);
+  try {
+    for (const [input, first, second] of [
+      ["\t", "tab", "ctrl+i"],
+      ["\r", "enter", "ctrl+m"],
+      ["\x1b", "escape", "ctrl+["],
+      ["\x1f", "ctrl+-", "ctrl+_"],
+    ] as const) {
+      assert.equal(matchesKey(input, first), true);
+      assert.equal(matchesKey(input, second), true);
+      assert.equal(keysOverlap(first, second, false), true);
+      assert.equal(keysOverlap(first, second, true), false);
+    }
+  } finally {
+    setKittyProtocolActive(previous);
   }
 });
 

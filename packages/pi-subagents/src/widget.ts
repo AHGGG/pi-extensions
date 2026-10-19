@@ -1,5 +1,6 @@
 import type { ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
 import { stripTerminalSequences, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+import { EditorStatusWidget } from "@narumitw/pi-tui-kit/editor-status-widget";
 import { sanitizeSubagentDisplayText as sanitizeLabel } from "./display-text.js";
 import type { ActiveJobDisplay, SubagentRuntime } from "./runtime.js";
 import { DEFAULT_SUBAGENT_SETTINGS, type SubagentSettings } from "./settings.js";
@@ -45,10 +46,7 @@ export function createSubagentWidgetController(runtime: SubagentRuntime): Subage
       const preferences = { ...settings };
       ctx.ui.setWidget(
         SUBAGENT_WIDGET_KEY,
-        (_tui, theme) => ({
-          render: (width) => renderSubagentWidget(snapshot, theme, width, preferences),
-          invalidate: () => {},
-        }),
+        (_tui, theme) => createSubagentWidget(snapshot, theme, preferences),
         WIDGET_OPTIONS,
       );
     }
@@ -94,13 +92,21 @@ export function renderSubagentWidget(
   settings: SubagentSettings = DEFAULT_SUBAGENT_SETTINGS,
 ): string[] {
   if (!settings.showWidget) return [];
-  const renderWidth = Number.isFinite(width) ? Math.max(0, Math.floor(width)) : 0;
-  const lines = [
-    theme.fg("borderMuted", "─".repeat(renderWidth)),
-    theme.fg("muted", `Subagents · ${jobs.length} active`),
-    ...jobs.map((job) => renderJob(job, theme, settings)),
-  ];
-  return lines.map((line) => truncateToWidth(line, renderWidth, ""));
+  return createSubagentWidget(jobs, theme, settings).render(width);
+}
+
+function createSubagentWidget(
+  jobs: readonly ActiveJobDisplay[],
+  theme: Theme,
+  settings: SubagentSettings,
+): EditorStatusWidget {
+  return new EditorStatusWidget({
+    theme,
+    renderBody: () => [
+      theme.fg("muted", `Subagents · ${jobs.length} active`),
+      ...jobs.map((job) => renderJob(job, theme, settings)),
+    ],
+  });
 }
 
 function renderJob(job: ActiveJobDisplay, theme: Theme, settings: SubagentSettings): string {

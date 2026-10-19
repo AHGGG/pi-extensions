@@ -6,6 +6,7 @@ import {
   Key,
   type KeybindingsManager,
   matchesKey,
+  renderFakeCursor,
   Text,
   truncateToWidth,
 } from "@earendil-works/pi-tui";
@@ -54,7 +55,8 @@ export async function promptSecret(
           input.focused = focused;
         },
         render(width: number) {
-          const safeWidth = Math.max(1, width);
+          const safeWidth = Number.isFinite(width) ? Math.max(0, Math.floor(width)) : 0;
+          if (safeWidth === 0) return [];
           return [...heading.render(safeWidth), ...input.render(safeWidth), ...hint.render(safeWidth)].map((line) =>
             truncateToWidth(line, safeWidth),
           );
@@ -179,7 +181,7 @@ class MaskedInput implements Focusable {
   render(width: number) {
     const prompt = "> ";
     const available = width - prompt.length;
-    if (available <= 0) return [truncateToWidth(prompt, Math.max(1, width))];
+    if (available <= 0) return [truncateToWidth(prompt, Math.max(0, width))];
     const contentWidth = Math.max(0, available - 1);
     let start = 0;
     if (this.value.length > contentWidth) {
@@ -192,7 +194,7 @@ class MaskedInput implements Focusable {
     const atCursor = visibleCursor < masks.length ? MASK : " ";
     const after = masks.slice(visibleCursor + (visibleCursor < masks.length ? 1 : 0)).join("");
     const marker = this.focused ? CURSOR_MARKER : "";
-    const line = `${prompt}${before}${marker}\u001b[7m${atCursor}\u001b[27m${after}`;
+    const line = `${prompt}${before}${marker}${renderFakeCursor(atCursor)}${after}`;
     return [truncateToWidth(line, width, "")];
   }
 

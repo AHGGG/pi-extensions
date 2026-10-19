@@ -6,6 +6,7 @@ import {
   Key,
   type KeybindingsManager,
   matchesKey,
+  renderFakeCursor,
   Text,
   type TuiMouseEvent,
   type TuiMouseEventResult,
@@ -111,7 +112,12 @@ export async function runSecretInput<Context extends MenuContext = ExtensionComm
           input.focused = value;
         },
         render(width: number) {
-          const safeWidth = Math.max(1, width);
+          const safeWidth = Number.isFinite(width) ? Math.max(0, Math.floor(width)) : 0;
+          if (safeWidth === 0) {
+            inputRow = -1;
+            renderedWidth = 0;
+            return [];
+          }
           const headingLines = heading.render(safeWidth);
           inputRow = headingLines.length;
           renderedWidth = safeWidth;
@@ -288,7 +294,7 @@ class MaskedInput implements Focusable {
     if (available <= 0) {
       this.renderedStart = 0;
       this.renderedCount = 0;
-      return [truncateToWidth(prompt, Math.max(1, width))];
+      return [truncateToWidth(prompt, Math.max(0, width))];
     }
     const contentWidth = Math.max(0, available - 1);
     let start = 0;
@@ -304,7 +310,7 @@ class MaskedInput implements Focusable {
     const marker = this.focused ? CURSOR_MARKER : "";
     this.renderedStart = start;
     this.renderedCount = end - start;
-    return [truncateToWidth(`${prompt}${before}${marker}\u001b[7m${atCursor}\u001b[27m${after}`, width, "")];
+    return [truncateToWidth(`${prompt}${before}${marker}${renderFakeCursor(atCursor)}${after}`, width, "")];
   }
 
   invalidate() {}

@@ -1,6 +1,6 @@
-# Selector and host-input audit
+# Native TUI alignment audits
 
-Kit retains its cross-mode adapters. Native transcript search does not replace document-local search, exact document formatting, RPC pages, or asynchronous settlement. This audit covers plan findings F8 and F10 and their F2 input-ownership dependency.
+Kit retains its cross-mode adapters. Native transcript search does not replace document-local search, exact document formatting, RPC pages, or asynchronous settlement. The selector audit below covers plan findings F8 and F10 and their F2 input-ownership dependency. [Shared helper alignment](#shared-helper-alignment) records the later cursor, frame, key syntax, and consumer-lifecycle work.
 
 ## Corrections
 
@@ -55,7 +55,7 @@ Hint filtering uses public `getKeybindings()`, `tui.mode`, terminal-protocol cap
 
 Default PageUp/PageDown continue to scroll the fullscreen transcript. Regular mode leaves them available to Kit documents. Non-conflicting host remaps make document paging reachable in fullscreen. Standalone Space retains independent local document search unless a standard component action or an earlier host action owns it. A native search overlay is not a search of the Kit document.
 
-Kit emits no application-owned OSC program-status codes and does not claim native blocked-status reporting for custom screens. It adds no public API, setting, persistence schema, coding-agent runtime import, or extension-specific branch.
+Kit emits no application-owned OSC program-status codes and does not claim native blocked-status reporting for custom screens. The selector and host-input corrections above add no public API, setting, persistence schema, coding-agent runtime import, or extension-specific branch.
 
 ## Verification record
 
@@ -77,3 +77,56 @@ The package Biome check passed for 107 files, `git diff --check` passed, and the
 The final semantic review applies `AGENTS.md`, the Kit guidelines, `docs/extension-conventions.md`, `docs/extension-settings.md`, `docs/readme-conventions.md`, and Pi's TUI, extension, theme, and RPC UI contracts. No settings persistence path or asynchronous production task changed. The audit checks rendering bounds, callback theme roles, focus propagation, cancellation, stale ownership, callback draining, public imports, and API admission separately from build success.
 
 Final serialized root verification passed: `npm run format`, `npm run check`, and `npm test` (**673 files and 11,318 tests passed; one file and two tests skipped by existing platform/environment gates**). Initial integration fixture and Proxy-signal failures were corrected before the passing run. The registered BTW command now has a real fullscreen-proxy regression, not only separate mocked boundary tests. Physical terminal negotiation, IME placement, clipboard/browser integration, and subjective visual acceptance remain unverified; simulated native frames do not establish cross-terminal acceptance.
+
+## Shared helper alignment
+
+### API admission and native boundaries
+
+| Operation | Consumer evidence | Decision and ownership |
+| --- | --- | --- |
+| Configured-key canonicalization | BTW shortcut settings and Notes picker key validation both require native key syntax; Kit has an existing canonicalizer. | Export only `canonicalizeConfiguredKey()`. Normalize aliases, case, modifier order, and literal `+`; retain caller-owned action policy. |
+| Protocol overlap | Kit replacement screens, BTW's dedicated workspace, and Notes' picker use different terminal and listener boundaries. Native matching can also accept synthetic functional-key alternate fields that a terminal should not produce. | Defer a public overlap API. A context-free boolean would confuse arbitrary matcher acceptance with terminal reachability. Keep existing private host-hint policy unchanged. |
+| Global availability and fallback | Focused overlays, native transcript search, editor actions, and earlier extension listeners change dispatch order. | Defer. Callers retain blockers, fallback selection, hard cancellation, and paste exclusions. Canonical equality proves none of these. |
+| Frame row mapping | Progress and Subagents native settings wrappers recover clipped content rows through tokens. | Export the already shared layout result and explicit row types, without new clipping, native item identity, input ownership, or terminal reservations. |
+| Paste parser | Pi's `ProcessTerminal` owns `StdinBuffer`; native `Input` and `Editor` buffer paste. | Defer. Do not add another terminal decoder. |
+
+Native `getConflicts()` checks exact duplicate user strings rather than semantic overlap. Native `parseKey()` decodes event bytes rather than configured identifiers. Neither substitutes for the admitted syntax helper. Raw Ctrl aliases can remain accepted even with Kitty enabled; enhanced mode alone is not proof of disjoint input.
+
+The secret-input correction uses public `renderFakeCursor()` immediately after the conditional `CURSOR_MARKER`. Raw inverse-video escapes cannot be suppressed by the native hardware-cursor path. Both Kit and Sync retain their separate controls for now, including secret clearing and mode-specific behavior.
+
+Progress and Subagents settings use already-published `runCustomInteraction()` only for outer ownership, cancellation, disposal, and pending-work draining. Native `SettingsList`, local save queues, revisions, rollback, and durable-save application remain extension-owned. Widget migrations use already-published `EditorStatusWidget` only for passive framing; body data, sanitization, caching, publication, timers, keys, and cleanup remain local. Invalid widths normalize rather than reaching native string-repeat or fractional-width behavior; oversized indivisible Tool glyphs are clipped to maintain width bounds.
+
+The three build-backed widget consumers allow only the exact `@narumitw/pi-tui-kit/editor-status-widget` eager external. Root Kit imports, other subpaths, and their existing first-use implementations remain forbidden. Builder-contract tests reject descendants of the exception, and a built-package graph test limits the widget entry to the three display helpers and external Pi TUI primitives.
+
+### Publication-dependent adoption
+
+The maintainer owns publication through the established release workflow after explicit approval and passing verification. This work does not authorize publishing, tags, visibility changes, or release dispatch. New frame/key APIs must be registry-visible before consumer imports or minimum dependency ranges require them. Installation of the future release remains unverified until publication.
+
+After publication, separately authorized consumer changes can remove Progress/Subagents row tokens and adopt key syntax normalization in compatible BTW/Notes/Ticker paths. Preserve native controls and caller policy; do not replace collision checking with canonical equality. Run root installation, inspect Kit resolution, typecheck, and repeat affected tests and loader smokes after a floor increase.
+
+Sync secret-input consolidation must wait for a published Kit release containing the cursor correction. Langfuse adoption additionally requires an explicit compatibility decision for its existing plaintext RPC flow: Kit's masked input is TUI-only and returns `unsupported` elsewhere. Required values, blank-to-keep semantics, validation, setup, and credential storage remain local.
+
+### Physical terminal handoff
+
+A maintainer or tester with the target terminal must verify IME placement, hardware-cursor visibility, mouse/trackpad behavior, resize, theme changes, and keyboard negotiation in regular and fullscreen modes after the deterministic tests and local build pass. Native-renderer captures and scripted bytes are preparation evidence, not physical-device or subjective visual acceptance. Do not claim cross-terminal verification without those results. Deterministic correctness failures still block the implementation; no provider login, real secret entry, or external service is needed for this handoff.
+
+In a repository checkout, build Kit, start Pi with `--offline --no-session --no-extensions --tui-mode regular -e ./packages/pi-tui-kit/test/fixtures/interaction-smoke.ts`, and run `/kit-secret-smoke` with synthetic text only. Repeat with `--tui-mode fullscreen`, hardware cursor enabled and disabled, IME input, narrow resizing, and a theme change. Check that text stays masked, exactly one focused cursor is visible, cancellation restores the editor, and mouse or transcript controls retain native ownership. The fixture does not display or store the submitted value.
+
+### Shared-helper verification record
+
+The completed semantic review used `AGENTS.md`, the scoped package guides, the extension, settings, and README conventions, and installed native TUI implementations. Two independent read-only reviews covered security, lifecycle, compatibility, regressions, and scope. The public key result preserves native `pageUp`/`pageDown` spelling; a private lowercase adapter preserves existing protocol lookup identities. No settings schema, storage algorithm, prompt prefix, model-visible tool contract, command route, authentication policy, or terminal ownership changed.
+
+| Check | Result |
+| --- | --- |
+| Focused package and runtime-builder run | 137 files and 2,253 tests passed. |
+| `npm run format`, `npm run check`, and `npm test` | Passed serially; final full suite: 686 files and 11,879 tests passed, with one file and two tests skipped by existing gates. Five unchanged informational Biome diagnostics remain outside this diff. |
+| Dependency installation and resolution | Root `npm install`, `npm ls @narumitw/pi-tui-kit`, and workspace typechecks passed. Progress requires the already-published cleanup patch; Cache Hit Monitor declares the already-published widget dependency. Other consumer floors are unchanged. |
+| Public exports and cold passive graph | Built JavaScript/declarations and a strict TypeScript consumer passed; passive widget graph contains only widget, rule, terminal-text, and external Pi TUI. |
+| Package dry runs and actual tarball inspection | Seven packages passed; manifest entries, licenses, supported exports, declarations, and exact generated relative imports were checked. File counts: Kit 102, Sync 301, Progress 16, Subagents 48, Tool 12, Plan Mode 44, Cache Hit Monitor 6. |
+| Non-interactive package smokes | All six changed extensions loaded through `pi --offline --mode rpc --no-session --no-extensions -e <package>` with isolated agent directories, a session-start handshake, idle state, command discovery, and EOF shutdown. Tool also opened and cancelled its lazy RPC catalog. No provider request was made. |
+| Native lazy UI smokes | Generated-entry tests exercised Progress settings and item-limit input, Subagents menus/settings, Plan Mode UI, Sync setup, and the Kit renderer fixture through Pi's Jiti loader. |
+| Documentation | Fenced-code-aware required-heading audit passed for 36 packages; local links and API examples were reviewed. |
+
+Verification corrected an obsolete synchronous generated-UI test fixture, a stale nested npm dependency resolution, and the public paging-key spelling before the passing runs. The eager display-subpath exception is bounded by graph tests rather than disabling lazy-loading validation.
+
+Synthetic native-renderer captures in both modes showed the same nine-cell masked row (`> •••••••••`). With focus, hardware cursor off retained the inverse cursor cell; hardware cursor on suppressed it. Neither output exposed fake-cursor APC markers or the payload. Reproduce the full focused/unfocused, clipping, theme, editing, and cleanup matrix with the two packages' `secret-cursor.test.ts` suites after rebuilding Kit and emitting tests. These captures do not establish physical IME or terminal negotiation acceptance.

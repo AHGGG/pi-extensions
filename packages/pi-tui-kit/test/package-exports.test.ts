@@ -2,9 +2,31 @@ import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
+import { build } from "esbuild";
 import { test } from "vitest";
 
 const packageRoot = path.resolve("packages/pi-tui-kit");
+
+test("passive widget entry keeps its eager graph limited to display helpers and Pi TUI", async () => {
+  const result = await build({
+    entryPoints: [path.join(packageRoot, "dist/editor-status-widget.js")],
+    bundle: true,
+    format: "esm",
+    platform: "node",
+    packages: "external",
+    write: false,
+    metafile: true,
+  });
+  assert.deepEqual(
+    Object.keys(result.metafile.inputs)
+      .map((input) => path.basename(input))
+      .sort(),
+    ["editor-status-widget.js", "horizontal-rule.js", "terminal-text.js"],
+  );
+  const external = Object.values(result.metafile.outputs).flatMap((output) => output.imports);
+  assert.ok(external.length > 0);
+  assert.ok(external.every((entry) => entry.external && entry.path === "@earendil-works/pi-tui"));
+});
 
 test("built package entrypoints resolve their documented exports", async (t) => {
   const productionSpecifier = "@narumitw/pi-tui-kit";
@@ -35,8 +57,13 @@ test("built package entrypoints resolve their documented exports", async (t) => 
   const terminalDocument = await import(terminalDocumentSpecifier);
   const terminalText = await import(terminalTextSpecifier);
   const testing = await import(testingSpecifier);
-  assert.equal(production.PI_EXTENSION_MENU_API_VERSION, 20);
+  assert.equal(production.PI_EXTENSION_MENU_API_VERSION, 21);
   assert.equal(typeof production.renderBoundedFrame, "function");
+  assert.equal(typeof production.renderBoundedFrameLayout, "function");
+  assert.equal(typeof production.canonicalizeConfiguredKey, "function");
+  assert.equal(production.canonicalizeConfiguredKey("ALT+CTRL++"), "ctrl+alt++");
+  assert.equal(production.canonicalizeConfiguredKey("PAGEUP"), "pageUp");
+  assert.equal("configuredKeysOverlap" in production, false);
   assert.equal(typeof production.sanitizeTerminalDocument, "function");
   assert.equal(typeof production.hardWrapTerminalDocument, "function");
   assert.equal(typeof production.sanitizeTerminalText, "function");
@@ -95,9 +122,13 @@ test("built package entrypoints resolve their documented exports", async (t) => 
       `import { hardWrapTerminalDocument, sanitizeTerminalDocument } from "@narumitw/pi-tui-kit/terminal-document";\n` +
       `import { sanitizeTerminalText } from "@narumitw/pi-tui-kit/terminal-text";\n` +
       `import { createRpcHarness, createTuiHarness } from "@narumitw/pi-tui-kit/testing";\n` +
-      `const version: 20 = PI_EXTENSION_MENU_API_VERSION;\n` +
+      `const version: 21 = PI_EXTENSION_MENU_API_VERSION;\n` +
       `const frame: import("@narumitw/pi-tui-kit").BoundedFrameOptions = { width: 20, maxRows: 3, rule: "─", title: [], content: ["row"] };\n` +
       `void (await import("@narumitw/pi-tui-kit")).renderBoundedFrame(frame);\n` +
+      `const layout: import("@narumitw/pi-tui-kit").BoundedFrameLayout = (await import("@narumitw/pi-tui-kit")).renderBoundedFrameLayout(frame);\n` +
+      `const mapping: import("@narumitw/pi-tui-kit").BoundedFrameContentRow | undefined = layout.contentRows[0];\n` +
+      `const canonicalKey: import("@earendil-works/pi-tui").KeyId | undefined = (await import("@narumitw/pi-tui-kit")).canonicalizeConfiguredKey("ctrl++");\n` +
+      `void mapping; void canonicalKey;\n` +
       `const keybindings: InteractionKeybindings<"confirm"> = { getKeys: () => ["return"] };\n` +
       `const hints: InteractionHint<"confirm">[] = [{ bindings: ["confirm"], label: sanitizeTerminalText("apply") }];\n` +
       `const hintOptions: FormatInteractionHintsOptions = { separator: "·" };\n` +

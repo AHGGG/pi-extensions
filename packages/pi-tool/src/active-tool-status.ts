@@ -1,5 +1,6 @@
 import type { ExtensionAPI, ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
 import { wrapTextWithAnsi } from "@earendil-works/pi-tui";
+import { EditorStatusWidget } from "@narumitw/pi-tui-kit/editor-status-widget";
 
 export const ACTIVE_TOOL_WIDGET_KEY = "tool:active-tools";
 export const ACTIVE_TOOL_REFRESH_INTERVAL_MS = 500;
@@ -41,14 +42,9 @@ export function createActiveToolStatusController(pi: ExtensionAPI): ActiveToolSt
     const value = content?.join("\n");
     if (hasPublished && value === publishedValue) return;
     if (content && ctx.mode === "tui") {
-      ctx.ui.setWidget(
-        ACTIVE_TOOL_WIDGET_KEY,
-        (_tui, theme) => ({
-          render: (width: number) => renderActiveToolWidget(content, theme, width),
-          invalidate: () => {},
-        }),
-        { placement: "aboveEditor" },
-      );
+      ctx.ui.setWidget(ACTIVE_TOOL_WIDGET_KEY, (_tui, theme) => createActiveToolWidget(content, theme), {
+        placement: "aboveEditor",
+      });
     } else {
       ctx.ui.setWidget(ACTIVE_TOOL_WIDGET_KEY, content, { placement: "aboveEditor" });
     }
@@ -113,10 +109,15 @@ export function formatActiveToolWidget(toolNames: Iterable<string>): string[] | 
 }
 
 export function renderActiveToolWidget(lines: readonly string[], theme: Theme, width: number): string[] {
-  const renderWidth = Math.max(0, width);
-  const contentLines =
-    renderWidth === 0 ? lines.map(() => "") : lines.flatMap((line) => wrapTextWithAnsi(line, renderWidth));
-  return [theme.fg("borderMuted", "─".repeat(renderWidth)), ...contentLines];
+  return createActiveToolWidget(lines, theme).render(width);
+}
+
+function createActiveToolWidget(lines: readonly string[], theme: Theme): EditorStatusWidget {
+  // Kit normalizes fractional and invalid widths and clips wrapped glyphs wider than the row.
+  return new EditorStatusWidget({
+    theme,
+    renderBody: (width) => (width === 0 ? lines.map(() => "") : lines.flatMap((line) => wrapTextWithAnsi(line, width))),
+  });
 }
 
 export function sanitizeToolName(value: string): string {
