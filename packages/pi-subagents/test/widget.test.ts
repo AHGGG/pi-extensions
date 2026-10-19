@@ -90,13 +90,45 @@ test("keeps rows bounded across resize and uses the callback theme on every rend
     for (const line of lines) assert.ok(visibleWidth(line) <= width);
     themedComponent.invalidate();
     themedComponent.render(width);
-    assert.ok(fg.mock.calls.some(([role, text]) => role === "borderMuted" && text === "─".repeat(width)));
+    if (width > 0) {
+      assert.ok(fg.mock.calls.some(([role, text]) => role === "borderMuted" && text === "─".repeat(width)));
+    }
   }
   assert.ok(fg.mock.calls.some(([role, text]) => role === "text" && text.includes("…")));
   fg.mockClear();
   themedComponent.invalidate();
   themedComponent.render(200);
   assert.ok(fg.mock.calls.length > 0, "theme content must not stay cached across invalidation");
+});
+
+test.each([0, -1, Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY, 0.5, 1.9, 12.9])(
+  "normalizes widget width %s without changing the body row count",
+  (width) => {
+    const normalized = Number.isFinite(width) ? Math.max(0, Math.floor(width)) : 0;
+    const lines = renderSubagentWidget([displayJob], theme, width);
+    assert.deepEqual(lines, renderSubagentWidget([displayJob], theme, normalized));
+    assert.equal(lines.length, 3);
+    assert.ok(lines.every((line) => visibleWidth(line) <= normalized));
+    if (normalized === 0) assert.deepEqual(lines, ["", "", ""]);
+  },
+);
+
+test.each(["rpc", "print", "json"] as const)("does not subscribe, schedule, or publish in %s mode", (mode) => {
+  const activeJobsForDisplay = vi.fn(() => [displayJob]);
+  const subscribeJobs = vi.fn();
+  const runtime = { activeJobsForDisplay, subscribeJobs } as unknown as SubagentRuntime;
+  const context = createMockContext({ mode });
+  const setWidget = vi.spyOn((context.ctx as ExtensionContext).ui, "setWidget");
+  const timer = vi.spyOn(globalThis, "setInterval");
+  const controller = createSubagentWidgetController(runtime);
+  controller.start(context.ctx);
+  controller.update(context.ctx, DEFAULT_SUBAGENT_SETTINGS);
+  controller.shutdown(context.ctx);
+  controller.shutdown(context.ctx);
+  assert.equal(timer.mock.calls.length, 0);
+  assert.equal(subscribeJobs.mock.calls.length, 0);
+  assert.equal(activeJobsForDisplay.mock.calls.length, 0);
+  assert.equal(setWidget.mock.calls.length, 0);
 });
 
 test("carries separate queued and running tasks without changing child tasks or public metadata", async () => {

@@ -9,7 +9,7 @@ import {
   type TuiMouseEvent,
   truncateToWidth,
 } from "@earendil-works/pi-tui";
-import { HorizontalRule, renderBoundedFrame, sanitizeTerminalText } from "@narumitw/pi-tui-kit";
+import { HorizontalRule, renderBoundedFrame, runCustomInteraction, sanitizeTerminalText } from "@narumitw/pi-tui-kit";
 import type { SubagentSettings } from "./settings.js";
 
 interface SubagentSettingsUIOptions {
@@ -33,31 +33,20 @@ export async function showSubagentSettings(
   ctx: ExtensionCommandContext,
   options: SubagentSettingsUIOptions,
 ): Promise<CloseReason> {
-  if (options.signal.aborted || !options.isCurrent()) return "stale";
-  // The command owner reports the settings file path in non-TUI modes.
-  if (ctx.mode !== "tui" || !ctx.hasUI) return "back";
-  let queue = Promise.resolve();
-  let reason: CloseReason = "stale";
-  try {
-    await ctx.ui.custom<void>((tui, theme, _keybindings, done) => {
-      const controller = new AbortController();
-      const signal = AbortSignal.any([options.signal, controller.signal]);
+  const result = await runCustomInteraction<CloseReason>(ctx, {
+    signal: options.signal,
+    isCurrent: options.isCurrent,
+    // The command owner reports interaction failures and non-TUI settings paths.
+    onError: () => {},
+    create({ tui, theme, signal, complete }) {
+      let queue = Promise.resolve();
       const current = () => !signal.aborted && options.isCurrent();
-      let closing = false;
       const revisions = new Map<string, number>();
       const pending = new Map<string, number>();
       const mouseRows = new Map<number, number>();
       let renderedWidth = 0;
       let contentHeight = 0;
       let mousePressed = false;
-      const close = (next: CloseReason) => {
-        if (closing) return;
-        closing = true;
-        reason = next;
-        controller.abort();
-        done();
-      };
-      const cancelOwner = () => close("stale");
       const reportFailure = (message: string) => {
         if (!current()) return;
         try {
@@ -89,7 +78,7 @@ export async function showSubagentSettings(
         items.length,
         listTheme,
         (id, value) => {
-          if (closing || !current()) return;
+          if (!current()) return;
           const key = id as keyof SubagentSettings;
           const revision = (revisions.get(id) ?? 0) + 1;
           revisions.set(id, revision);
@@ -97,7 +86,7 @@ export async function showSubagentSettings(
           queue = queue
             .then(async () => {
               if (!current()) {
-                if (!closing) cancelOwner();
+                complete("stale");
                 return;
               }
               const before = { ...options.get() };
@@ -106,14 +95,14 @@ export async function showSubagentSettings(
                 const settings = await options.save(key, value === "true", signal);
                 // A successful rename is durable, even when closing aborted the save signal.
                 if (!options.isCurrent()) {
-                  cancelOwner();
+                  complete("stale");
                   return;
                 }
                 options.apply(settings);
                 effective = options.get();
               } catch (error) {
                 if (!options.isCurrent()) {
-                  cancelOwner();
+                  complete("stale");
                   return;
                 }
                 let message = error instanceof Error ? error.message : String(error);
@@ -138,13 +127,11 @@ export async function showSubagentSettings(
               reportFailure(error instanceof Error ? error.message : String(error));
             });
         },
-        () => close("back"),
+        () => complete("back"),
       );
-      options.signal.addEventListener("abort", cancelOwner, { once: true });
-      if (!current()) cancelOwner();
       return {
         render(width: number) {
-          if (!closing && !current()) cancelOwner();
+          if (!current()) complete("stale");
           renderedWidth = Number.isFinite(width) ? Math.max(0, Math.floor(width)) : 0;
           listTheme.cursor = theme.fg("accent", "→ ");
           // The native footer hardcodes keys. Advertise only the hard-cancel key owned here;
@@ -184,11 +171,10 @@ export async function showSubagentSettings(
           list.invalidate();
         },
         handleInput(data: string) {
-          if (closing) return;
-          if (!current()) return cancelOwner();
+          if (!current()) return complete("stale");
           mouseRows.clear();
           mousePressed = false;
-          if (matchesKey(data, Key.ctrl("c"))) close("close");
+          if (matchesKey(data, Key.ctrl("c"))) complete("close");
           else {
             // SettingsList uses Pi's effective native keybindings for standard actions.
             list.handleInput(data);
@@ -196,9 +182,8 @@ export async function showSubagentSettings(
           tui.requestRender();
         },
         handleMouse(event: TuiMouseEvent) {
-          if (closing) return;
           if (!current()) {
-            cancelOwner();
+            complete("stale");
             return;
           }
           const nativeRow = mouseRows.get(event.y);
@@ -222,14 +207,10 @@ export async function showSubagentSettings(
         dispose() {
           mouseRows.clear();
           mousePressed = false;
-          controller.abort();
-          options.signal.removeEventListener("abort", cancelOwner);
-          if (!closing) cancelOwner();
         },
       };
-    });
-  } finally {
-    await queue;
-  }
-  return options.signal.aborted || !options.isCurrent() ? "stale" : reason;
+    },
+  });
+  if (result.kind === "error") throw result.error;
+  return result.kind === "completed" ? result.value : result.kind === "unsupported" ? "back" : "stale";
 }

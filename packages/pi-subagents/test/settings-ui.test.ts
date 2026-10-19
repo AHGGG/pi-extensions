@@ -338,14 +338,17 @@ test.each(["back", "close", "dispose", "owner"] as const)(
     const completion = deferred<SubagentSettings>();
     const apply = vi.fn(current.options.apply);
     current.options.apply = apply;
-    current.options.save = async (_key, _value, signal) => {
+    const save = vi.fn(async (_key: keyof SubagentSettings, _value: boolean, signal: AbortSignal) => {
       started.resolve(signal);
       return completion.promise;
-    };
+    });
+    current.options.save = save;
     const command = showSubagentSettings(current.ctx, current.options);
     await current.tui.waitForOpen();
     current.tui.send("\r");
     const signal = await started.promise;
+    // A queued second change must not start once this interaction has closed.
+    current.tui.send("\r");
     let drained = false;
     void command.then(() => {
       drained = true;
@@ -359,6 +362,7 @@ test.each(["back", "close", "dispose", "owner"] as const)(
     const result = await command;
     assert.equal(aborted, true);
     assert.equal(earlyCompletion, false);
+    assert.equal(save.mock.calls.length, 1);
     assert.equal(result, kind === "back" ? "back" : kind === "close" ? "close" : "stale");
     assert.deepEqual(current.notifications, []);
     // Rollback can restore the already effective snapshot, but cannot apply the rejected value.
@@ -507,6 +511,40 @@ test("ownership replacement after an awaited save closes stale UI without applyi
   assert.equal(reason, "stale");
   assert.equal(apply.mock.calls.length, 0);
   assert.equal(current.tui.isOpen, false);
+});
+
+test("owner cancellation before a delayed host factory never reads settings", async () => {
+  const current = fixture();
+  const entered = deferred<void>();
+  const release = deferred<void>();
+  const get = vi.fn(current.options.get);
+  current.options.get = get;
+  const custom = current.ctx.ui.custom;
+  current.ctx.ui.custom = async (factory, options) => {
+    entered.resolve();
+    await release.promise;
+    return custom(factory, options);
+  };
+  const command = showSubagentSettings(current.ctx, current.options);
+  await entered.promise;
+  current.controller.abort();
+  release.resolve();
+  const result = await command;
+  current.tui.dispose();
+  assert.equal(result, "stale");
+  assert.equal(get.mock.calls.length, 0);
+  assert.equal(current.tui.isOpen, false);
+  assert.deepEqual(current.notifications, []);
+});
+
+test("host failures remain observable to the command owner without duplicate notifications", async () => {
+  const current = fixture();
+  const error = new Error("host failed");
+  current.ctx.ui.custom = async () => {
+    throw error;
+  };
+  await assert.rejects(showSubagentSettings(current.ctx, current.options), (caught) => caught === error);
+  assert.deepEqual(current.notifications, []);
 });
 
 test.each(["rpc", "print", "json"] as const)("%s never opens a custom screen", async (mode) => {

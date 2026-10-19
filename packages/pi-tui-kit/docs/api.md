@@ -5,6 +5,7 @@
 - [Horizontal rules](#-horizontal-rules)
 - [Editor status widgets](#-editor-status-widgets)
 - [Bounded frames](#bounded-frames)
+- [Configured keys](#configured-keys)
 - [Complete menu example](#-complete-menu-example)
 - [Standalone interactions](#standalone-tasks)
 - [Searchable default-aware selectors](#searchable-default-aware-selectors)
@@ -97,6 +98,41 @@ A full frame contains the rule, title, context, a blank separator before nonempt
 Compact layout reserves a hint row when `compactHint` is nonempty and at least two body rows remain, then retains priority content, one title row, full hints when they fit, neighboring content, and context. `compactHints` can replace full hints during compact rendering, for example to include an overflow count. Rules remain when at least five total rows are available. Static frames prioritize context at one row. Output retains original row order.
 
 Width and row budgets are floored and clamped to zero; non-finite values normalize to zero. A zero row budget returns no rows. Every line is truncated by terminal cells, without an ellipsis. The helper preserves ANSI styling, does not sanitize or wrap rows, and holds no cached theme or dimension state. Sanitize raw values before wrapping or styling, and rebuild rows after resize or theme changes.
+
+### Frame row mapping
+
+Use `renderBoundedFrameLayout()` when a custom wrapper needs to route normalized mouse coordinates after height clipping. It uses the same layout as `renderBoundedFrame()` and returns `BoundedFrameLayout`: `lines` plus `contentRows`, an array of `BoundedFrameContentRow` mappings.
+
+```ts
+import { renderBoundedFrameLayout } from "@narumitw/pi-tui-kit";
+
+const frame = renderBoundedFrameLayout({
+  width: 40, maxRows: 5, rule: "─".repeat(40), title: ["Settings"],
+  content: ["First setting", "Focused setting", "Description"],
+  priorityRows: [1], focusedRow: 1,
+});
+const nativeRows = new Map(frame.contentRows.map(({ frameIndex, contentIndex }) => [frameIndex, contentIndex]));
+// In handleMouse(event), nativeRows.get(event.y) identifies the retained content row.
+```
+
+Both indexes are zero-based. `contentIndex` always refers to the original `content` array, not a setting or selection item. `frameIndex` refers to the returned `lines`. Titles, rules, context, hints, and inserted separator rows have no mapping. Blank content rows are mapped in full layouts but omitted when compacting; duplicate text never merges row identities. A zero-width layout can retain row mappings while its lines are empty. A zero-height layout has neither lines nor mappings.
+
+Rebuild the map after each render or resize and clear stale geometry on invalidation or input changes. The caller still validates bounds, translates coordinates, preserves native press/click/drag semantics, and owns focus and terminal reservations. This API does not sanitize content or create a mouse router.
+
+## Configured keys
+
+Use `canonicalizeConfiguredKey(value)` to validate a configured key identifier and obtain a canonical `KeyId`, or `undefined` for an invalid value. It normalizes case to native `KeyId` spelling (including `pageUp` and `pageDown`), normalizes `esc`/`return` aliases, and orders modifiers while retaining literal `+` keys such as `ctrl++`. It rejects invalid or repeated modifiers and unsupported base/modifier combinations; it does not trim or repair input.
+
+```ts
+import { canonicalizeConfiguredKey } from "@narumitw/pi-tui-kit";
+
+const key = canonicalizeConfiguredKey("ALT+CTRL++"); // "ctrl+alt++"
+const invalid = canonicalizeConfiguredKey("ctrl+ctrl+x"); // undefined
+```
+
+This is configured-key syntax, not raw terminal-event decoding. Use Pi's `matchesKey()` or the injected keybinding manager for dispatch. Canonical equality does not establish input equivalence, conflict freedom, availability, or reachability. Native legacy aliases, logical/physical shifted symbols, keyboard layouts, terminal modes, and earlier listeners can give different names the same input.
+
+Protocol-overlap and global availability helpers remain deferred: arbitrary byte strings accepted by the native matcher are not the same contract as keys a terminal can produce. Each caller retains its blockers, action priority, fallback selection, paste exclusions, and host integration policy. Kit's internal hint filtering is not a public dispatch contract.
 
 ## 🧭 Complete menu example
 
@@ -1079,13 +1115,16 @@ Consumer fixtures continue to own domain state, persistence, generation checks, 
 - `EditorStatusWidget` — frames passive editor status rows with a muted top rule and terminal-width guard; `@narumitw/pi-tui-kit/editor-status-widget` exports it and its options.
 - `HorizontalRule` — renders a full-width or inset horizontal divider with an optional sanitized and aligned label plus render-time style callbacks.
 - `renderBoundedFrame()` and `BoundedFrameOptions` — frame preformatted rows within explicit width and height budgets, with caller-owned content priorities and no input or lifecycle ownership.
+- `renderBoundedFrameLayout()`, `BoundedFrameLayout`, and `BoundedFrameContentRow` — provide the same frame with original content indexes for caller-owned coordinate mapping.
+- `canonicalizeConfiguredKey()` — validates and canonicalizes configured key syntax without predicting runtime input ownership.
 - `runCustomInteraction()` — owns cancellation, stale checks, exactly-once disposal, optional pending-work draining, and typed results for one custom TUI component.
 - `resolveMenuScreen()` — resolves and validates a dynamic screen for tests or adapters.
 - `createMenuNavigator()` — lower-level stack and selection state helper.
 - exported screen, item, action, transition, runtime option, `BrowseDetailDocument`, `MenuCloseReason`, and result types.
 - Focused interaction subpaths — `confirmation`, `custom-interaction`, `document-review`, `live-choice`, `multi-select`, `questionnaire`, `selectors`, and `task` export the matching runtime functions and types without requiring the package root.
 - `@narumitw/pi-tui-kit/testing` — test-only subpath for `createTuiHarness()`, `createRpcHarness()`, strict scripts, and their types; the production root does not re-export it.
-- `PI_EXTENSION_MENU_API_VERSION` — current API version (`20`).
+- `PI_EXTENSION_MENU_API_VERSION` — current API version (`21`).
+Version 21 adds frame row metadata and configured-key canonicalization while version-20 definitions remain valid.
 Version 20 adds focused interaction subpaths plus standalone document-review and multi-select APIs while version-19 definitions remain valid.
 Version 19 adds public lazy Mermaid Markdown transformer preparation and the focused `/markdown` subpath while version-18 definitions remain valid.
 Version 18 adds standard-screen mouse routing, intraline diff emphasis, searchable live choices, input prefill, and masked secret input while version-17 definitions remain valid.

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import type { KeybindingsConfig } from "@earendil-works/pi-tui";
+import { type Component, type KeybindingsConfig, matchesKey } from "@earendil-works/pi-tui";
 import { test } from "vitest";
 import { plainTuiText as stripVTControlCharacters } from "../../../test/tui-text.js";
 import { createMenuScreenComponent } from "../src/components/index.js";
@@ -302,4 +302,152 @@ for (const mode of ["regular", "fullscreen"] as const) {
       assert.equal(fixture.host.getFocusedComponent(), fixture.editor);
     });
   }
+}
+
+for (const mode of ["regular", "fullscreen"] as const) {
+  test(`${mode} focused overlays receive viewport keys, repeats, and opt-in releases through native dispatch`, async (t) => {
+    const fixture = createRendererHost(mode, rendererTheme(), {
+      kitty: true,
+      bindings: { "tui.altScreen.lineUp": "ctrl+x", "app.thinking.save": ["ctrl+x", "ctrl+s"] },
+    });
+    t.onTestFinished(() => fixture.stop());
+    const running = runThinkingSelector(fixture.ctx, { availableLevels: ["off"], currentLevel: "off" });
+    await fixture.waitForOpen();
+    const replacementInputs: string[] = [];
+    const replacementHandleInput = fixture.component.handleInput?.bind(fixture.component);
+    fixture.component.handleInput = (data) => {
+      replacementInputs.push(data);
+      replacementHandleInput?.(data);
+    };
+    const overlayInputs: string[] = [];
+    const overlay: Component & { focused: boolean; wantsKeyRelease: boolean } = {
+      focused: false,
+      wantsKeyRelease: false,
+      render: () => ["Overlay"],
+      invalidate() {},
+      handleInput: (data) => overlayInputs.push(data),
+    };
+    const handle = fixture.host.showOverlay(overlay, { width: 30 });
+    const before = fixture.scroll.scrollTop;
+    fixture.send("\x1b[120;5u");
+    fixture.send("\x1b[120;5:3u"); // Native focus dispatch filters releases by default.
+    fixture.send("\x1b[120;5:2u"); // Repeats remain actionable.
+    assert.deepEqual(overlayInputs, ["\x1b[120;5u", "\x1b[120;5:2u"]);
+    assert.deepEqual(replacementInputs, []);
+    assert.equal(fixture.scroll.scrollTop, before);
+    overlay.wantsKeyRelease = true;
+    fixture.send("\x1b[120;5:3u");
+    assert.deepEqual(overlayInputs, ["\x1b[120;5u", "\x1b[120;5:2u", "\x1b[120;5:3u"]);
+    handle.hide(); // This is a raw native overlay handle, not ctx.ui.custom ownership.
+    fixture.send("\x1b[115;5u");
+    assert.deepEqual(await running, { kind: "saveDefault", level: "off" });
+  });
+
+  test(`${mode} an unknown earlier listener can consume a valid advertised fallback`, async (t) => {
+    const fixture = createRendererHost(mode, rendererTheme(), {
+      bindings: { "app.thinking.save": ["ctrl+ctrl+x", "ctrl+s"] } as KeybindingsConfig,
+    });
+    t.onTestFinished(() => fixture.stop());
+    const running = runThinkingSelector(fixture.ctx, { availableLevels: ["off"], currentLevel: "off" });
+    await fixture.waitForOpen();
+    assert.match(stripVTControlCharacters(fixture.frame().join("\n")), /ctrl\+s set as default/u);
+    const received: string[] = [];
+    const remove = fixture.host.addInputListener((data) => {
+      if (!matchesKey(data, "ctrl+s")) return undefined;
+      received.push(data);
+      return { consume: true };
+    });
+    let completed = false;
+    void running.then(() => {
+      completed = true;
+    });
+    fixture.send("\x13");
+    await Promise.resolve();
+    assert.deepEqual(received, ["\x13"]);
+    assert.equal(completed, false);
+    remove();
+    fixture.send("\x13");
+    assert.deepEqual(await running, { kind: "saveDefault", level: "off" });
+  });
+}
+
+test("native fullscreen search owns its shortcuts before custom overlay and viewport dispatch", async (t) => {
+  const fixture = createRendererHost("fullscreen", rendererTheme(), {
+    kitty: true,
+    bindings: {
+      "tui.altScreen.search": "ctrl+q",
+      "tui.altScreen.searchNext": "ctrl+n",
+      "tui.altScreen.searchPrevious": "ctrl+p",
+      "tui.altScreen.searchClose": "ctrl+w",
+      "tui.altScreen.lineUp": "ctrl+x",
+    },
+  });
+  t.onTestFinished(() => fixture.stop());
+  const running = runThinkingSelector(fixture.ctx, { availableLevels: ["off"], currentLevel: "off" });
+  await fixture.waitForOpen();
+  const inputs: string[] = [];
+  const overlay: Component & { focused: boolean } = {
+    focused: false,
+    render: () => ["Overlay"],
+    invalidate() {},
+    handleInput: (data) => inputs.push(data),
+  };
+  const handle = fixture.host.showOverlay(overlay, { width: 30 });
+  fixture.send("\x11");
+  const search = fixture.host.getFocusedComponent();
+  assert.ok(search);
+  assert.notEqual(search, overlay);
+  assert.equal(handle.isFocused(), false);
+  const searchInputs: string[] = [];
+  const searchHandleInput = search.handleInput?.bind(search);
+  search.handleInput = (data) => {
+    searchInputs.push(data);
+    searchHandleInput?.(data);
+  };
+  fixture.send("history");
+  fixture.send("\x0e"); // Next match is consumed before the native search Input.
+  fixture.send("\x10"); // Previous match is consumed before the native search Input.
+  assert.deepEqual(searchInputs, ["history"]);
+  assert.deepEqual(inputs, []);
+  const before = fixture.scroll.scrollTop;
+  fixture.send("\x1b[120;5:3u");
+  assert.equal(fixture.scroll.scrollTop, before); // Host consumes release without scrolling.
+  fixture.send("\x1b[120;5:2u");
+  assert.ok(fixture.scroll.scrollTop < before); // Native search does not defer viewport actions.
+  assert.deepEqual(searchInputs, ["history"]);
+  fixture.send("\x17");
+  assert.equal(fixture.host.getFocusedComponent(), overlay);
+  fixture.send("\x18");
+  assert.deepEqual(inputs, ["\x18"]); // Ordinary focused overlays do defer viewport actions.
+  handle.hide();
+  fixture.send("\x13");
+  assert.deepEqual(await running, { kind: "saveDefault", level: "off" });
+});
+
+for (const claimByHost of [false, true]) {
+  test(`native fullscreen listener ${claimByHost ? "precedes" : "defers to"} debug priority before focused dispatch`, async (t) => {
+    const fixture = createRendererHost("fullscreen", rendererTheme(), {
+      kitty: true,
+      bindings: {
+        "tui.altScreen.lineUp": claimByHost ? "shift+ctrl+d" : "ctrl+x",
+        "app.thinking.save": ["ctrl+shift+d", "ctrl+s"],
+      },
+    });
+    t.onTestFinished(() => fixture.stop());
+    let debugCount = 0;
+    fixture.host.onDebug = () => {
+      debugCount++;
+    };
+    const running = runThinkingSelector(fixture.ctx, { availableLevels: ["off"], currentLevel: "off" });
+    await fixture.waitForOpen();
+    const frame = stripVTControlCharacters(fixture.frame().join("\n"));
+    assert.match(frame, /ctrl\+s set as default/u);
+    assert.doesNotMatch(frame, /shift\+ctrl\+d set as default/u);
+    const before = fixture.scroll.scrollTop;
+    fixture.send("\x1b[100;6u");
+    assert.equal(debugCount, claimByHost ? 0 : 1);
+    assert.equal(fixture.scroll.scrollTop < before, claimByHost);
+    fixture.send("\x13");
+    assert.deepEqual(await running, { kind: "saveDefault", level: "off" });
+  });
 }

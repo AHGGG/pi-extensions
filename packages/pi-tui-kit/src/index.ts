@@ -1,4 +1,10 @@
-export { type BoundedFrameOptions, renderBoundedFrame } from "./bounded-frame.js";
+export {
+  type BoundedFrameContentRow,
+  type BoundedFrameLayout,
+  type BoundedFrameOptions,
+  renderBoundedFrame,
+  renderBoundedFrameLayout,
+} from "./bounded-frame.js";
 export {
   type RunConfirmationOptions,
   type RunConfirmationResult,
@@ -32,6 +38,7 @@ export {
   type InteractionHint,
   type InteractionKeybindings,
 } from "./interaction-hints.js";
+export { canonicalizeConfiguredKey } from "./key-matching.js";
 export {
   type LiveChoiceItem,
   type LiveChoiceSelectionContext,
@@ -113,4 +120,4 @@ export type {
   SettingsScreen,
 } from "./types.js";
 
-export const PI_EXTENSION_MENU_API_VERSION = 20;
+export const PI_EXTENSION_MENU_API_VERSION = 21;

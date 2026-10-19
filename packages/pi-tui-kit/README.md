@@ -16,6 +16,7 @@ Consumers reuse its navigation, rendering, cancellation, and mode adaptation ins
 - Handles interaction navigation, cancellation, disposal, horizontal framing, and width-safe rendering.
 - Provides standalone document review, multi-select, task, confirmation, questionnaire, live-choice, secret-input, and custom-interaction helpers.
 - Provides focused Mermaid Markdown, terminal-document, terminal-text, interaction-hint, editor-status-widget, horizontal-rule, and testing helpers.
+- Exposes bounded-frame row mappings and configured-key canonicalization without taking over native input routing.
 - Publishes built ESM and TypeScript declarations for independently installable extensions.
 
 ## 📦 Install
@@ -88,6 +89,10 @@ This release exposes and verifies the Kit API without changing that extension; `
 Standalone document review and multi-select are maintainer-requested pre-adoption APIs over existing standard-screen behavior.
 They add lifecycle and mode adapters without exposing component factories; this release does not migrate consumers or move domain state and persistence into Kit.
 
+Frame row metadata and configured-key canonicalization are prepared for the convergent Progress/Subagents frame wrappers and BTW/Notes configured-key syntax.
+Consumers keep their current implementations until the new Kit APIs are published; protocol-overlap, global shortcut availability, and a second paste parser remain deferred.
+The [native alignment audit](./docs/core-alignment-audit.md#shared-helper-alignment) records the API decisions and publication-dependent follow-up.
+
 Kit screens follow Pi's fullscreen input ownership rather than replacing its transcript controls.
 See [Fullscreen input and custom UI limits](./docs/api.md#fullscreen-input-and-custom-ui-limits) for paging, overlay focus, and program-status constraints.
 The [selector and host-input audit](./docs/core-alignment-audit.md) records corrections, retained contracts, native-renderer tests, and unverified terminal paths.
@@ -128,6 +133,7 @@ The [API reference](./docs/api.md) contains the complete examples and contracts:
 - [Mermaid Markdown transformers](./docs/api.md#mermaid-markdown-transformers) — lazy preparation, final-message transformation, fallback behavior, and lifecycle ownership.
 - [Public exports and compatibility history](./docs/api.md#-public-api) — helpers, types, focused subpaths, and API-version changes.
 - [Horizontal rules](./docs/api.md#-horizontal-rules) and [editor status widgets](./docs/api.md#-editor-status-widgets) — passive, width-safe presentation components.
+- [Bounded frames](./docs/api.md#bounded-frames) and [configured keys](./docs/api.md#configured-keys) — row mappings and key syntax helpers with caller-owned input policy.
 
 The consuming extension owns domain state, persistence, confirmations, and session signals.
 Abort owned work on replacement or shutdown, honor each supplied signal, and revalidate mutable state after every `await`.

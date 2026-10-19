@@ -1,22 +1,10 @@
 import { isKittyProtocolActive, type KeyId, matchesKey, type TUI } from "@earendil-works/pi-tui";
 
+import { canonicalizeConfiguredKey } from "../key-matching.js";
+
+/** Internal protocol probes use lowercase lookup keys, not public KeyId spelling. */
 export function canonicalKeyId(value: string): string | undefined {
-  // Match Pi's prefix grammar without repairing invalid configured bindings.
-  // In particular, '+' is a base key: 'ctrl++' is valid, 'ctrl+' is not.
-  let key = value.toLowerCase();
-  const seen = new Set<string>();
-  while (true) {
-    const modifier = Object.keys(KEY_MODIFIER_MASKS).find((name) => key.startsWith(`${name}+`));
-    if (!modifier) break;
-    if (seen.has(modifier)) return undefined;
-    seen.add(modifier);
-    key = key.slice(modifier.length + 1);
-  }
-  if (!key || (key.includes("+") && key !== "+")) return undefined;
-  const base = key === "esc" ? "escape" : key === "return" ? "enter" : key;
-  const modifiers = ["shift", "ctrl", "alt", "super"].filter((modifier) => seen.has(modifier));
-  if (!isExecutableKey(base, modifiers)) return undefined;
-  return [...modifiers, base].join("+");
+  return canonicalizeConfiguredKey(value)?.toLowerCase();
 }
 
 export function usesDisambiguatedKeyProtocol(tui: { terminal: { readonly rows: number } }) {
@@ -75,15 +63,6 @@ function isLocalWindowsTerminalSession() {
   );
 }
 
-function isExecutableKey(base: string, modifiers: readonly string[]) {
-  if (!KEY_BASES.has(base)) return false;
-  if (base === "escape" || /^f(?:[1-9]|1[0-2])$/u.test(base)) return modifiers.length === 0;
-  if (base === "clear") {
-    return modifiers.length === 0 || (modifiers.length === 1 && (modifiers[0] === "shift" || modifiers[0] === "ctrl"));
-  }
-  return true;
-}
-
 const KEY_MODIFIER_MASKS = { shift: 1, alt: 2, ctrl: 4, super: 8 } as const;
 const KEY_CODEPOINTS: Record<string, number> = {
   escape: 27,
@@ -130,23 +109,3 @@ const LEGACY_KEY_INPUTS = [
   "\u001bOe",
   ...LEGACY_FUNCTION_INPUT_SUFFIXES.map((suffix) => `\u001b${suffix}`),
 ];
-const KEY_BASES = new Set([
-  ..."abcdefghijklmnopqrstuvwxyz0123456789`-=[]\\;',./!@#$%^&*()_+|~{}:<>?",
-  "escape",
-  "enter",
-  "tab",
-  "space",
-  "backspace",
-  "delete",
-  "insert",
-  "clear",
-  "home",
-  "end",
-  "pageup",
-  "pagedown",
-  "up",
-  "down",
-  "left",
-  "right",
-  ...Array.from({ length: 12 }, (_, index) => `f${index + 1}`),
-]);
