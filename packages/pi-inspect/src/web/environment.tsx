@@ -51,14 +51,26 @@ export function Environment({ snapshot }: { snapshot?: Snapshot }) {
                   {snapshot?.tools.map((tool, index) => (
                     // biome-ignore lint/suspicious/noArrayIndexKey: Bounded display names and paths can collide; position distinguishes catalog records.
                     <Card key={`${index}-${tool.name}`} className="inventory-card">
-                      <Heading size="2">{tool.name}</Heading>
-                      <Flex gap="1" wrap="wrap">
-                        <Badge>{tool.namespace ?? "Namespace unavailable"}</Badge>
-                        <Badge>{tool.exposure}</Badge>
-                        <Badge>{tool.active ? "active" : "inactive"}</Badge>
-                        <Badge>{tool.callable ? "callable" : "not callable"}</Badge>
+                      <div className="inventory-card-heading">
+                        <Heading size="2">{tool.name}</Heading>
+                        <Flex gap="1" wrap="wrap" className="inventory-status">
+                          <Badge highContrast color={tool.active ? "green" : "gray"}>
+                            {tool.active ? "active" : "inactive"}
+                          </Badge>
+                          <Badge highContrast color={tool.callable ? "blue" : "gray"}>
+                            {tool.callable ? "callable" : "not callable"}
+                          </Badge>
+                        </Flex>
+                      </div>
+                      <Flex gap="1" wrap="wrap" className="inventory-metadata">
+                        <Badge highContrast color="gray">
+                          {tool.namespace ?? "Namespace unavailable"}
+                        </Badge>
+                        <Badge highContrast color="gray">
+                          {tool.exposure}
+                        </Badge>
                       </Flex>
-                      <p>{tool.description}</p>
+                      <p className="inventory-description">{tool.description}</p>
                       {tool.metadataTruncated && <p>Tool metadata truncated.</p>}
                       <Data label={`Source · ${tool.name}`} data={tool.source} defaultOpen={false} />
                       <Data label={`Schema · ${tool.name}`} data={tool.schema} defaultOpen={false} />
@@ -84,7 +96,9 @@ export function Environment({ snapshot }: { snapshot?: Snapshot }) {
                     // biome-ignore lint/suspicious/noArrayIndexKey: Bounded display names can collide; position distinguishes catalog records.
                     <Card key={`${index}-${server.name}`} className="inventory-card">
                       <Heading size="2">{server.name}</Heading>
-                      <Badge>extension registration</Badge>
+                      <Badge highContrast color="gray">
+                        extension registration
+                      </Badge>
                       <p>
                         Connection status: unavailable. Tools: ownership unavailable; inspect the Tools tab for
                         namespace metadata.
@@ -110,8 +124,10 @@ export function Environment({ snapshot }: { snapshot?: Snapshot }) {
                     // biome-ignore lint/suspicious/noArrayIndexKey: Bounded paths can collide; position distinguishes catalog records.
                     <Card key={`${index}-${skill.path}`} className="inventory-card">
                       <Heading size="2">{skill.name}</Heading>
-                      <Badge>startup catalog</Badge>
-                      <p>{skill.description}</p>
+                      <Badge highContrast color="gray">
+                        startup catalog
+                      </Badge>
+                      <p className="inventory-description">{skill.description}</p>
                       <Data
                         label={`Path · ${skill.name}`}
                         data={{ value: skill.path, truncated: Boolean(skill.pathTruncated) }}

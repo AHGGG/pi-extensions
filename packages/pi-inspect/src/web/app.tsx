@@ -6,6 +6,7 @@ import "@radix-ui/themes/styles.css";
 import "./style.css";
 import "./composition.css";
 import "./session.css";
+import "./environment.css";
 import type { BranchView, ContextComposition as Composition, Snapshot } from "../model.js";
 import { generation, headers, RequestFailure, request, useDetail } from "./api.js";
 import { Cache } from "./cache.js";
