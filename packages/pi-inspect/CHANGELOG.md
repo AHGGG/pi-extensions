@@ -1,5 +1,11 @@
 # @narumitw/pi-inspect
 
+## 0.3.3
+
+### Patch Changes
+
+- 3dab482: Improve Environment resource cards with bounded width, complete wrapping descriptions, clear status and navigation states, and consistent Copy actions. Preserve the inspector's original typography, spacing, colors, other surfaces, resource data, and disclosure state.
+
 ## 0.3.2
 
 ### Patch Changes
