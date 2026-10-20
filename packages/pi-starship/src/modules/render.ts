@@ -1,4 +1,5 @@
 import { visibleWidth } from "@earendil-works/pi-tui";
+import { sanitizeTerminalText } from "@narumitw/pi-tui-kit/terminal-text";
 import { activePalette, type ModuleConfig, type StarshipConfig } from "../config.js";
 import { type FormatValue, formatVariables, renderFormat } from "../format/formatter.js";
 import {
@@ -8,6 +9,7 @@ import {
   renderChunksToAnsi,
   type StyledChunk,
 } from "../format/style.js";
+import { sanitizeFormatText } from "../format/terminal-safety.js";
 import { MODULE_DEFINITIONS, MODULE_NAMES, type ModuleName } from "./catalog.js";
 import { resolveStyleRule } from "./style-rules.js";
 import type { ModuleStyleContext, ModuleValueContext, RenderedStatusline, StarshipRuntimeSnapshot } from "./types.js";
@@ -77,12 +79,78 @@ function valueContext(
   palette: ColorPalette,
 ): ModuleValueContext {
   return {
-    runtime,
+    runtime: runtimeForDisplay(name, runtime),
     palette,
-    symbol: config.modules[name].symbol,
-    options: config.modules[name].options,
-    extensionStatus: config.extensionStatus,
+    symbol: sanitizeFormatText(config.modules[name].symbol),
+    options: Object.fromEntries(
+      Object.entries(config.modules[name].options).map(([key, value]) => [
+        key,
+        typeof value === "string"
+          ? sanitizeTerminalText(value)
+          : Array.isArray(value)
+            ? value.map(sanitizeTerminalText)
+            : value && typeof value === "object"
+              ? sanitizeFields(value)
+              : value,
+      ]),
+    ),
+    extensionStatus: {
+      ...config.extensionStatus,
+      separator: sanitizeFormatText(config.extensionStatus.separator),
+      icons: Object.fromEntries(
+        Object.entries(config.extensionStatus.icons).map(([key, value]) => [key, sanitizeFormatText(value)]),
+      ),
+    },
   };
+}
+
+// Shallow presentation copies retain keys used for aliases and status policies.
+function sanitizeFields<T extends object>(value: T): T {
+  return Object.fromEntries(
+    Object.entries(value).map(([key, item]) => [key, typeof item === "string" ? sanitizeTerminalText(item) : item]),
+  ) as T;
+}
+
+function runtimeForDisplay(name: ModuleName, runtime: StarshipRuntimeSnapshot): StarshipRuntimeSnapshot {
+  // Only modules that transform text need sanitized inputs before their value
+  // function runs. Pass-through values are sanitized by the formatter, avoiding
+  // a full snapshot copy and preserving raw model/provider alias identities.
+  switch (name) {
+    case "directory":
+      return {
+        ...runtime,
+        ...sanitizeFields({ cwd: runtime.cwd, homeDir: runtime.homeDir, gitRoot: runtime.gitRoot }),
+      };
+    case "git_branch":
+      return {
+        ...runtime,
+        gitBranch: runtime.gitBranch === null ? null : sanitizeTerminalText(runtime.gitBranch),
+        gitBranchDetails: runtime.gitBranchDetails ? sanitizeFields(runtime.gitBranchDetails) : undefined,
+      };
+    case "git_commit":
+      return { ...runtime, gitCommit: runtime.gitCommit ? sanitizeFields(runtime.gitCommit) : undefined };
+    case "conda": {
+      const values = runtime.workspace?.modules.conda;
+      return values && runtime.workspace
+        ? {
+            ...runtime,
+            workspace: {
+              ...runtime.workspace,
+              modules: { ...runtime.workspace.modules, conda: sanitizeFields(values) },
+            },
+          }
+        : runtime;
+    }
+    case "extension_status":
+      return {
+        ...runtime,
+        extensionStatuses: new Map(
+          [...runtime.extensionStatuses].map(([key, value]) => [key, sanitizeTerminalText(value)]),
+        ),
+      };
+    default:
+      return runtime;
+  }
 }
 
 function renderModule(

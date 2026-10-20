@@ -24,6 +24,8 @@ for (const kind of ["effective", "raw"] as const) {
     try {
       const loaded = loadStarshipConfig(path);
       const before = structuredClone(loaded);
+      // structuredClone changes Buffer to Uint8Array; compare the same byte container type.
+      if (loaded.rawBytes) before.rawBytes = Buffer.from(loaded.rawBytes);
       const review = kind === "effective" ? effectiveConfigurationScreen(loaded) : settingsDocumentScreen(loaded, path);
       assert.equal(review.kind, "review");
       if (review.kind !== "review") return;

@@ -3,8 +3,10 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { SourceMap } from "node:module";
 import { join } from "node:path";
 import { DefaultResourceLoader, SettingsManager } from "@earendil-works/pi-coding-agent";
+import { createTuiHarness } from "@narumitw/pi-tui-kit/testing";
 import { test } from "vitest";
 import { listFiles, registerRuntimeBuilderContract } from "../../../test/runtime-builder-contract.js";
+import { createMockContext } from "../../../test/support.js";
 
 const { packageRoot, loadBuilder } = registerRuntimeBuilderContract({
   packageId: "pi-starship",
@@ -13,6 +15,9 @@ const { packageRoot, loadBuilder } = registerRuntimeBuilderContract({
     "src/command-inspector.ts",
     "src/command-preset-picker.ts",
     "src/command-preview.ts",
+    "src/command-profiles.ts",
+    "src/profile-store.ts",
+    "src/command-commit.ts",
     "src/presets/catalog.ts",
     "src/runtime/cloud.ts",
     "src/runtime/deployment.ts",
@@ -103,6 +108,38 @@ test("generated runtime is loadable by Pi's Jiti resource loader", async () => {
     assert.ok(extension?.commands.has("starship"));
     assert.ok(extension?.handlers.has("session_start"));
     assert.ok(extension?.handlers.has("session_shutdown"));
+    assert.ok(extension);
+    loaded.runtime.getThinkingLevel = () => "off";
+    const tui = createTuiHarness({ width: 80, rows: 24 });
+    const context = createMockContext({ mode: "tui", hasUI: true, custom: tui.custom });
+    const emit = async (name: string) => {
+      for (const handler of extension.handlers.get(name) ?? []) await handler({}, context.ctx);
+    };
+    await emit("session_start");
+    try {
+      const command = extension.commands.get("starship");
+      assert.ok(command);
+      // Resolve and exercise the generated command/profile chunks through Jiti, not Vitest imports.
+      const running = command.handler("", context.ctx);
+      try {
+        await tui.waitForOpen();
+        tui.press("end");
+        assert.match(tui.render().join("\n"), /→ Profiles/u);
+        tui.press("tui.select.confirm");
+        await tui.waitForOpen();
+        const profileFrame = tui.render().join("\n");
+        tui.press("ctrl+c");
+        await running;
+        assert.match(profileFrame, /Profiles/u);
+        assert.match(profileFrame, /Save current/u);
+      } finally {
+        tui.dispose();
+        await running;
+      }
+    } finally {
+      await emit("session_shutdown");
+      loaded.runtime.invalidate("generated profile smoke complete");
+    }
   } finally {
     if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
     else process.env.PI_CODING_AGENT_DIR = previousAgentDir;

@@ -34,19 +34,19 @@ Before its apply script replaces an existing document, it preserves the inspecte
 Backups are written and flushed under a private temporary name, atomically renamed to their final private file, and followed by flushes of the backup directory and its parent directory before publication continues; a recoverable failure removes the owned temporary file and preserves the active document.
 If configuration publication fails after that backup is durable, the failure reports its retained path; cleanup failures report both their operation and cause without hiding the primary failure.
 A missing document creates no backup, and a backup with the same minute name blocks publication when observed before rename; this check does not provide cross-process locking.
-The interactive `/starship` editor, preset, and restore flows do not invoke this script and keep their separately documented backup behavior.
+The interactive `/starship` flows do not invoke this script. They preserve replaced documents in the separate recovery history described below; existing skill backups remain available read-only in History.
 
-The shallow main menu also exposes **Presets**, **Explain footer**, **Modules**, **Configuration**, **Help**, and **Restore built-in…**.
+The main menu also exposes **Profiles**, **Presets**, **Explain footer**, **Modules**, **Configuration**, **Help**, and **Restore built-in…**.
 Explain footer uses the current immutable runtime snapshot to list each currently showing non-empty module once with its rendered value and description; it starts no new collection work.
 Modules opens a bounded searchable inspector for every registered module.
 Its textual states distinguish **Showing**, **Empty**, **Disabled**, **Not in format**, and **Unavailable** only when the current footer cannot provide an inspection snapshot.
 Module detail shows the current preview when available, description, root reference and reachability, format variables, style fields, supported style-rule selectors, configured rule count, display rules, and the known reason for absent output.
 Both views are read-only and do not create or update the settings document.
 
-Configuration contains **Overview**, **Effective configuration**, **Settings document**, **Reload from disk**, **Share settings as Gist…**, and **Import settings from Gist…** on one nested level.
+Configuration contains **Overview**, **Effective configuration**, **Settings document**, **Reload from disk**, **History**, **Share settings as Gist…**, and **Import settings from Gist…** on one nested level.
 Gist actions use `gh` authentication for github.com and transfer only `pi-starship.toml`, limited to 64 KiB; sharing includes comments and unknown fields and requires review and confirmation before creating an unlisted Gist.
 Unlisted Gists are readable by anyone with the link; remove sensitive data before sharing, and check GitHub before retrying a cancelled or failed upload because a remote Gist may already exist.
-Import accepts a Gist ID or URL, validates the complete document, requires raw TOML review, footer preview, and full-replacement confirmation, and applies immediately without a post-success backup; review untrusted settings for command execution and network access before accepting.
+Import accepts a Gist ID or URL, validates the complete document, requires raw TOML review, footer preview, and full-replacement confirmation, and preserves the previous document before applying; review untrusted settings for command execution and network access before accepting.
 Overview combines state, source, path, health, and bounded diagnostics.
 Effective configuration shows deterministic catalog-ordered public TOML from the normalized state currently in use; comments, unknown fields, parser ASTs, and private runtime selectors are excluded.
 Settings document shows the exact loaded UTF-8 text through a terminal-safe, cell-aware read-only review without changing the raw payload.
@@ -56,7 +56,64 @@ A deleted document is a valid previewable transition to built-in defaults and cr
 An unchanged document is a no-op, while read or parse failure, cancellation, disposal, external changes after preview, session replacement, shutdown, or runtime apply failure preserves the prior effective footer and every file byte.
 Reload re-reads immediately after confirmation and rejects a different external snapshot; it does not claim cross-process locking or continuing synchronization with later edits.
 Restore is disabled when no settings document exists or the exact built-in document is already saved.
-For a custom or invalid document, Restore previews the result and warns that the complete document, including custom settings, unknown fields, and comments, will be replaced without a post-success backup before asking for confirmation.
+For a custom or invalid document, Restore previews the result and warns that the complete document, including custom settings, unknown fields, and comments, will be replaced before asking for confirmation. The previous bytes are preserved first, including invalid content on an explicit recovery path.
+
+### Named profiles
+
+Profiles are complete TOML documents saved under `<getAgentDir()>/pi-starship/profiles/<name>.toml`.
+The active settings remain an independent copy at `<getAgentDir()>/pi-starship.toml`.
+There is no active-profile pointer or live link: editing, renaming, or deleting a profile does not modify active settings.
+The browser marks every profile whose exact bytes match the active document; identical profiles can all match.
+
+Open **Profiles** to save the current document, browse saved documents, and manage the selected profile.
+Selection previews the footer from existing runtime data without saving, creating history, starting collectors, running commands, or accessing the network.
+Modules with no data in the current snapshot can be empty.
+Display text removes terminal controls before layout and style rendering; generated colors and validated HTTP(S) hyperlinks remain supported without changing stored TOML.
+Invalid documents show diagnostics, cannot be applied, and never silently preview the built-in fallback.
+Documents with invalid UTF-8 remain visible and can be renamed, duplicated, or deleted without changing their bytes.
+Repairing such a profile requires explicit confirmation before opening an empty text draft; only a validated save replaces its unreadable bytes.
+
+**Edit TOML** uses a separate draft and validates it before saving.
+The draft review offers saving only the profile, saving and applying it, continuing the edit, or discarding the draft.
+Saving a profile and applying it are separate operations: application failure does not delete a successfully saved profile.
+Applying requires confirmation and replaces the entire active document.
+**Rename**, **Duplicate**, and confirmed **Delete** act only on the saved profile.
+Preset and reviewed Gist candidates can also be saved as profiles without changing the active file.
+
+New names are normalized to NFC and contain 1–80 Unicode code points, excluding path separators, terminal controls, leading dots, leading/trailing whitespace, and platform-reserved names or characters.
+Encoded filenames must fit the filesystem limit, and names cannot collide without regard to case.
+Invalid names are rejected, not silently rewritten; case-only renames are rejected unless supported safely.
+Only regular files are used; package-owned storage directories and files cannot be symbolic links.
+Comments, ordering, and unknown fields remain unchanged.
+
+Escape returns one level; Ctrl+C closes the workflow.
+Leaving a browser removes its temporary preview, while an already committed change remains active.
+The native Pi editor has no public abort method; session cancellation removes the preview immediately and blocks stale saves, but an open editor can remain until it is closed.
+
+### Recovery history
+
+Managed active-file replacements preserve the previous document in `<getAgentDir()>/pi-starship/history/<timestamp>-<random-id>.toml` before writing the replacement.
+Editor, preset, profile, restore, and Gist application use this policy.
+A missing file or a byte-identical no-op creates no recovery copy.
+Backup failure blocks replacement; runtime-application failure attempts guarded disk/runtime restoration and retains the backup.
+A recovery copy can therefore come from an unsuccessful application attempt; it is not proof that a candidate was applied.
+
+**Configuration** → **History** supports read-only review, preview and confirmed restore, saving valid content as a profile, and confirmed deletion of new history entries.
+Legacy `pi-starship-YYYYMMDDHHmm.toml` skill backups remain in their existing directory and are read-only in History.
+Malformed recovery content remains available for inspection; it cannot be applied without repair and validation.
+History has no automatic pruning.
+
+Explicit **Reload from disk** preserves the previous loaded document before changing the runtime, without rewriting the external file.
+Ordinary `session_start`, including `/reload`, does not write history or materialize defaults.
+Versions overwritten by an external editor before Pi observes them cannot be recovered automatically.
+
+New directories and documents use private POSIX permissions (`0700` and `0600`).
+Files are flushed before publication; directory-entry flushing is used on POSIX and is not available through the same API on Windows, so the same crash-durability guarantee is not claimed there.
+Mutations preserve exact document bytes, use temporary files plus rename, and publish recovery before active-file replacement.
+There is no atomic transaction across history, the active file, and the running footer.
+Detected changes after review block the operation rather than overwrite the changed document.
+In-process ordering and cooperative storage locking do not lock out external editors; external check-to-rename races remain possible.
+A stale cooperative mutation lock is never removed automatically; after confirming no storage operation is running, inspect the reported lock path before removing it manually.
 
 ### 🎛️ Presets
 
@@ -81,11 +138,12 @@ Colors, separators, typography, and layout follow the named Starship preset; mod
 | **Tokyo Night** | Connected cool blue Tokyo Night blocks | Nerd Font |
 
 Moving through the preset picker temporarily renders the selected preset in the footer without writing settings or starting collectors.
-Press Enter to confirm replacement, or press `e` to edit the selected complete TOML document before preview and confirmation.
+Press Enter to confirm replacement, press `e` to edit the selected complete TOML document before preview and confirmation, or use the displayed `s` save-as-profile action without applying.
+Standard configured actions take precedence over these additive shortcuts; a conflicting shortcut is omitted from the hint.
 Escape returns to the main menu, while Ctrl+C closes the workflow; both restore the active footer.
 
 Presets are complete documents, not overlays.
-After confirmation, applying one replaces all of `pi-starship.toml`, including custom settings, unknown fields, and comments; no backup is kept.
+After confirmation, applying one replaces all of `pi-starship.toml`, including custom settings, unknown fields, and comments; the previous document is retained in History.
 Cancellation, disposal, validation failure, write failure, and runtime-apply failure preserve the previous document and footer.
 An exact match is **Currently applied** and cannot be selected again; editing any byte makes it custom.
 Use **Restore built-in…** for deterministic recovery.

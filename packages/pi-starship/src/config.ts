@@ -1,5 +1,17 @@
 import { randomUUID } from "node:crypto";
-import { existsSync, lstatSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import {
+  closeSync,
+  existsSync,
+  fsyncSync,
+  lstatSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  type Stats,
+  writeFileSync,
+} from "node:fs";
 import { dirname, join } from "node:path";
 import { parse as parseToml, type TomlTable } from "smol-toml";
 import { type FormatNode, formatVariables, parseFormat, styleVariables } from "./format/formatter.js";
@@ -53,6 +65,7 @@ export interface LoadedStarshipConfig {
   source: "built-in" | "user";
   settingsPath: string;
   rawDocument?: string;
+  rawBytes?: Buffer;
   fileIdentity?: { dev: number; ino: number };
   diagnostics: ConfigDiagnostic[];
 }
@@ -103,8 +116,12 @@ export function settingsFilePath(agentDir: string): string {
 
 export function loadStarshipConfig(settingsPath: string): LoadedStarshipConfig {
   let rawDocument: string;
+  let snapshot: ConfigDocumentSnapshot;
   try {
-    rawDocument = readFileSync(settingsPath, "utf8");
+    const rawBytes = readFileSync(settingsPath);
+    snapshot = readConfigDocumentSnapshot(settingsPath);
+    if (!snapshot.rawBytes?.equals(rawBytes)) throw new Error("Settings changed while being read; retry the operation");
+    rawDocument = rawBytes.toString("utf8");
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT" && !existsSync(settingsPath)) {
       return {
@@ -124,6 +141,8 @@ export function loadStarshipConfig(settingsPath: string): LoadedStarshipConfig {
 
   let parsed: TomlTable;
   try {
+    if (!Buffer.from(rawDocument, "utf8").equals(snapshot.rawBytes ?? Buffer.alloc(0)))
+      throw new Error("Settings are not valid UTF-8");
     parsed = parseToml(rawDocument);
   } catch (error) {
     return {
@@ -131,6 +150,7 @@ export function loadStarshipConfig(settingsPath: string): LoadedStarshipConfig {
       source: "built-in",
       settingsPath,
       rawDocument,
+      ...snapshot,
       diagnostics: [diagnostic("error", "", `Unable to parse TOML: ${formatError(error)}`)],
     };
   }
@@ -140,7 +160,42 @@ export function loadStarshipConfig(settingsPath: string): LoadedStarshipConfig {
     source: "user",
     settingsPath,
     rawDocument,
+    ...snapshot,
   };
+}
+
+export interface ConfigDocumentSnapshot {
+  rawBytes?: Buffer;
+  fileIdentity?: { dev: number; ino: number };
+}
+
+export function readConfigDocumentSnapshot(settingsPath: string): ConfigDocumentSnapshot {
+  let info: Stats;
+  try {
+    info = lstatSync(settingsPath);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return {};
+    throw error;
+  }
+  if (!info.isFile() || info.isSymbolicLink()) throw new Error("Settings must be a regular file, not a symbolic link");
+  const rawBytes = readFileSync(settingsPath);
+  const after = lstatSync(settingsPath);
+  if (after.dev !== info.dev || after.ino !== info.ino || !after.isFile()) {
+    throw new Error("Settings changed while being read; retry the operation");
+  }
+  return { rawBytes, fileIdentity: { dev: info.dev, ino: info.ino } };
+}
+
+export function assertConfigDocumentUnchanged(settingsPath: string, expected: ConfigDocumentSnapshot): void {
+  const current = readConfigDocumentSnapshot(settingsPath);
+  if (current.rawBytes === undefined && expected.rawBytes === undefined) return;
+  if (
+    current.rawBytes?.equals(expected.rawBytes ?? Buffer.alloc(0)) &&
+    current.fileIdentity?.dev === expected.fileIdentity?.dev &&
+    current.fileIdentity?.ino === expected.fileIdentity?.ino
+  )
+    return;
+  throw new Error("Starship settings changed concurrently; the newer file was preserved. Reopen settings and retry.");
 }
 
 export function normalizeConfig(value: unknown): {
@@ -393,9 +448,14 @@ interface AtomicFileSystem {
   writeFileSync: typeof writeFileSync;
   renameSync: typeof renameSync;
   rmSync: typeof rmSync;
+  openSync: typeof openSync;
+  closeSync: typeof closeSync;
+  fsyncSync: typeof fsyncSync;
 }
 
 export function validateConfigDocument(settingsPath: string, rawDocument: string): LoadedStarshipConfig {
+  if (Buffer.from(rawDocument, "utf8").toString("utf8") !== rawDocument)
+    throw new Error("Settings must be lossless UTF-8 text");
   let parsed: TomlTable;
   try {
     parsed = parseToml(rawDocument);
@@ -418,20 +478,32 @@ export function atomicSaveConfigDocument(
   settingsPath: string,
   rawDocument: string,
   overrides: Partial<AtomicFileSystem> = {},
+  expected?: ConfigDocumentSnapshot,
 ): LoadedStarshipConfig {
   const validated = validateConfigDocument(settingsPath, rawDocument);
   return {
     ...validated,
-    fileIdentity: atomicWriteConfigDocument(settingsPath, rawDocument, overrides),
+    rawBytes: Buffer.from(rawDocument),
+    fileIdentity: atomicWriteConfigDocument(settingsPath, rawDocument, overrides, expected),
   };
 }
 
 export function atomicRestoreConfigDocument(
   settingsPath: string,
-  rawDocument: string,
+  rawDocument: string | Buffer,
   overrides: Partial<AtomicFileSystem> = {},
+  expected?: ConfigDocumentSnapshot,
 ) {
-  atomicWriteConfigDocument(settingsPath, rawDocument, overrides);
+  atomicWriteConfigDocument(settingsPath, rawDocument, overrides, expected);
+}
+
+export class ConfigPublicationError extends Error {
+  constructor(
+    message: string,
+    readonly fileIdentity: { dev: number; ino: number },
+  ) {
+    super(message);
+  }
 }
 
 export function removeConfigDocumentIfMatches(
@@ -454,6 +526,14 @@ export function removeConfigDocumentIfMatches(
     quarantined.ino === expectedIdentity.ino;
   if (quarantinedSavedFile && readFileSync(quarantinePath, "utf8") === expectedRawDocument) {
     (overrides.rmSync ?? rmSync)(quarantinePath);
+    if (process.platform !== "win32") {
+      const directory = openSync(dirname(settingsPath), "r");
+      try {
+        fsyncSync(directory);
+      } finally {
+        closeSync(directory);
+      }
+    }
     return;
   }
   if (quarantinedSavedFile && !pathEntryExists(settingsPath)) {
@@ -463,26 +543,44 @@ export function removeConfigDocumentIfMatches(
       // Keep the quarantine for recovery when its atomic restoration fails.
     }
   }
-  throw new Error("Starship settings changed concurrently; the newer file was preserved");
+  throw new Error(
+    `Starship settings changed concurrently; the newer file was preserved. Recovery path: ${quarantinePath}`,
+  );
 }
 
 function atomicWriteConfigDocument(
   settingsPath: string,
-  rawDocument: string,
+  rawDocument: string | Buffer,
   overrides: Partial<AtomicFileSystem>,
+  captured?: ConfigDocumentSnapshot,
 ): { dev: number; ino: number } {
-  const fs = { mkdirSync, writeFileSync, renameSync, rmSync, ...overrides };
-  const replaceExisting = pathEntryExists(settingsPath);
-  fs.mkdirSync(dirname(settingsPath), { recursive: true });
+  const fs = { mkdirSync, writeFileSync, renameSync, rmSync, openSync, closeSync, fsyncSync, ...overrides };
+  const expected = captured ?? readConfigDocumentSnapshot(settingsPath);
+  const replaceExisting = expected.rawBytes !== undefined;
+  fs.mkdirSync(dirname(settingsPath), { recursive: true, mode: 0o700 });
   const tempPath = join(dirname(settingsPath), `.${CONFIG_FILE_NAME}.${randomUUID()}.tmp`);
+  let publishedIdentity: { dev: number; ino: number } | undefined;
   try {
-    fs.writeFileSync(tempPath, rawDocument, { encoding: "utf8", flag: "wx" });
+    fs.writeFileSync(tempPath, rawDocument, { encoding: "utf8", flag: "wx", mode: 0o600, flush: true });
     const info = lstatSync(tempPath);
     if (!replaceExisting && pathEntryExists(settingsPath)) {
       throw new Error(`${CONFIG_FILE_NAME} was created concurrently; reopen settings and retry.`);
     }
+    assertConfigDocumentUnchanged(settingsPath, expected);
     fs.renameSync(tempPath, settingsPath);
-    return { dev: info.dev, ino: info.ino };
+    publishedIdentity = { dev: info.dev, ino: info.ino };
+    if (process.platform !== "win32") {
+      const directory = fs.openSync(dirname(settingsPath), "r");
+      try {
+        fs.fsyncSync(directory);
+      } finally {
+        fs.closeSync(directory);
+      }
+    }
+    return publishedIdentity;
+  } catch (error) {
+    if (publishedIdentity) throw new ConfigPublicationError(formatError(error), publishedIdentity);
+    throw error;
   } finally {
     try {
       fs.rmSync(tempPath, { force: true });

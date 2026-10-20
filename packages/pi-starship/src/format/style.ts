@@ -1,3 +1,5 @@
+import { sanitizeFormatText } from "./terminal-safety.js";
+
 export type NamedColor =
   | "black"
   | "red"
@@ -206,9 +208,10 @@ export function renderChunksToAnsi(chunks: readonly LayoutChunk[], trueColor = t
   for (const chunk of chunks) {
     if (isFillChunk(chunk)) continue;
     const style = resolveStyle(chunk.style, previous);
+    const text = sanitizeFormatText(chunk.text);
     const last = runs.at(-1);
-    if (chunk.text && last && stylesEqual(last.style, style)) last.text += chunk.text;
-    else if (chunk.text) runs.push({ text: chunk.text, style });
+    if (text && last && stylesEqual(last.style, style)) last.text += text;
+    else if (text) runs.push({ text, style });
     previous = style;
   }
   return runs
