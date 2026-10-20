@@ -74,6 +74,7 @@ All routes support TUI and RPC with the exceptions above and reject unknown or t
 Print and JSON modes produce no command output; the footer runs only in TUI mode.
 Preset selection, module inspection, Gist sharing and import, and recovery are menu-only, not extra subcommands.
 Restoring built-in configuration requires an existing settings document to replace; see [Settings](#-settings).
+Effective TOML and settings-document reviews support literal document search in TUI mode: Space opens search, configured search-close exits search, and Back retains its existing meaning. Search does not modify settings.
 
 ## ⚙️ Settings
 
