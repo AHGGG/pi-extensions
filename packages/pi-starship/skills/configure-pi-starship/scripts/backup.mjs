@@ -19,7 +19,9 @@ export async function backupExpectedDocument(destinationPath, expected, options 
   const renameFile = options.renameFile ?? rename;
   const syncDirectory = options.syncDirectory ?? syncDirectoryEntry;
 
+  await assertBackupDirectorySafe(backupDirectory, inspectPath, true);
   await makeDirectory(backupDirectory, { recursive: true, mode: PRIVATE_DIRECTORY_MODE });
+  await assertBackupDirectorySafe(backupDirectory, inspectPath, false);
 
   let handle;
   let ownsTemporaryPath = false;
@@ -94,6 +96,21 @@ async function syncDirectoryEntry(directoryPath) {
   }
 
   if (syncError) throw syncError;
+}
+
+async function assertBackupDirectorySafe(directoryPath, inspectPath, allowMissing) {
+  let info;
+  try {
+    info = await inspectPath(directoryPath);
+  } catch (error) {
+    if (allowMissing && error && typeof error === "object" && error.code === "ENOENT") return;
+    throw error;
+  }
+  if (info.isSymbolicLink() || !info.isDirectory()) {
+    throw new Error(
+      `Backup directory must be a real directory, not a symbolic link: ${formatDisplayValue(directoryPath)}`,
+    );
+  }
 }
 
 async function assertBackupMissing(backupPath, inspectPath) {

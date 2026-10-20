@@ -12,7 +12,7 @@ import {
   visibleWidth,
 } from "@earendil-works/pi-tui";
 import { test } from "vitest";
-import { BUILT_IN_CONFIG, normalizeConfig } from "../src/config.js";
+import { BUILT_IN_CONFIG, normalizeConfig, validateConfigDocument } from "../src/config.js";
 import { parseFormat, renderFormat } from "../src/format/formatter.js";
 import { parseStyle, renderChunksToAnsi } from "../src/format/style.js";
 import { isThemeRole, type ThemeColors } from "../src/format/theme-colors.js";
@@ -190,6 +190,37 @@ test("theme-colored fill and multiline layout retain visible widths", () => {
     assert.equal(visibleWidth(rendered.split("\n")[1] ?? ""), width);
   }
 });
+
+test.each([true, false])(
+  "theme-colored previews sanitize profile text before generated ANSI: trueColor=%s",
+  (trueColor) => {
+    const symbol = "safe\x1bc\x1b]52;c;Y2xpcGJvYXJk\x07tail";
+    const document = [
+      'format = "[root](pi:accent)$brand$fill"',
+      "[brand]",
+      'format = "[$symbol]($style)"',
+      `symbol = ${JSON.stringify(symbol)}`,
+      'style = "pi:accent"',
+      "[fill]",
+      'symbol = "·"',
+      'style = "bg:pi:selectedBg"',
+    ].join("\n");
+    const loaded = validateConfigDocument("/preview.toml", document);
+    const before = structuredClone(loaded);
+    const colors = theme({ accent: "#010203", selectedBg: "#040506" }).colors;
+    const output = renderStatusline(loaded.config, runtime(), 24, trueColor, colors).ansi;
+    const mode = trueColor ? "truecolor" : "256color";
+    assert.ok(output.includes(foregroundAnsi(colors.accent, mode)));
+    assert.ok(output.includes(backgroundAnsi(colors.selectedBg, mode)));
+    assert.equal(output.includes("\x1bc"), false);
+    assert.equal(output.includes("\x1b]52"), false);
+    assert.equal(output.includes("Y2xpcGJvYXJk"), false);
+    assert.equal(stripVTControlCharacters(output), `rootsafetail${"·".repeat(12)}`);
+    assert.equal(visibleWidth(output), 24);
+    assert.deepEqual(loaded, before);
+    assert.equal(loaded.rawDocument, document);
+  },
+);
 
 test("fixed defaults keep identical ANSI output regardless of the supplied theme", () => {
   const plain = renderStatusline(BUILT_IN_CONFIG, runtime(), 80).ansi;

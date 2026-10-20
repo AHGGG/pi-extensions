@@ -16,7 +16,7 @@ The extension parses and renders the footer itself, so it does not need the `sta
 - Provides Pi, model, usage, Git, pull request, package, language, environment, deployment, cloud, and execution modules, with usage totals including persisted cache warming.
 - Wraps native multiline layouts to terminal width instead of truncating them.
 - Keeps rendering pure while refreshing filesystem, process, and network-derived data through bounded caches.
-- Uses `/starship` for presets, preview, configuration health, searchable module details, customization, and recovery.
+- Uses `/starship` for named TOML profiles, live previews, presets, customization, and recovery history.
 - Shares settings through unlisted GitHub Gists and reviews imported settings before replacement.
 - Bundles the authoritative configuration skill and references for editing `pi-starship.toml` or answering setup questions.
 - Loads a generated split runtime to reduce Pi package startup work.
@@ -72,7 +72,7 @@ It does not cover general TOML, shell Starship configuration, extension source d
 
 All routes support TUI and RPC with the exceptions above and reject unknown or trailing arguments.
 Print and JSON modes produce no command output; the footer runs only in TUI mode.
-Preset selection, module inspection, Gist sharing and import, and recovery are menu-only, not extra subcommands.
+Profiles, history, preset selection, module inspection, and Gist sharing and import are menu-only, not extra subcommands.
 Restoring built-in configuration requires an existing settings document to replace; see [Settings](#-settings).
 Effective TOML and settings-document reviews support literal document search in TUI mode: Space opens search, configured search-close exits search, and Back retains its existing meaning. Search does not modify settings.
 
@@ -106,6 +106,30 @@ See [Configuration and format](./skills/configure-pi-starship/references/configu
 Use `/starship` for interactive configuration, preview, diagnostics, presets, and recovery.
 Manual file edits load at the next `session_start`, including `/reload`.
 
+## 🗃️ Profiles and history
+
+Open `/starship` → **Profiles** to save the current TOML under a name, edit it, duplicate it, rename it, or delete it.
+Moving the selection previews that document in the footer without saving, running commands, or starting network requests.
+Previews use existing runtime data; modules with no available data can be empty.
+Applying a profile requires confirmation and replaces the complete active document.
+Editing can save only the profile or save and apply it; a saved profile remains available if the later application fails.
+
+Profiles are independent copies, not live links: editing or deleting a saved profile does not change the current footer.
+Comments and unknown fields are preserved.
+The active file remains `<getAgentDir()>/pi-starship.toml`; named documents are stored under `<getAgentDir()>/pi-starship/profiles/<name>.toml`.
+For the default Pi directory, this is `~/.pi/agent/pi-starship/profiles/`.
+
+Open **Configuration** → **History** to review recovery copies, preview and restore a document, save it as a profile, or delete a new history entry after confirmation.
+Managed replacements preserve the previous document before writing the new one; a backup failure blocks replacement.
+New recovery copies use `<getAgentDir()>/pi-starship/history/`; existing timestamped skill backups remain in place and are available read-only.
+History is not automatically pruned and is not a complete record of arbitrary external file edits.
+Ordinary session startup remains read-only.
+
+Escape returns one level and Ctrl+C closes the flow; temporary previews are removed without undoing an already confirmed save.
+Profile and history files can contain sensitive settings or local paths; new documents use private file permissions on POSIX.
+Storage serializes in-process work and rejects detected changes during review, but does not lock out external editors.
+See [Configuration and format](./skills/configure-pi-starship/references/configuration.md) for naming, conflicts, and recovery limits.
+
 ## 🔗 Share and import settings
 
 In TUI mode, open `/starship` → **Configuration** and select **Share settings as Gist…** or **Import settings from Gist…**.
@@ -119,7 +143,7 @@ The result is a shareable Gist URL; existing Gists are never updated.
 Import accepts a Gist ID or an `https://gist.github.com/<owner>/<id>` link and reads only `pi-starship.toml`.
 It validates the TOML, shows the full document for review, then previews the footer and asks permission to replace the entire local settings document.
 Review untrusted settings carefully: they can enable command execution and network requests.
-A successful import applies immediately, preserves the imported bytes, and keeps no backup; application failure attempts to restore the previous document and footer.
+A successful import applies immediately, preserves the imported bytes, and retains a recovery copy of the previous document; application failure attempts to restore the previous document and footer.
 Concurrent in-process settings changes or disk changes during review block the import; this is not a cross-process lock.
 
 Only github.com Gists are supported, with a 64 KiB document limit, a 512 KiB API response limit, and a 30-second request timeout.

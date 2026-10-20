@@ -6,8 +6,11 @@ import {
   mkdtempSync,
   readdirSync,
   readFileSync,
+  realpathSync,
+  renameSync,
   rmSync,
   statSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { open } from "node:fs/promises";
@@ -271,7 +274,7 @@ test("config path resolver returns Pi's tilde-aware absolute agent path", () => 
         `~/pi-starship-skill-${process.pid}`,
         path.join(homedir(), `pi-starship-skill-${process.pid}`, "pi-starship.toml"),
       ],
-      [".pi/agent", path.join(directory, ".pi", "agent", "pi-starship.toml")],
+      [".pi/agent", path.join(realpathSync(directory), ".pi", "agent", "pi-starship.toml")],
     ] as const) {
       const result = spawnSync(process.execPath, [configPathResolver], {
         cwd: directory,
@@ -574,6 +577,185 @@ test("atomic apply preserves the active document when its durable backup cannot 
     assert.equal(readFileSync(backupDirectory, "utf8"), "occupied");
   } finally {
     rmSync(directory, { force: true, recursive: true });
+  }
+});
+
+test("skill rechecks external edits after durable backup awaits and retains recovery", async () => {
+  const directory = mkdtempSync(path.join(tmpdir(), "pi-starship-skill-backup-race-"));
+  const destination = path.join(directory, "pi-starship.toml");
+  const draft = path.join(directory, "draft.toml");
+  const baseline = path.join(directory, "baseline.toml");
+  const original = "# exact baseline\r\nformat = 'old'\r\n";
+  try {
+    const { applyGuardedDocument } = await import(pathToFileURL(applyPath).href);
+    const { backupExpectedDocument } = await import(backupScriptUrl);
+    for (const replacement of ["different", "same-bytes-new-inode"]) {
+      writeFileSync(destination, original);
+      writeFileSync(baseline, original);
+      writeFileSync(draft, "format = 'draft'\n");
+      let retained = "";
+      await assert.rejects(
+        applyGuardedDocument(draft, destination, baseline, {
+          backup: async (active: string, bytes: Buffer) => {
+            retained = await backupExpectedDocument(active, bytes);
+            if (replacement === "different") writeFileSync(destination, "format = 'external'\n");
+            else {
+              writeFileSync(`${destination}.new`, original);
+              renameSync(`${destination}.new`, destination);
+            }
+            return retained;
+          },
+        }),
+        /changed after inspection.*[\s\S]*Retained backup:/u,
+      );
+      assert.equal(readFileSync(destination, "utf8"), replacement === "different" ? "format = 'external'\n" : original);
+      assert.equal(readFileSync(retained, "utf8"), original);
+      rmSync(retained);
+    }
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("skill retains its recovery copy after active publication failure", async () => {
+  const directory = mkdtempSync(path.join(tmpdir(), "pi-starship-skill-publish-failure-"));
+  const destination = path.join(directory, "pi-starship.toml");
+  const draft = path.join(directory, "draft.toml");
+  const baseline = path.join(directory, "baseline.toml");
+  try {
+    const { applyGuardedDocument } = await import(pathToFileURL(applyPath).href);
+    writeFileSync(destination, "format = 'old'\n");
+    writeFileSync(baseline, "format = 'old'\n");
+    writeFileSync(draft, "format = 'draft'\n");
+    await assert.rejects(
+      applyGuardedDocument(draft, destination, baseline, {
+        rename() {
+          throw new Error("active rename failed");
+        },
+      }),
+      /not applied.*active rename failed[\s\S]*Retained backup:/u,
+    );
+    assert.equal(readFileSync(destination, "utf8"), "format = 'old'\n");
+    const backups = readdirSync(path.join(directory, "pi-starship"));
+    assert.equal(backups.length, 1);
+    assert.equal(readFileSync(path.join(directory, "pi-starship", backups[0] ?? ""), "utf8"), "format = 'old'\n");
+    assert.equal(
+      readdirSync(directory).some((file) => file.endsWith(".tmp")),
+      false,
+    );
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("skill reports publication honestly when the active directory flush fails", async () => {
+  const directory = mkdtempSync(path.join(tmpdir(), "pi-starship-skill-active-flush-"));
+  const destination = path.join(directory, "pi-starship.toml");
+  const draft = path.join(directory, "draft.toml");
+  const baseline = path.join(directory, "baseline.toml");
+  try {
+    const { applyGuardedDocument } = await import(pathToFileURL(applyPath).href);
+    writeFileSync(destination, "format = 'old'\n");
+    writeFileSync(baseline, "format = 'old'\n");
+    writeFileSync(draft, "format = 'draft'\n");
+    await assert.rejects(
+      applyGuardedDocument(draft, destination, baseline, {
+        syncDirectory() {
+          throw new Error("active directory flush failed");
+        },
+      }),
+      /was published.*durability.*active directory flush failed[\s\S]*Retained backup:/u,
+    );
+    assert.equal(readFileSync(destination, "utf8"), "format = 'draft'\n");
+    if (process.platform !== "win32") assert.equal(statSync(destination).mode & 0o777, 0o600);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("skill byte-identical no-op does not create a legacy backup", async () => {
+  const directory = mkdtempSync(path.join(tmpdir(), "pi-starship-skill-noop-"));
+  const destination = path.join(directory, "pi-starship.toml");
+  const draft = path.join(directory, "draft.toml");
+  const baseline = path.join(directory, "baseline.toml");
+  try {
+    const { applyGuardedDocument } = await import(pathToFileURL(applyPath).href);
+    for (const file of [destination, draft, baseline]) writeFileSync(file, "format = 'same'\n");
+    const result = await applyGuardedDocument(draft, destination, baseline);
+    assert.equal(result.unchanged, true);
+    assert.equal(existsSync(path.join(directory, "pi-starship")), false);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("skill rejects a changed draft after backup and reports staged-file cleanup failure", async () => {
+  const directory = mkdtempSync(path.join(tmpdir(), "pi-starship-skill-draft-conflict-"));
+  const destination = path.join(directory, "pi-starship.toml");
+  const draft = path.join(directory, "draft.toml");
+  const baseline = path.join(directory, "baseline.toml");
+  try {
+    const { applyGuardedDocument } = await import(pathToFileURL(applyPath).href);
+    const { backupExpectedDocument } = await import(backupScriptUrl);
+    writeFileSync(destination, "format = 'old'\n");
+    writeFileSync(baseline, "format = 'old'\n");
+    writeFileSync(draft, "format = 'reviewed'\n");
+    await assert.rejects(
+      applyGuardedDocument(draft, destination, baseline, {
+        backup: async (active: string, bytes: Buffer) => {
+          const archived = await backupExpectedDocument(active, bytes);
+          writeFileSync(draft, "format = 'unreviewed'\n");
+          return archived;
+        },
+        remove() {
+          throw new Error("staged cleanup failed");
+        },
+      }),
+      /draft changed[\s\S]*Retained backup:[\s\S]*staged cleanup failed.*Temporary path:/u,
+    );
+    assert.equal(readFileSync(destination, "utf8"), "format = 'old'\n");
+    assert.equal(readdirSync(path.join(directory, "pi-starship")).length, 1);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("skill refuses a symlinked backup directory without changing active or outside files", async () => {
+  const directory = mkdtempSync(path.join(tmpdir(), "pi-starship-skill-backup-symlink-"));
+  const outside = path.join(directory, "outside");
+  const destination = path.join(directory, "pi-starship.toml");
+  const draft = path.join(directory, "draft.toml");
+  const baseline = path.join(directory, "baseline.toml");
+  try {
+    mkdirSync(outside);
+    writeFileSync(path.join(outside, "sentinel"), "untouched");
+    symlinkSync(outside, path.join(directory, "pi-starship"), process.platform === "win32" ? "junction" : "dir");
+    writeFileSync(destination, "format = 'old'\n");
+    writeFileSync(baseline, "format = 'old'\n");
+    writeFileSync(draft, "format = 'draft'\n");
+    const result = spawnSync(process.execPath, [applyPath, draft, destination, baseline], { encoding: "utf8" });
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /Backup directory.*not a symbolic link/u);
+    assert.equal(readFileSync(destination, "utf8"), "format = 'old'\n");
+    assert.deepEqual(readdirSync(outside), ["sentinel"]);
+    assert.equal(readFileSync(path.join(outside, "sentinel"), "utf8"), "untouched");
+    assert.equal(
+      readdirSync(directory).some((file) => file.endsWith(".tmp")),
+      false,
+    );
+    rmSync(path.join(directory, "pi-starship"));
+    const { backupExpectedDocument } = await import(backupScriptUrl);
+    await assert.rejects(
+      backupExpectedDocument(destination, Buffer.from("format = 'old'\n"), {
+        makeDirectory: async () =>
+          symlinkSync(outside, path.join(directory, "pi-starship"), process.platform === "win32" ? "junction" : "dir"),
+      }),
+      /Backup directory.*not a symbolic link/u,
+    );
+    assert.deepEqual(readdirSync(outside), ["sentinel"]);
+    assert.equal(readFileSync(destination, "utf8"), "format = 'old'\n");
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
   }
 });
 

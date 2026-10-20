@@ -1,5 +1,13 @@
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
+import { isKeyRelease, Key, matchesKey } from "@earendil-works/pi-tui";
 import { defineMenu, runMenu } from "@narumitw/pi-tui-kit";
+import {
+  type CommitExpectation,
+  type CommitOptions,
+  captureCommitExpectation,
+  commitActiveDocument,
+  commitOwnerCurrent,
+} from "./command-commit.js";
 import {
   type ConfigurationCommandOptions,
   configurationMenuScreen,
@@ -15,14 +23,8 @@ import { importSettingsGist, shareSettingsGist } from "./command-gist.js";
 import { formatFooterExplanation } from "./command-inspector.js";
 import { showPresetPicker } from "./command-preset-picker.js";
 import { type PreviewMenuResult, showPreviewActionMenu } from "./command-preview.js";
-import {
-  atomicRestoreConfigDocument,
-  atomicSaveConfigDocument,
-  BUILT_IN_EXAMPLE,
-  type LoadedStarshipConfig,
-  removeConfigDocumentIfMatches,
-  validateConfigDocument,
-} from "./config.js";
+import { saveAsProfile, showHistory, showProfiles } from "./command-profiles.js";
+import { BUILT_IN_EXAMPLE, type LoadedStarshipConfig, validateConfigDocument } from "./config.js";
 import type { GhApi } from "./gist.js";
 import { inspectUnavailableModules, type StatuslineInspection } from "./modules/inspection.js";
 import { getStarshipPreset, presetForDocument, STARSHIP_PRESETS, type StarshipPreset } from "./presets/catalog.js";
@@ -35,15 +37,17 @@ const MAIN_ACTIONS = {
   configuration: "configuration",
   help: "help",
   restore: "restore",
+  profiles: "profiles",
 } as const;
 
 const PREVIEW_ACTIONS = {
   continue: "continue",
   edit: "edit",
   cancel: "cancel",
+  saveProfile: "save-profile",
 } as const;
 
-export interface StarshipCommandOptions extends ConfigurationCommandOptions {
+export interface StarshipCommandOptions extends ConfigurationCommandOptions, CommitOptions {
   getInspection?(): StatuslineInspection | undefined;
   preview?(loaded: LoadedStarshipConfig | undefined, ctx: ExtensionCommandContext): void;
   save?: (settingsPath: string, rawDocument: string) => LoadedStarshipConfig;
@@ -53,10 +57,12 @@ export interface StarshipCommandOptions extends ConfigurationCommandOptions {
   gistApi?: GhApi;
 }
 
-type ReviewIntent =
+export type ReviewIntent =
   | { kind: "customize" }
   | { kind: "restore" }
   | { kind: "import" }
+  | { kind: "profile"; name: string }
+  | { kind: "history"; name?: string }
   | { kind: "preset"; preset: StarshipPreset };
 
 export function registerStarshipCommand(pi: ExtensionAPI, options: StarshipCommandOptions) {
@@ -72,6 +78,43 @@ export async function handleStarshipCommand(
   ctx: ExtensionCommandContext,
   options: StarshipCommandOptions,
 ) {
+  if (ctx.mode !== "tui") return runStarshipCommand(args, ctx, options);
+  const base = workflowOwner(options);
+  if (!isCurrentOwner(base)) return;
+  const controller = new AbortController();
+  const signal = AbortSignal.any([base.signal, controller.signal]);
+  const owner: WorkflowOwner = {
+    signal,
+    isCurrent: () => !signal.aborted && base.isCurrent(),
+    isSessionCurrent: () => base.isSessionCurrent?.() ?? base.isCurrent(),
+  };
+  // Pi delivers bracketed paste as one framed packet. Exact key matching does
+  // not treat controls inside pasted text as cancellation or consume native input.
+  const unsubscribe = ctx.ui.onTerminalInput((data) => {
+    if (!isKeyRelease(data) && matchesKey(data, Key.ctrl("c"))) {
+      // Let the current native dialog receive this input before abort restores
+      // focus; otherwise the same key can reach the underlying editor.
+      queueMicrotask(() => controller.abort());
+    }
+    return undefined;
+  });
+  let listening = true;
+  const release = () => {
+    if (!listening) return;
+    listening = false;
+    unsubscribe();
+  };
+  signal.addEventListener("abort", release, { once: true });
+  try {
+    return await runStarshipCommand(args, ctx, { ...options, getMenuOwner: () => owner });
+  } finally {
+    signal.removeEventListener("abort", release);
+    release();
+    controller.abort();
+  }
+}
+
+async function runStarshipCommand(args: string, ctx: ExtensionCommandContext, options: StarshipCommandOptions) {
   const normalized = args.trim();
   if (!normalized) {
     if (ctx.mode === "tui") await showMainMenu(ctx, options);
@@ -119,7 +162,15 @@ async function showMainMenu(ctx: ExtensionCommandContext, options: StarshipComma
     | "configuration-effective"
     | "configuration-document"
     | "help";
-  type Action = "customize" | "presets" | "configuration-reload" | "restore" | "gist-share" | "gist-import";
+  type Action =
+    | "customize"
+    | "presets"
+    | "profiles"
+    | "history"
+    | "configuration-reload"
+    | "restore"
+    | "gist-share"
+    | "gist-import";
   const menu = defineMenu<undefined, Screen, Action, ExtensionCommandContext>({
     start: "main",
     screens: {
@@ -174,6 +225,12 @@ async function showMainMenu(ctx: ExtensionCommandContext, options: StarshipComma
               disabled: presentation.restoreDisabled,
               action: "restore",
             },
+            {
+              id: MAIN_ACTIONS.profiles,
+              label: "Profiles",
+              description: "Save, edit, manage, and live-preview named TOML documents",
+              action: "profiles",
+            },
           ],
           hint: "close",
         };
@@ -222,7 +279,9 @@ async function showMainMenu(ctx: ExtensionCommandContext, options: StarshipComma
         title: "pi-starship help",
         lines: [
           "Customize footer opens the TOML editor, then previews and confirms before saving.",
-          "Presets live-previews the cursor in the footer; Enter confirms apply and e customizes first.",
+          "Presets live-previews the cursor in the footer; Enter confirms apply, e customizes, and s saves a profile when available.",
+          "Profiles manages named TOML copies; selecting a document previews it without saving.",
+          "Configuration History reviews and restores recovery copies; external edits are not fully tracked.",
           "Explain footer breaks down the modules currently showing from the existing snapshot.",
           "Modules searches every supported module and explains its current read-only state.",
           "Configuration includes disk reload plus unlisted Gist sharing and reviewed Gist import through gh.",
@@ -240,6 +299,36 @@ async function showMainMenu(ctx: ExtensionCommandContext, options: StarshipComma
       presets: async () => {
         const result = await choosePreset(ctx, options, owner);
         return result === "applied" || result === "close" ? { kind: "close" } : { kind: "stay" };
+      },
+      profiles: async () => {
+        const result = await showProfiles(ctx, options, owner, async (loaded, guardedOwner, checkCandidate, name) => {
+          const applied = await reviewAndApply(
+            ctx,
+            options,
+            loaded,
+            { kind: "profile", name },
+            guardedOwner,
+            false,
+            checkCandidate,
+          );
+          return applied === "applied" ? "applied" : applied === "close" ? "close" : "stay";
+        });
+        return result === "close" ? { kind: "close" } : { kind: "stay" };
+      },
+      history: async () => {
+        const result = await showHistory(ctx, options, owner, async (loaded, guardedOwner, checkCandidate, name) => {
+          const applied = await reviewAndApply(
+            ctx,
+            options,
+            loaded,
+            { kind: "history", name },
+            guardedOwner,
+            false,
+            checkCandidate,
+          );
+          return applied === "applied" ? "applied" : applied === "close" ? "close" : "stay";
+        });
+        return result === "close" ? { kind: "close" } : { kind: "stay" };
       },
       "gist-share": async () => {
         const result = await shareSettingsGist(ctx, options, owner, options.gistApi);
@@ -294,10 +383,12 @@ async function editSettings(
     if (ctx.hasUI) ctx.ui.notify(`Edit settings manually: ${options.settingsPath}`, "info");
     return "cancel";
   }
-  let draft = options.getLoaded().rawDocument ?? BUILT_IN_EXAMPLE;
+  const expected = captureExpectation(ctx, options);
+  if (!expected) return "cancel";
+  let draft = expected.previous.rawDocument ?? BUILT_IN_EXAMPLE;
   while (true) {
     const edited = await ctx.ui.editor("Customize footer — close to preview", draft);
-    if (!isCurrentOwner(owner) || edited === undefined) return "cancel";
+    if (!commitOwnerCurrent(options, owner, expected) || edited === undefined) return "cancel";
     draft = edited;
     let validated: LoadedStarshipConfig;
     try {
@@ -315,13 +406,22 @@ async function editSettings(
         owner.signal,
         owner.isCurrent,
       );
-      if (!isCurrentOwner(owner)) return "cancel";
+      if (!commitOwnerCurrent(options, owner, expected)) return "cancel";
       if (action?.kind === "closed") return "close";
       if (selectedPreviewAction(action) === PREVIEW_ACTIONS.edit) continue;
       return "cancel";
     }
 
-    const result = await reviewAndApply(ctx, options, validated, { kind: "customize" }, owner);
+    const result = await reviewAndApply(
+      ctx,
+      options,
+      validated,
+      { kind: "customize" },
+      owner,
+      false,
+      undefined,
+      expected,
+    );
     if (result === "edit") continue;
     return result;
   }
@@ -332,7 +432,9 @@ async function choosePreset(
   options: StarshipCommandOptions,
   owner: WorkflowOwner,
 ): Promise<"applied" | "cancel" | "close"> {
-  const activePreset = presetForDocument(options.getLoaded().rawDocument);
+  const expected = captureExpectation(ctx, options);
+  if (!expected) return "cancel";
+  const activePreset = presetForDocument(expected.previous.rawDocument);
   const selection = await showPresetPicker(ctx, {
     presets: STARSHIP_PRESETS,
     activePresetId: activePreset?.id,
@@ -344,20 +446,31 @@ async function choosePreset(
       options.preview?.(loaded, ctx);
     },
   });
-  if (!isCurrentOwner(owner)) {
-    options.preview?.(undefined, ctx);
+  if (!commitOwnerCurrent(options, owner, expected)) {
+    clearSessionPreview(ctx, options, owner);
     return "cancel";
   }
   if (selection.kind === "back" || selection.kind === "close") {
-    options.preview?.(undefined, ctx);
+    clearSessionPreview(ctx, options, owner);
     return selection.kind === "close" ? "close" : "cancel";
   }
 
   const preset = getStarshipPreset(selection.presetId);
   try {
-    return await applyPreset(ctx, options, preset, selection.kind === "customize" ? "customize" : "confirm");
+    if (selection.kind === "save-profile") {
+      const saved = await saveAsProfile(ctx, options, owner, preset.rawDocument);
+      return saved === "close" ? "close" : "cancel";
+    }
+    return await applyPreset(
+      ctx,
+      options,
+      preset,
+      selection.kind === "customize" ? "customize" : "confirm",
+      expected,
+      owner,
+    );
   } finally {
-    options.preview?.(undefined, ctx);
+    clearSessionPreview(ctx, options, owner);
   }
 }
 
@@ -366,13 +479,17 @@ async function applyPreset(
   options: StarshipCommandOptions,
   preset: StarshipPreset,
   start: "review" | "confirm" | "customize" = "review",
+  captured?: CommitExpectation,
+  capturedOwner?: WorkflowOwner,
 ): Promise<"applied" | "cancel" | "close"> {
-  const owner = workflowOwner(options);
+  const owner = capturedOwner ?? workflowOwner(options);
   if (!isCurrentOwner(owner)) return "cancel";
+  const expected = captured ?? captureExpectation(ctx, options);
+  if (!expected) return "cancel";
   let draft = preset.rawDocument;
   if (start === "customize") {
     const edited = await ctx.ui.editor(`Customize ${preset.label} preset`, draft);
-    if (!isCurrentOwner(owner) || edited === undefined) return "cancel";
+    if (!commitOwnerCurrent(options, owner, expected) || edited === undefined) return "cancel";
     draft = edited;
   }
   while (true) {
@@ -392,11 +509,11 @@ async function applyPreset(
         owner.signal,
         owner.isCurrent,
       );
-      if (!isCurrentOwner(owner)) return "cancel";
+      if (!commitOwnerCurrent(options, owner, expected)) return "cancel";
       if (action?.kind === "closed") return "close";
       if (selectedPreviewAction(action) !== PREVIEW_ACTIONS.edit) return "cancel";
       const edited = await ctx.ui.editor(`Customize ${preset.label} preset`, draft);
-      if (!isCurrentOwner(owner) || edited === undefined) return "cancel";
+      if (!commitOwnerCurrent(options, owner, expected) || edited === undefined) return "cancel";
       draft = edited;
       continue;
     }
@@ -408,10 +525,12 @@ async function applyPreset(
       { kind: "preset", preset },
       owner,
       start === "confirm",
+      undefined,
+      expected,
     );
     if (result !== "edit") return result;
     const edited = await ctx.ui.editor(`Customize ${preset.label} preset`, draft);
-    if (!isCurrentOwner(owner) || edited === undefined) return "cancel";
+    if (!commitOwnerCurrent(options, owner, expected) || edited === undefined) return "cancel";
     draft = edited;
   }
 }
@@ -427,14 +546,19 @@ async function restoreBuiltIn(
   return result === "edit" ? "cancel" : result;
 }
 
-async function reviewAndApply(
+export async function reviewAndApply(
   ctx: ExtensionCommandContext,
   options: StarshipCommandOptions,
   validated: LoadedStarshipConfig,
   intent: ReviewIntent,
   owner: WorkflowOwner,
   skipReview = false,
+  checkCandidate?: () => void,
+  captured?: CommitExpectation,
 ): Promise<"applied" | "edit" | "cancel" | "close"> {
+  if (ctx.mode !== "tui" || !isCurrentOwner(owner)) return "cancel";
+  const expected = captured ?? captureExpectation(ctx, options);
+  if (!expected) return "cancel";
   let reviewRequired = !skipReview;
   while (true) {
     const directAttempt = !reviewRequired;
@@ -445,7 +569,7 @@ async function reviewAndApply(
         (width) => reviewPreviewBody(ctx, options, validated, width, intent),
         [
           { value: PREVIEW_ACTIONS.continue, label: continueLabel(intent) },
-          ...(intent.kind === "restore" || intent.kind === "import"
+          ...(intent.kind !== "customize" && intent.kind !== "preset"
             ? []
             : [
                 {
@@ -462,60 +586,59 @@ async function reviewAndApply(
                   ? "Choose another preset"
                   : "Discard draft",
           },
+          ...(intent.kind === "customize" || intent.kind === "preset" || intent.kind === "import"
+            ? [{ value: PREVIEW_ACTIONS.saveProfile, label: "Save as profile…" }]
+            : []),
         ],
         owner.signal,
         owner.isCurrent,
       );
-      if (!isCurrentOwner(owner)) return "cancel";
+      if (!commitOwnerCurrent(options, owner, expected)) return "cancel";
       if (selection?.kind === "closed") return "close";
       const selected = selectedPreviewAction(selection);
       if (selected === PREVIEW_ACTIONS.edit) return "edit";
+      if (selected === PREVIEW_ACTIONS.saveProfile) {
+        const saved = await saveAsProfile(ctx, options, owner, validated.rawDocument ?? BUILT_IN_EXAMPLE);
+        if (saved === "close") return "close";
+        if (!commitOwnerCurrent(options, owner, expected)) return "cancel";
+        continue;
+      }
       if (selected !== PREVIEW_ACTIONS.continue) return "cancel";
     }
     reviewRequired = true;
 
     const confirmed = await ctx.ui.confirm(
       confirmationTitle(intent),
-      confirmationMessage(options.settingsPath, intent),
+      confirmationMessage(options.settingsPath, intent, expected.previous),
       { signal: owner.signal },
     );
-    if (!isCurrentOwner(owner)) return "cancel";
+    if (!commitOwnerCurrent(options, owner, expected)) return "cancel";
     if (!confirmed) {
       if (directAttempt) return "cancel";
       continue;
     }
 
-    const save = options.save ?? atomicSaveConfigDocument;
-    const previous = options.getLoaded();
-    let saved: LoadedStarshipConfig;
     try {
-      saved = save(options.settingsPath, validated.rawDocument ?? BUILT_IN_EXAMPLE);
-    } catch (error) {
-      ctx.ui.notify(
-        `Footer settings were not saved: ${safeText(formatError(error))}. The previous footer remains active.`,
-        "error",
+      const result = await commitActiveDocument(
+        ctx,
+        options,
+        validated,
+        owner,
+        expected,
+        intent.kind === "restore" || intent.kind === "history" || intent.kind === "customize",
+        checkCandidate,
       );
-      if (directAttempt) return "cancel";
-      continue;
-    }
-
-    try {
-      options.apply(saved, ctx);
+      if (!isSessionOwnerCurrent(owner) || result === "cancel") return "cancel";
     } catch (error) {
-      const rollbackError = restorePreviousConfiguration(ctx, options, previous, saved);
-      ctx.ui.notify(
-        rollbackError
-          ? `Footer settings could not be applied: ${safeText(formatError(error))}. Restoring the previous configuration also failed: ${safeText(formatError(rollbackError))}.`
-          : `Footer settings could not be applied: ${safeText(formatError(error))}. The previous configuration was restored.`,
-        "error",
-      );
+      if (!isSessionOwnerCurrent(owner)) return "cancel";
+      ctx.ui.notify(safeText(formatError(error)), "error");
       if (directAttempt) return "cancel";
       continue;
     }
 
     const warningSuffix =
-      saved.diagnostics.length > 0
-        ? ` (${saved.diagnostics.length} warning${saved.diagnostics.length === 1 ? "" : "s"})`
+      validated.diagnostics.length > 0
+        ? ` (${validated.diagnostics.length} warning${validated.diagnostics.length === 1 ? "" : "s"})`
         : "";
     ctx.ui.notify(`${successMessage(intent)}${warningSuffix}.`, "info");
     return "applied";
@@ -530,6 +653,10 @@ function reviewTitle(intent: ReviewIntent): string {
       return "Restore preview";
     case "import":
       return "Gist footer preview";
+    case "profile":
+      return `${safeText(intent.name)} profile preview`;
+    case "history":
+      return "History recovery preview";
     case "preset":
       return `${intent.preset.label} preset preview`;
   }
@@ -543,6 +670,10 @@ function continueLabel(intent: ReviewIntent): string {
       return "Replace with built-in…";
     case "import":
       return "Replace with Gist settings…";
+    case "profile":
+      return `Apply ${safeText(intent.name)} profile…`;
+    case "history":
+      return "Restore history document…";
     case "preset":
       return `Apply ${intent.preset.label} preset…`;
   }
@@ -556,20 +687,32 @@ function confirmationTitle(intent: ReviewIntent): string {
       return "Restore built-in footer?";
     case "import":
       return "Replace settings with Gist?";
+    case "profile":
+      return `Apply ${safeText(intent.name)} profile?`;
+    case "history":
+      return "Restore settings from history?";
     case "preset":
       return `Apply ${intent.preset.label} preset?`;
   }
 }
 
-function confirmationMessage(settingsPath: string, intent: ReviewIntent): string {
-  if (intent.kind === "customize") return "Save this configuration and apply it immediately?";
+function confirmationMessage(settingsPath: string, intent: ReviewIntent, previous: LoadedStarshipConfig): string {
+  if (previous.diagnostics.some((item) => item.severity === "error")) {
+    return `Explicit recovery: replace the invalid settings file ${safeText(settingsPath)} entirely with the reviewed document? Its exact original bytes will be kept in History before replacement.`;
+  }
+  if (intent.kind === "customize")
+    return "Replace the entire settings document and apply it immediately? Its previous bytes will be kept in History.";
   const replacement =
     intent.kind === "restore"
       ? "the built-in configuration"
       : intent.kind === "import"
         ? "the reviewed Gist settings"
-        : `the ${intent.preset.label} preset`;
-  return `Replace ${safeText(settingsPath)} entirely with ${replacement}? All custom settings, unknown fields, and comments will be removed. No backup is kept after success.`;
+        : intent.kind === "profile"
+          ? `the ${safeText(intent.name)} profile`
+          : intent.kind === "history"
+            ? "the reviewed history document"
+            : `the ${intent.preset.label} preset`;
+  return `Replace ${safeText(settingsPath)} entirely with ${replacement}? All custom settings, unknown fields, and comments will be replaced. The previous document will be kept in History.`;
 }
 
 function successMessage(intent: ReviewIntent): string {
@@ -580,6 +723,10 @@ function successMessage(intent: ReviewIntent): string {
       return "Built-in footer restored and applied";
     case "import":
       return "Gist settings saved and applied";
+    case "profile":
+      return `${safeText(intent.name)} profile applied`;
+    case "history":
+      return "History document restored and applied";
     case "preset":
       return `${intent.preset.label} preset saved and applied`;
   }
@@ -600,24 +747,23 @@ function isCurrentOwner(owner: WorkflowOwner): boolean {
   return !owner.signal.aborted && owner.isCurrent();
 }
 
-function restorePreviousConfiguration(
+function isSessionOwnerCurrent(owner: WorkflowOwner): boolean {
+  return !owner.signal.aborted && (owner.isSessionCurrent?.() ?? owner.isCurrent());
+}
+
+function clearSessionPreview(ctx: ExtensionCommandContext, options: StarshipCommandOptions, owner: WorkflowOwner) {
+  if (owner.isSessionCurrent?.() ?? owner.isCurrent()) options.preview?.(undefined, ctx);
+}
+
+function captureExpectation(
   ctx: ExtensionCommandContext,
   options: StarshipCommandOptions,
-  previous: LoadedStarshipConfig,
-  saved: LoadedStarshipConfig,
-): unknown {
+): CommitExpectation | undefined {
   try {
-    if (saved.rawDocument === undefined || saved.fileIdentity === undefined) {
-      throw new Error("The saved settings document identity is unavailable");
-    }
-    removeConfigDocumentIfMatches(options.settingsPath, saved.rawDocument, saved.fileIdentity);
-    if (previous.rawDocument !== undefined) {
-      (options.restore ?? atomicRestoreConfigDocument)(options.settingsPath, previous.rawDocument);
-    }
-    options.apply(previous, ctx);
-    return undefined;
+    return captureCommitExpectation(options);
   } catch (error) {
-    return error;
+    ctx.ui.notify(`Footer settings were not saved: ${safeText(formatError(error))}`, "error");
+    return undefined;
   }
 }
 
@@ -629,7 +775,7 @@ function reviewPreviewBody(
   intent: ReviewIntent,
 ): string[] {
   if (intent.kind === "restore") return restorePreviewBody(ctx, options, loaded, width);
-  if (intent.kind === "customize" || intent.kind === "import") return previewBody(ctx, options, loaded, width);
+  if (intent.kind !== "preset") return previewBody(ctx, options, loaded, width);
   const current = configurationPresentation(options.getLoaded());
   return [
     `Preset: ${intent.preset.label}`,
@@ -637,7 +783,7 @@ function reviewPreviewBody(
     `Current: ${current.state}`,
     `Path: ${safeText(options.settingsPath)}`,
     "Applying replaces the entire settings document, including custom settings, unknown fields, and comments.",
-    "No backup is kept after a successful apply.",
+    "The previous document will be kept in History before replacement.",
     "",
     ...previewBody(ctx, options, loaded, width),
   ];
@@ -654,7 +800,7 @@ function restorePreviewBody(
     `Current: ${current.state}`,
     `Path: ${safeText(options.settingsPath)}`,
     "The entire settings document will be replaced, including custom settings, unknown fields, and comments.",
-    "No backup is kept after a successful restore.",
+    "The previous document will be kept in History before replacement.",
     "",
     ...previewBody(ctx, options, loaded, width),
   ];
@@ -707,7 +853,7 @@ function showHelp(ctx: ExtensionCommandContext, settingsPath: string) {
   if (!canNotify(ctx)) return;
   ctx.ui.notify(
     [
-      "/starship — customize, live-preview presets, explain, or inspect the footer in TUI mode",
+      "/starship — manage profiles, live-preview presets, recover history, explain, or inspect the footer in TUI mode",
       "/starship settings — customize, preview, and apply TOML",
       "/starship status — show source, path, and warnings",
       "/starship help — show this help",

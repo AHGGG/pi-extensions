@@ -314,8 +314,8 @@ test("preset preview cancellation is inert and confirmed apply replaces atomical
     assert.equal(readFileSync(path, "utf8"), STARSHIP_PRESETS[0]?.rawDocument);
     assert.equal(applied, 1);
     assert.match(confirmation, /Minimal/u);
-    assert.match(confirmation, /custom settings, unknown fields, and comments will be removed/iu);
-    assert.match(confirmation, /No backup is kept after success/u);
+    assert.match(confirmation, /custom settings, unknown fields, and comments will be replaced/iu);
+    assert.match(confirmation, /previous document will be kept in History/u);
     assert.equal(previewed.at(-1), undefined);
   } finally {
     rmSync(root, { recursive: true, force: true });

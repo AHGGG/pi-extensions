@@ -8,6 +8,7 @@ import {
   type ExtensionContext,
   SettingsManager,
 } from "@earendil-works/pi-coding-agent";
+import { createTuiHarness } from "@narumitw/pi-tui-kit/testing";
 import { test } from "vitest";
 import { listFiles, registerRuntimeBuilderContract } from "../../../test/runtime-builder-contract.js";
 import { createMockContext } from "../../../test/support.js";
@@ -19,6 +20,9 @@ const { packageRoot, loadBuilder } = registerRuntimeBuilderContract({
     "src/command-inspector.ts",
     "src/command-preset-picker.ts",
     "src/command-preview.ts",
+    "src/command-profiles.ts",
+    "src/profile-store.ts",
+    "src/command-commit.ts",
     "src/presets/catalog.ts",
     "src/runtime/cloud.ts",
     "src/runtime/deployment.ts",
@@ -113,19 +117,40 @@ test("generated runtime is loadable by Pi's Jiti resource loader", async () => {
     assert.ok(extension?.commands.has("starship"));
     assert.ok(extension?.handlers.has("session_start"));
     assert.ok(extension?.handlers.has("session_shutdown"));
-    // Resolve a representative lazy chunk through Jiti, not a test-runner import.
-    const context = createMockContext({ mode: "rpc", hasUI: true });
+    assert.ok(extension);
     loaded.runtime.getThinkingLevel = () => "off";
+    const tui = createTuiHarness({ width: 80, rows: 24 });
+    const context = createMockContext({ mode: "tui", hasUI: true, custom: tui.custom });
+    const emit = async (name: "session_start" | "session_shutdown") => {
+      const event = name === "session_start" ? { type: name, reason: "startup" } : { type: name };
+      for (const handler of extension.handlers.get(name) ?? []) await handler(event, context.ctx as ExtensionContext);
+    };
+    await emit("session_start");
     try {
-      for (const handler of extension.handlers.get("session_start") ?? []) {
-        await handler({ type: "session_start", reason: "startup" }, context.ctx as ExtensionContext);
-      }
-      await extension.commands.get("starship")?.handler("status", context.ctx as ExtensionCommandContext);
+      const command = extension.commands.get("starship");
+      assert.ok(command);
+      await command.handler("status", { ...(context.ctx as ExtensionCommandContext), mode: "rpc" });
       assert.match(context.notifications.at(-1)?.message ?? "", /source: user[\s\S]*warnings: none/u);
-    } finally {
-      for (const handler of extension.handlers.get("session_shutdown") ?? []) {
-        await handler({ type: "session_shutdown" }, context.ctx as ExtensionContext);
+      // Resolve and exercise the generated command/profile chunks through Jiti, not Vitest imports.
+      const running = command.handler("", context.ctx);
+      try {
+        await tui.waitForOpen();
+        tui.press("end");
+        assert.match(tui.render().join("\n"), /→ Profiles/u);
+        tui.press("tui.select.confirm");
+        await tui.waitForOpen();
+        const profileFrame = tui.render().join("\n");
+        tui.press("ctrl+c");
+        await running;
+        assert.match(profileFrame, /Profiles/u);
+        assert.match(profileFrame, /Save current/u);
+      } finally {
+        tui.dispose();
+        await running;
       }
+    } finally {
+      await emit("session_shutdown");
+      loaded.runtime.invalidate("generated profile smoke complete");
     }
   } finally {
     if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;

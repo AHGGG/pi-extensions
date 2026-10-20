@@ -31,7 +31,9 @@ State clearly when an answer comes from implementation detail rather than a docu
 
 ## Load configuration references
 
-Read [configuration and format](references/configuration.md) for settings location and persistence, presets, complete examples, root and module formats, styles, palettes, and display thresholds.
+Read [configuration and format](references/configuration.md) for settings location and persistence, named profiles, recovery history, presets, complete examples, root and module formats, styles, palettes, and display thresholds.
+
+For profile management, explain `/starship` → **Profiles** and **Configuration** → **History** from that reference; do not treat a saved profile as a live link to the active TOML or claim that arbitrary external edits are recorded.
 
 Read [the complete module catalog](references/module-catalog.md) for exact module names, format variables, default formats, symbols, enabled state, style fields, display defaults, option types, ranges, and enum values.
 
@@ -82,6 +84,8 @@ When the active document exists, also keep an untouched baseline file containing
 Before replacing that document, the apply script saves the baseline permanently under `<directory containing pi-starship.toml>/pi-starship/` with a local-time name such as `pi-starship-202609130742.toml`.
 
 For the default settings path, this backup directory is `<getAgentDir()>/pi-starship/`.
+
+These timestamped skill backups remain available read-only in the interactive History browser; interactive replacements use its separate `history/` directory.
 
 If that minute's backup name exists when checked, publication stops without changing the active document; this check does not lock out another process before rename, and retained backups are never deliberately removed by this workflow.
 
