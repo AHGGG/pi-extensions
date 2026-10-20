@@ -42,6 +42,7 @@ describe("recorded cache usage contract", () => {
     const result = report(m);
     expect(result.records).toHaveLength(1);
     expect(result.records[0]).toMatchObject({ entryId: id, hitRatePercent: hit, comparison: null });
+    expect(result.trend).toEqual([{ entryId: id, hitRatePercent: hit, epoch: 0 }]);
     expect(JSON.stringify(result)).not.toMatch(/NaN|Infinity/);
   });
   it("preserves unknown rows and compares adjacent known requests, including complete misses", () => {
@@ -68,15 +69,86 @@ describe("recorded cache usage contract", () => {
   });
   it("computes weighted totals before clipping rows, not an average of percentages", () => {
     const m = manager();
-    m.appendMessage(cacheAssistant(cacheUsage(200, 800)));
-    m.appendMessage(cacheAssistant(cacheUsage(90, 10)));
+    const first = m.appendMessage(cacheAssistant(cacheUsage(200, 800)));
+    const second = m.appendMessage(cacheAssistant(cacheUsage(90, 10)));
+    const points = [
+      { entryId: first, hitRatePercent: 80, epoch: 0 },
+      { entryId: second, hitRatePercent: 10, epoch: 0 },
+    ];
     expect(report(m).totals.hitRatePercent).toBeCloseTo((810 / 1100) * 100);
-    for (let i = 0; i < 220; i++) m.appendMessage(cacheAssistant());
+    for (let i = 0; i < 220; i++) {
+      if (i === 200) m.appendCompaction("summary", first, 1000);
+      const entryId = m.appendMessage(cacheAssistant());
+      points.push({ entryId, hitRatePercent: 80, epoch: i >= 200 ? 1 : 0 });
+    }
     const result = report(m);
     expect(result).toMatchObject({ totalRecords: 222, omittedRecords: 22, complete: true });
     expect(result.records).toHaveLength(200);
+    expect(result.records.map((row) => row.entryId)).toEqual(points.slice(-200).map((point) => point.entryId));
     expect(result.trend).toHaveLength(32);
+    expect(result.trend).toEqual(points.slice(-32));
     expect(result.totals).toMatchObject({ count: 222, promptTokens: 221100, cacheRead: 176810 });
+    expect(result.totals.hitRatePercent).toBeCloseTo((176810 / 221100) * 100);
+  });
+  it.each([
+    ["compaction", false],
+    ["compaction", true],
+    ["branch_summary", false],
+    ["branch_summary", true],
+  ] as const)("projects epochs across %s with usage=%s", (kind, metered) => {
+    const m = manager();
+    const unknown = m.appendMessage(cacheAssistant(cacheUsage(1000, 0)));
+    const before = m.appendMessage(cacheAssistant());
+    const usage = metered ? cacheUsage() : undefined;
+    const boundary =
+      kind === "compaction"
+        ? m.appendCompaction("summary", unknown, 1000, undefined, undefined, usage)
+        : m.branchWithSummary(before, "summary", undefined, undefined, usage);
+    const after = m.appendMessage(cacheAssistant(cacheUsage(400, 600)));
+    const next = m.appendMessage(cacheAssistant(cacheUsage(800, 200)));
+    const result = report(m);
+    expect(result.trend).toEqual([
+      { entryId: unknown, hitRatePercent: null, epoch: 0 },
+      { entryId: before, hitRatePercent: 80, epoch: 0 },
+      { entryId: after, hitRatePercent: 60, epoch: 1 },
+      { entryId: next, hitRatePercent: 20, epoch: 1 },
+    ]);
+    expect(result.trend).toEqual(
+      result.records
+        .filter((row) => row.kind === "assistant")
+        .map(({ entryId, hitRatePercent, epoch }) => ({ entryId, hitRatePercent, epoch })),
+    );
+    expect(result.records.find((row) => row.entryId === after)?.comparison).toBeNull();
+    expect(result.records.find((row) => row.entryId === next)?.comparison?.previousEntryId).toBe(after);
+    expect(result.records.filter((row) => row.entryId === boundary)).toEqual(
+      metered ? [expect.objectContaining({ kind, epoch: 1 })] : [],
+    );
+    expect(result.totalRecords).toBe(metered ? 5 : 4);
+  });
+  it("retains trend identity and epochs after more than 200 auxiliary rows displace their records", () => {
+    const m = manager();
+    const first = m.appendMessage(cacheAssistant());
+    m.appendCompaction("summary", first, 1000);
+    const second = m.appendMessage(cacheAssistant(cacheUsage(400, 600)));
+    const auxiliaryIds = Array.from(
+      { length: 205 },
+      (_, i) => m.appendUsage(i % 2 ? "nested-job" : "cache_warm", cacheModel.provider, cacheModel.id, cacheUsage()).id,
+    );
+    const retained = [
+      { entryId: first, hitRatePercent: 80, epoch: 0 },
+      { entryId: second, hitRatePercent: 60, epoch: 1 },
+    ];
+    const displaced = report(m);
+    expect(displaced.trend).toEqual(retained);
+    expect(displaced.records.map((row) => row.entryId)).toEqual(auxiliaryIds.slice(-200));
+    m.branchWithSummary(m.getLeafId(), "branch summary");
+    const latest = m.appendMessage(cacheAssistant(cacheUsage(800, 200)));
+    const result = report(m);
+    expect(result.trend).toEqual([...retained, { entryId: latest, hitRatePercent: 20, epoch: 2 }]);
+    expect(result.records.map((row) => row.entryId)).toEqual([...auxiliaryIds.slice(-199), latest]);
+    expect(result).toMatchObject({ totalRecords: 208, omittedRecords: 8, complete: true });
+    expect(result.totals).toMatchObject({ count: 208, promptTokens: 208000, cacheRead: 165600 });
+    expect(result.totals.hitRatePercent).toBeCloseTo((165600 / 208000) * 100);
   });
   it("includes summary and all generic usage records but excludes them from conversational comparisons", () => {
     const m = manager();
@@ -204,16 +276,33 @@ describe("recorded cache usage contract", () => {
   it("does not mix alternative branches, including after snapshot reconstruction", () => {
     const m = manager();
     const root = m.appendMessage(cacheAssistant());
+    m.appendCompaction("alternate summary", root, 1000);
+    m.branchWithSummary(m.getLeafId(), "alternate branch summary");
     const alternate = m.appendMessage(cacheAssistant(cacheUsage(900, 100)));
+    const alternateReport = report(m);
+    expect(alternateReport.trend).toEqual([
+      { entryId: root, hitRatePercent: 80, epoch: 0 },
+      { entryId: alternate, hitRatePercent: 10, epoch: 2 },
+    ]);
     m.branch(root);
-    const active = m.appendMessage(cacheAssistant(cacheUsage(400, 600)));
+    const activeBefore = m.appendMessage(cacheAssistant(cacheUsage(400, 600)));
+    m.branchWithSummary(activeBefore, "active branch summary");
+    const active = m.appendMessage(cacheAssistant(cacheUsage(800, 200)));
     const snap = snapshot(m, new Collector(), "cache", 0, "", [], [], []);
+    expect(snap.protocol).toBe(1);
     expect(snap.cache?.leafId).toBe(active);
-    expect(snap.cache?.totals.cacheRead).toBe(1400);
+    expect(snap.cache?.totals.cacheRead).toBe(1600);
+    expect(snap.cache?.trend).toEqual([
+      { entryId: root, hitRatePercent: 80, epoch: 0 },
+      { entryId: activeBefore, hitRatePercent: 60, epoch: 0 },
+      { entryId: active, hitRatePercent: 20, epoch: 1 },
+    ]);
     expect(snap.cache?.records.some((r) => r.entryId === alternate)).toBe(false);
     m.branch(alternate);
     expect(report(m).totals.cacheRead).toBe(900);
-    expect(report(m)).toEqual(report(m));
+    expect(report(m)).toEqual(alternateReport);
+    m.branch(active);
+    expect(snapshot(m, new Collector(), "cache", 1, "", [], [], []).cache).toEqual(snap.cache);
   });
   it.each(["missing", "cycle", "duplicate", "over-budget"])(
     "labels %s ancestry unavailable instead of complete totals",

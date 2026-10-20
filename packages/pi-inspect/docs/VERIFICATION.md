@@ -1,5 +1,33 @@
 # Verification evidence
 
+## Cache trend chart
+
+The Cache trend now uses fixed 0–100% vertical bars with Low/Moderate/High text labels, explicit empty and unknown states, current-window summaries, and known epoch separators. The 32-point and 200-row bounds, accounting formulas, branch-weighted totals, and read-only session behavior are unchanged. Epoch metadata is additive and optional; absent or invalid epochs do not create separators.
+
+- Package build and typecheck pass; 435 package Vitest tests pass across 21 files.
+- Focused cache browser tests pass 29/29; the complete Chromium suite passes 128/128. Coverage includes raw thresholds and midpoint rounding, unknown versus known-zero marks, sparse slots, auxiliary-only usage, displaced unknown-response actions, epoch boundaries, older snapshots, incomplete reports, native pointer/Enter/Space actions, branch replacement, and stale snapshot cancellation.
+- All four band text colors meet 4.5:1 contrast in both themes. Initial light-theme amber/green contrast failures were corrected with stronger text tokens; distinct fills and visible focus remain tested.
+- `npm run check` passes. The CI-equivalent root test gate passes 595 tests across 44 files with `PI_EXTENSIONS_BUILD_READY=1 PI_EXTENSIONS_TEST_BASE=origin/main VITEST_MAX_WORKERS=1 npm test`: all root tests plus the affected `pi-inspect` workspace. The build-ready flag reuses the successful root build; the 5,000 ms test budget is unchanged.
+- Broad local `npm test` attempts did not complete successfully: the first hit the tool's 300-second limit; later attempts were stopped after timeouts in unchanged workspaces. The single-worker attempt still timed out in `pi-sync` convergence and Git-route tests. No timeout was increased or unrelated test changed; no full-workspace-suite pass is claimed. Local logs are `/tmp/pi-inspect-cache-trend-test.log`, `/tmp/pi-inspect-cache-trend-test-full.log`, and `/tmp/pi-inspect-cache-trend-test-serial.log`.
+- `npm run package:pack -- inspect` passes. An actual 65-file tarball was also inspected: entrypoint, chart source, browser assets, documentation, and license are present; tests, scripts, and dependencies are excluded. The Pi smoke passes text/JSON opening rejection, explicit package loading, trusted discovery, RPC rejection, stop, reload, session replacement, and shutdown without a provider request.
+- A fenced-code-aware audit passes required headings and order for 35 package READMEs; seven local documentation links resolve.
+- Independent review and the final diff audit against `AGENTS.md`, `docs/extension-conventions.md`, and `docs/readme-conventions.md` cover correctness, security, lifecycle, compatibility, regressions, and scope. Midpoint formatting now uses one rounding result, and all-unknown samples retain Event details actions even after auxiliary rows displace their usage records.
+- No dependency, settings, command, consent, authentication, model-visible prefix, resource ownership, package metadata, or runtime-loading path changed. The chart adds no new fetch path, timer, observer, storage, or animation loop. A patch Changeset records the behavior change; no publication or release dispatch is authorized.
+
+Synthetic chart captures are ignored generated files under `packages/pi-inspect/test-results/`; no images or real session data are committed:
+
+| Case | Artifact relative to `test-results/` |
+| --- | --- |
+| Empty, desktop light | `cache-trend-empty-and-auxi-9d1de--fabricated-axes-or-samples/empty-desktop-light.png` |
+| One sample, desktop light | `cache-trend-1-sparse-sampl-52a45-es-and-fixed-capacity-slots/1-samples-desktop-light.png` |
+| Two samples, narrow dark | `cache-trend-2-sparse-sampl-c0277-es-and-fixed-capacity-slots/2-samples-narrow-dark.png` |
+| Three samples, desktop light | `cache-trend-3-sparse-sampl-0e8ba-es-and-fixed-capacity-slots/3-samples-desktop-light.png` |
+| Mixed unknowns and epochs, narrow dark | `cache-trend-epoch-separato-1ffbe-luding-unknown-rate-samples/mixed-unknown-epochs-narrow-dark.png` |
+| 32 samples, desktop light | `cache-trend-32-point-clipp-080e8-e-a-bounded-narrow-document/32-samples-desktop-light.png` |
+| 32 samples, narrow dark | `cache-trend-32-point-clipp-080e8-e-a-bounded-narrow-document/32-samples-narrow-dark.png` |
+
+The captures were inspected for readable labels, normal sparse bar widths, and bounded chart scrolling. Subjective acceptance remains with the user: after obtaining these captures, review spacing, band readability, and dense-chart legibility in the intended browser and font. Physical touch devices and the user's actual browser/font preferences remain unverified by headless Chromium. This visual review is not an agent-plan completion gate; publication still requires explicit approval. Reproduce the captures with the package's documented browser-test command; each full run replaces the previous generated test output.
+
 ## Package migration
 
 The inspector now lives under `packages/pi-inspect/`, with a thin source entrypoint, prebuilt browser assets, package-owned development dependencies and root workspace registration. Current verification commands are in the [package README](../README.md#development-verification).

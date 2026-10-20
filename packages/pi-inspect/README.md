@@ -46,7 +46,7 @@ Use the Context, Session, Cache and Environment tabs below the header. Context s
 
 Environment contains Tools, MCP Servers and Skills. These show current tool metadata, extension-registered MCP server names and the skill catalog captured at inspector startup, not historical request evidence. Switching tabs retains resource reading state. Independent provider observations remain in Context.
 
-Cache follows Pi's active branch, with weighted usage totals, the latest 200 records, 32 conversational trend points and links to Event details. Unknown cache accounting stays unavailable, not 0%; summary and warming usage contribute to totals but not conversational comparisons. Costs and re-billed tokens are estimates, not billing or proof of prefix reuse. See the [cache history contract](./docs/cache-history.md) for formulas, bounds and data availability. Streaming and historical-branch cache previews are not included.
+Cache follows Pi's active branch, with weighted usage totals, the latest 200 records and up to 32 conversational trend points in a fixed 0–100% vertical bar chart. Text labels distinguish Low, Moderate, High and unavailable values; unknown is not 0%. Select a point with the keyboard or pointer to open Event details. Summary and warming usage contribute to totals but not conversational comparisons. Costs and re-billed tokens are estimates, not billing or proof of prefix reuse. See the [cache history contract](./docs/cache-history.md) for display states, fixed visual targets, epoch boundaries, formulas and bounds. Streaming and historical-branch cache previews are not included.
 
 Use `/inspect stop` when finished. Closing the browser tab alone does not stop the server or collection.
 

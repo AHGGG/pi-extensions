@@ -50,6 +50,9 @@ test("cache totals, trends, comparisons and auxiliary event details are branch s
   const cache = page.getByRole("region", { name: "Cache usage", exact: true });
   await expect(cache).toContainText(`Active branch leaf: ${leaf}`);
   await expect(cache.getByRole("list", { name: "Conversational hit-rate trend" }).locator("li")).toHaveCount(3);
+  await expect(cache.locator(".cache-trend-summary dd")).toHaveText(["60%", "60%"]);
+  await expect(cache.locator(".cache-trend-unknown")).toHaveCount(1);
+  await expect(cache.locator(".cache-trend-bar")).toHaveCount(2);
   await expect(cache.locator(".cache-totals")).toContainText("Weighted hit rateunavailable");
   await cache.locator(".cache-record summary").last().click();
   await expect(cache.locator(".cache-record").last()).toContainText("-20 pp");
@@ -98,10 +101,19 @@ test("empty, incomplete, clipped and older-protocol cache states are explicit", 
   await page.goto(server.url);
   await page.getByRole("tab", { name: "Cache", exact: true }).click();
   await expect(page.locator(".cache-view")).toContainText("No recorded usage on this branch");
+  await expect(page.locator(".cache-trend-view")).toContainText("No conversational responses yet.");
+  await expect(page.locator(".cache-trend-chart")).toHaveCount(0);
   for (let i = 0; i < 205; i++) manager.appendMessage(cacheAssistant());
   server.invalidate(++revision);
   await expect(page.locator(".cache-record")).toHaveCount(200);
   await expect(page.locator(".cache-view")).toContainText("5 older records omitted");
+  await expect(page.locator(".cache-trend > li")).toHaveCount(32);
+  await expect(page.locator(".cache-trend-summary dd")).toHaveText(["80%", "80%"]);
+  transform = (value) => ({ ...value, cache: value.cache ? { ...value.cache, complete: false } : undefined });
+  server.invalidate(++revision);
+  await expect(page.locator(".cache-view")).toContainText("Cache data is incomplete");
+  await expect(page.locator(".cache-trend > li")).toHaveCount(32);
+  await expect(page.locator(".cache-trend-summary dd")).toHaveText(["80%", "80%"]);
   transform = (value) => ({
     ...value,
     cache: value.cache
@@ -112,9 +124,12 @@ test("empty, incomplete, clipped and older-protocol cache states are explicit", 
   await expect(page.locator(".cache-view")).toContainText("Cache data is incomplete");
   await expect(page.locator(".cache-view")).toContainText("missing recorded parent");
   await expect(page.locator(".cache-record")).toHaveCount(0);
+  await expect(page.locator(".cache-trend-view, .cache-trend-bar, .cache-trend-summary")).toHaveCount(0);
+  await expect(page.locator(".cache-view")).not.toContainText("No conversational responses yet");
   transform = (value) => ({ ...value, cache: undefined });
   server.invalidate(++revision);
   await expect(page.locator(".cache-view")).toContainText("Cache history unavailable in this snapshot");
+  await expect(page.locator(".cache-trend-view, .cache-trend-bar, .cache-trend-summary")).toHaveCount(0);
 });
 
 test("branch refresh replaces cache rows without combining abandoned usage", async ({ page }) => {
@@ -124,12 +139,20 @@ test("branch refresh replaces cache rows without combining abandoned usage", asy
   await page.goto(server.url);
   await page.getByRole("tab", { name: "Cache", exact: true }).click();
   await expect(page.locator(".cache-record")).toHaveCount(5);
+  await expect(page.locator(".cache-trend-summary dd")).toHaveText(["99.9%", "60%"]);
+  await page.locator(".cache-trend-point").last().focus();
+  await expect(page.locator(".cache-trend-inspection")).toContainText("99.9% · High");
   manager.branch(root);
   const other = manager.appendMessage(cacheAssistant(cacheUsage(999, 1)));
   server.invalidate(++revision);
   await expect(page.locator(".cache-view")).toContainText(`Active branch leaf: ${other}`);
   await expect(page.locator(".cache-record summary").last()).toContainText("0.1%");
   await expect(page.locator(".cache-record")).toHaveCount(5);
+  await expect(page.locator(".cache-trend > li")).toHaveCount(4);
+  await expect(page.locator(".cache-trend-summary dd")).toHaveText(["0.1%", "0.1%"]);
+  await expect(page.locator(".cache-trend-bar").last()).toHaveAttribute("style", "height: 0.1%;");
+  await expect(page.locator(".cache-trend-inspection")).toContainText("Response 4 of 4: 0.1% · Low");
+  await expect(page.locator(".cache-trend-view")).not.toContainText("99.9%");
 });
 
 test("a replaced snapshot aborts its pending request and cannot restore stale branch cache", async ({ page }) => {
@@ -144,6 +167,10 @@ test("a replaced snapshot aborts its pending request and cannot restore stale br
   const released = new Promise<void>((resolve) => {
     release = resolve;
   });
+  let staleFinished: () => void = () => {};
+  const staleCompleted = new Promise<void>((resolve) => {
+    staleFinished = resolve;
+  });
   let first = true;
   await page.route("**/api/snapshot?*", async (route) => {
     if (!first) return route.continue();
@@ -152,6 +179,7 @@ test("a replaced snapshot aborts its pending request and cannot restore stale br
     ready();
     await released;
     await route.fulfill({ json: stale }).catch(() => {});
+    staleFinished();
   });
   const cancelled = page.waitForEvent("requestfailed", (request) => request.url().includes("/api/snapshot"));
   server.invalidate(++revision);
@@ -164,6 +192,12 @@ test("a replaced snapshot aborts its pending request and cannot restore stale br
   await expect(page.locator(".cache-view")).toContainText(`Active branch leaf: ${leaf}`);
   await expect(page.locator(".cache-record")).toHaveCount(1);
   await expect(page.locator(".cache-totals")).toContainText("100%");
+  await staleCompleted;
+  await expect(page.locator(".cache-trend > li")).toHaveCount(1);
+  await expect(page.locator(".cache-trend-summary dd")).toHaveText(["100%", "100%"]);
+  await expect(page.locator(".cache-trend-bar")).toHaveAttribute("style", "height: 100%;");
+  await expect(page.locator(".cache-trend-zero, .cache-trend-unknown")).toHaveCount(0);
+  await expect(page.locator(".cache-trend-inspection")).toContainText("Response 1 of 1: 100% · High");
 });
 
 test("cache API uses the existing token and generation authorization", async ({ request }) => {

@@ -112,7 +112,7 @@ export interface CacheHistory {
   totalRecords: number;
   omittedRecords: number;
   totals: CacheTotals;
-  trend: { entryId: string; hitRatePercent: number | null }[];
+  trend: { entryId: string; hitRatePercent: number | null; epoch?: number }[];
   complete: boolean;
   unavailable?: string;
 }
