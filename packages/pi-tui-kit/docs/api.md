@@ -8,6 +8,7 @@
 - [Configured keys](#configured-keys)
 - [Complete menu example](#-complete-menu-example)
 - [Standalone interactions](#standalone-tasks)
+- [Full-source document copy](#full-source-document-copy)
 - [Searchable default-aware selectors](#searchable-default-aware-selectors)
 - [Mermaid Markdown transformers](#mermaid-markdown-transformers)
 - [Standard screens](#-standard-screens)
@@ -300,11 +301,47 @@ Before opening a TUI Markdown review with an enabled top-level Mermaid fence, it
 Mermaid preparation remains internal; callers receive no renderer or component factory.
 
 TUI Escape and Ctrl+C return typed `cancelled` results with Back and Close reasons.
-When `confirmation` is omitted, the document is read-only and can only be cancelled.
+When `confirmation` is omitted, no action can confirm the document; optional Copy stays in the same view.
 RPC uses the authoritative sanitized document pages, optional confirmation, and signal-aware `select()` dialogs; TUI-only search is ignored.
 Print and JSON return `unsupported`.
 Owner abort, stale ownership, external disposal, invalid options, and failures remain distinct `stale` or `error` results.
 The caller owns every confirmed side effect and must revalidate domain state before applying it.
+
+### Full-source document copy
+
+Set optional `copy: { label, onCopy }` on a `ReviewScreen`, exact `BrowseDetailDocument`, or `RunDocumentReviewOptions`. The same TUI implementation runs the action in place; Copy does not confirm, navigate, or add a completion result. Omit it to retain existing behavior. Legacy browse `details` arrays have no exact-source copy contract.
+
+```ts
+import type { DocumentCopyAction } from "@narumitw/pi-tui-kit/document-review";
+import { runDocumentReview } from "@narumitw/pi-tui-kit/document-review";
+
+// The owner decides what is safe to expose and supplies its clipboard transport.
+declare function copyApprovedSource(content: string, signal: AbortSignal): Promise<void>;
+const copy: DocumentCopyAction = {
+  label: "Copy raw TOML",
+  onCopy: ({ content, signal }) => copyApprovedSource(content, signal),
+};
+
+await runDocumentReview(ctx, {
+  title: "Raw settings",
+  content: rawToml,
+  format: { kind: "code", language: "toml" },
+  enableSearch: true,
+  copy,
+  signal: currentSessionSignal(),
+  isCurrent: () => generation === currentGeneration(),
+});
+```
+
+`DocumentCopyContext` supplies the original `content`, an optional raw browse `itemId`, and an `AbortSignal`. Kit snapshots source, identity, label, and callback before awaiting the action, and preserves the original action as a method callback's receiver. It sends the complete source, including offscreen text, CRLF, tabs, trailing spaces, final newlines, and source controls. It never copies sanitized rows, wrapped text, search highlights, or rendered Markdown. **Raw source can contain sensitive text or controls that the preview does not display.** The owner must opt in, choose a precise label, and apply its sensitivity policy before providing the action.
+
+Kit uses the injected `app.message.copy` binding, normally Ctrl+X. It filters hints against native host keys, standard navigation, Home/End, confirmation, cancellation, and Space search activation. Active search owns input; paste and key-release events never invoke Copy. No usable binding means no Copy hint. These filters are local to Kit, not a public global-reachability API.
+
+Only one copy callback can run per interaction. Repeated input while pending is ignored, not queued. Generic busy, completion, and retryable failure feedback stays in the document frame. Kit does not expose callback errors through notifications, owner error reporters, or result payloads because they can contain source text. Callback completion means only that the owner callback returned successfully, not that an OS or remote clipboard accepted the source.
+
+Back, Close, confirmation, disposal, and owner cancellation abort supported callback work and drain accepted work before the interaction returns. Changing the active document or copy action clears stale feedback. Owners must honor the signal or otherwise bound their work, supply current session ownership, and revalidate domain state around their own awaits. Native clipboard writes may not be cancellable; Kit cannot undo a completed write or restore the previous clipboard.
+
+Copy is TUI-only. RPC omits Copy controls and never invokes its callback; document pagination and confirmation are unchanged. Print and JSON retain their existing unsupported results. Kit contains no clipboard backend and never emits OSC 52. A consumer can explicitly use Pi's public `copyToClipboard()` helper inside its TUI callback; that transport and its local/remote limitations remain consumer-owned.
 
 ### Multi-selects
 
@@ -653,7 +690,7 @@ The renderer uses no browser, image, SVG, or network, and this API is independen
 - **`choice`** — one confirmed static value with separate current and initial items, details, disabled explanations, optional TUI search, and a bounded viewport.
 - **`settings`** — Pi-style searchable, aligned settings rows with immediate value changes, serialized saves, and rollback when an action rejects.
 - **`input`** — single-line text entry inside the menu stack with IME focus, serialized submission, rejected-draft retention, and TUI/RPC adaptation.
-- **`review`** — fixed or terminal-adaptive scrollable exact text, code, or diff content with an optional primary confirmation action and paginated RPC fallback.
+- **`review`** — fixed or terminal-adaptive scrollable exact text, code, or diff content with optional confirmation, opt-in full-source Copy, and paginated RPC fallback.
 - **`multiSelect`** — optimistic toggles with restored cursor, serialized saves, rollback, row descriptions, optional fuzzy search and bulk actions, and a bounded viewport.
 
 All standard TUI screens use Pi's injected keybindings, sanitize display text, rebuild themed content after invalidation, and bound rendered output to the supplied terminal width.
@@ -727,7 +764,7 @@ RPC deliberately keeps one deterministic unfiltered selector and ignores interac
 Keep preview snapshots, rollback, persistence, and confirmation policy in the consuming extension.
 Use standalone `runLiveChoice()` when its list-and-shortcut contract fits; keep a fully specialized UI local only when cursor behavior needs more than that contract.
 
-Browse screens are read-only and invoke no action.
+Browse rows only reveal information and never invoke domain actions. An exact detail document can opt into the separate [full-source copy callback](#full-source-document-copy).
 TUI fuzzy-searches each sanitized label, textual `statusText`, description, and optional non-rendered `searchText`.
 Enter opens an adaptive scrolling detail view; Escape returns to the list without losing the query or selected raw id, then returns to the parent, while Ctrl+C closes the menu.
 Omitted or `"adaptive"` viewport size uses the live terminal row budget; a positive number caps item rows without disabling terminal bounds.
@@ -1120,10 +1157,11 @@ Consumer fixtures continue to own domain state, persistence, generation checks, 
 - `runCustomInteraction()` — owns cancellation, stale checks, exactly-once disposal, optional pending-work draining, and typed results for one custom TUI component.
 - `resolveMenuScreen()` — resolves and validates a dynamic screen for tests or adapters.
 - `createMenuNavigator()` — lower-level stack and selection state helper.
-- exported screen, item, action, transition, runtime option, `BrowseDetailDocument`, `MenuCloseReason`, and result types.
+- exported screen, item, action, transition, runtime option, `BrowseDetailDocument`, `DocumentCopyAction`, `DocumentCopyContext`, `MenuCloseReason`, and result types; the `/document-review` subpath also exports the copy types.
 - Focused interaction subpaths — `confirmation`, `custom-interaction`, `document-review`, `live-choice`, `multi-select`, `questionnaire`, `selectors`, and `task` export the matching runtime functions and types without requiring the package root.
 - `@narumitw/pi-tui-kit/testing` — test-only subpath for `createTuiHarness()`, `createRpcHarness()`, strict scripts, and their types; the production root does not re-export it.
-- `PI_EXTENSION_MENU_API_VERSION` — current API version (`21`).
+- `PI_EXTENSION_MENU_API_VERSION` — current API version (`22`).
+Version 22 adds opt-in in-place full-source document copy while version-21 definitions and completion results remain valid.
 Version 21 adds frame row metadata and configured-key canonicalization while version-20 definitions remain valid.
 Version 20 adds focused interaction subpaths plus standalone document-review and multi-select APIs while version-19 definitions remain valid.
 Version 19 adds public lazy Mermaid Markdown transformer preparation and the focused `/markdown` subpath while version-18 definitions remain valid.
