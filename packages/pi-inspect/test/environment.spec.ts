@@ -105,6 +105,194 @@ for (const width of [1672, 1115, 900, 375]) {
   });
 }
 
+for (const width of [320, 375, 900, 1672]) {
+  test(`compact resource layout, readable themes and keyboard disclosures at ${width}px`, async ({ page, context }) => {
+    const tool = value.tools[0];
+    if (!tool) throw Error("Missing tool fixture");
+    const description =
+      "Inspect the current session without changing its data. Tool descriptions remain fully available for review.\n\nParameters and source metadata are available below.\n" +
+      "long_unbroken_description_".repeat(12);
+    value.tools = Array.from({ length: 12 }, (_, index) => ({
+      ...tool,
+      name: `inspect_session_${index}`,
+      description,
+      active: index % 2 === 0,
+      callable: index % 2 === 0,
+    }));
+    await page.setViewportSize({ width, height: 812 });
+    await page.goto(server.url);
+    await context.grantPermissions(["clipboard-read", "clipboard-write"], { origin: server.origin });
+    await tab(page, "Environment").click();
+    const panel = resource(page);
+    const card = panel.locator(".inventory-card").first();
+    const schema = card.getByRole("button", { name: "Schema · inspect_session_0", exact: true });
+    const source = card.getByRole("button", { name: "Source · inspect_session_0", exact: true });
+    await expect(source).toHaveAttribute("aria-expanded", "false");
+    await expect(schema).toHaveAttribute("aria-expanded", "false");
+    await expect(panel.locator(".json-tree")).toHaveCount(0);
+    await expect(card.locator(".inventory-description")).toHaveText(description);
+    for (const selector of [
+      ".environment-surface",
+      ".inventory-card",
+      ".inventory-description",
+      ".inventory-card .rt-Heading",
+    ]) {
+      await expect(page.locator(selector).first()).toHaveCSS("font-family", /monospace/);
+    }
+    await expect(card.locator(".rt-Heading")).toHaveCSS("font-size", "13px");
+    await expect(page.locator(".inspector-app")).toHaveCSS("font-family", /monospace/);
+    await expect(page.locator(".app-header")).toHaveCSS("height", width <= 680 ? "80px" : "64px");
+    await expect(page.locator(".app-footer")).toHaveCSS("height", "34px");
+
+    for (const appearance of ["light", "dark"]) {
+      await expect(page.locator(".inspector-app")).toHaveClass(new RegExp(appearance));
+      const background = appearance === "light" ? "rgb(245, 242, 235)" : "rgb(32, 35, 39)";
+      await expect(page.locator(".inspector-app")).toHaveCSS("background-color", background);
+      await expect(card).toHaveCSS(
+        "background-color",
+        appearance === "light" ? "rgb(250, 248, 243)" : "rgb(38, 41, 46)",
+      );
+      await expect(page.locator(".brand-logo")).toHaveCSS("background-color", "rgb(183, 203, 234)");
+      const primary = page.getByRole("tablist", { name: "Inspection source" });
+      await expect(primary).toHaveCSS(
+        "background-color",
+        appearance === "light" ? "rgb(238, 235, 228)" : "rgb(46, 50, 55)",
+      );
+      const secondary = page.getByRole("tablist", { name: "Environment resources" });
+      await page.keyboard.press("Tab");
+      for (const [selected, other] of [
+        [primary.getByRole("tab", { name: "Environment" }), primary.getByRole("tab", { name: "Context" })],
+        [secondary.getByRole("tab", { name: "Tools", exact: true }), secondary.getByRole("tab", { name: "Skills" })],
+      ] as const) {
+        expect(await selected.evaluate((element) => getComputedStyle(element).backgroundColor)).not.toBe(
+          await other.evaluate((element) => getComputedStyle(element).backgroundColor),
+        );
+        await selected.focus();
+        await expect(selected).toHaveCSS("outline-style", "solid");
+        await expect(selected).toHaveCSS("outline-width", "2px");
+      }
+      const inactiveTab = secondary.getByRole("tab", { name: "Skills" });
+      const idleBackground = await inactiveTab.evaluate((element) => getComputedStyle(element).backgroundColor);
+      await inactiveTab.hover();
+      expect(await inactiveTab.evaluate((element) => getComputedStyle(element).backgroundColor)).not.toBe(
+        idleBackground,
+      );
+      const idleDisclosure = await schema.evaluate((element) => getComputedStyle(element).backgroundColor);
+      await schema.hover();
+      expect(await schema.evaluate((element) => getComputedStyle(element).backgroundColor)).not.toBe(idleDisclosure);
+      // Composite alpha backgrounds through the actual theme before checking normal-size text.
+      const contrasts = await page
+        .locator(
+          ".environment-heading p, .resource-panel > p, " +
+            ".inventory-card:first-of-type .rt-Badge, .inventory-card:first-of-type .section-toggle, " +
+            ".inventory-card:first-of-type .copy-button, .environment-surface .navigation-tabs button",
+        )
+        .evaluateAll((elements) =>
+          elements
+            .filter((element) => element.getClientRects().length)
+            .map((element) => {
+              const canvas = document.createElement("canvas");
+              canvas.width = canvas.height = 1;
+              const ctx = canvas.getContext("2d");
+              if (!ctx) throw Error("Canvas unavailable");
+              const parents: Element[] = [];
+              for (let parent: Element | null = element; parent; parent = parent.parentElement) parents.unshift(parent);
+              ctx.fillStyle = "white";
+              ctx.fillRect(0, 0, 1, 1);
+              for (const parent of parents) {
+                ctx.fillStyle = getComputedStyle(parent).backgroundColor;
+                ctx.fillRect(0, 0, 1, 1);
+              }
+              const luminance = (data: Uint8ClampedArray) => {
+                const linear = Array.from(data.slice(0, 3), (value) => {
+                  const channel = value / 255;
+                  return channel <= 0.04045 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4;
+                });
+                return (linear[0] ?? 0) * 0.2126 + (linear[1] ?? 0) * 0.7152 + (linear[2] ?? 0) * 0.0722;
+              };
+              const background = luminance(ctx.getImageData(0, 0, 1, 1).data);
+              ctx.fillStyle = getComputedStyle(element).color;
+              ctx.fillRect(0, 0, 1, 1);
+              const foreground = luminance(ctx.getImageData(0, 0, 1, 1).data);
+              return {
+                text: element.textContent,
+                ratio: (Math.max(background, foreground) + 0.05) / (Math.min(background, foreground) + 0.05),
+              };
+            }),
+        );
+      for (const { text, ratio } of contrasts) expect(ratio, `${appearance}: ${text}`).toBeGreaterThanOrEqual(4.5);
+      await panel.evaluate((element) => {
+        element.scrollTop = 0;
+      });
+      const bounds = await card.boundingBox();
+      expect(bounds?.width).toBeLessThanOrEqual(1040);
+      expect(
+        Number.parseFloat(await card.evaluate((element) => getComputedStyle(element).paddingLeft)),
+      ).toBeGreaterThanOrEqual(12);
+      if (width > 680) {
+        await expect(page.getByText("Read-only", { exact: true })).toBeVisible();
+        await expect(page.locator(".app-footer span").last()).toBeVisible();
+      }
+      expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth && scrollY === 0)).toBe(true);
+      await page.screenshot({
+        path: test.info().outputPath(`resources-${width}-${appearance}.png`),
+        animations: "disabled",
+      });
+      if (appearance === "light") await page.getByRole("button", { name: "Toggle appearance" }).click();
+    }
+
+    await schema.focus();
+    await page.keyboard.press("Enter");
+    await expect(schema).toHaveAttribute("aria-expanded", "true");
+    await expect(card.locator(".json-tree")).toHaveCSS("font-family", /monospace/);
+    await page.keyboard.press("Tab");
+    const copy = card.locator(".data").last().getByRole("button", { name: "Copy display data" });
+    await expect(copy).toBeFocused();
+    await page.keyboard.press("Enter");
+    await expect(copy).toHaveText("Copied");
+    expect(JSON.parse(await page.evaluate(() => navigator.clipboard.readText()))).toEqual(tool.schema?.value);
+    await schema.focus();
+    await page.keyboard.press("Space");
+    await expect(schema).toHaveAttribute("aria-expanded", "false");
+    await expect(source).toHaveAttribute("aria-expanded", "false");
+    const last = panel.locator(".inventory-card").last();
+    await panel.evaluate((element) => {
+      element.scrollTop = element.scrollHeight;
+    });
+    await expect(last.getByRole("button", { name: "Copy display data" }).last()).toBeInViewport();
+    const lastBounds = await last.boundingBox();
+    const footerBounds = await page.locator(".app-footer").boundingBox();
+    expect((lastBounds?.y ?? 0) + (lastBounds?.height ?? 0)).toBeLessThanOrEqual(footerBounds?.y ?? 0);
+  });
+}
+
+for (const appearance of ["light", "dark"]) {
+  test(`portaled drawer retains visible keyboard focus in ${appearance} mode`, async ({ page }) => {
+    await page.setViewportSize({ width: 375, height: 812 });
+    await page.goto(server.url);
+    if (appearance === "dark") await page.getByRole("button", { name: "Toggle appearance" }).click();
+    await tab(page, "Session").click();
+    await page.locator(`.session-primary:not([hidden]) [data-trace-id="${f.user}"]`).click();
+    const drawer = page.getByRole("dialog", { name: "Event details" });
+    await expect(drawer).toBeVisible();
+    expect(await drawer.evaluate((element) => element.closest(".inspector-app"))).toBeNull();
+    await page.keyboard.press("Tab");
+    for (const button of [
+      drawer.getByRole("button", { name: "Close Event details" }),
+      drawer.getByRole("button", { name: "Copy display data" }).first(),
+    ]) {
+      await button.focus();
+      await expect(button).toHaveCSS("outline-style", "solid");
+      await expect(button).toHaveCSS("outline-width", "2px");
+      await expect(button).not.toHaveCSS("outline-color", "rgba(0, 0, 0, 0)");
+    }
+    await page.keyboard.press("Escape");
+    await expect(drawer).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Toggle event details" })).toBeFocused();
+    expect(f.manager.getLeafId()).toBe(value.leafId);
+  });
+}
+
 test("empty, partial, duplicate and unavailable resource catalogs never imply missing servers or files", async ({
   page,
 }) => {
