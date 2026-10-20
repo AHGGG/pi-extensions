@@ -45,9 +45,23 @@ Read [runtime and security](references/runtime-and-security.md) before enabling 
 
 Use an explicit user-provided path when present.
 
-Otherwise resolve the active path through Pi's `getAgentDir()` API by running `node scripts/config-path.mjs` relative to this `SKILL.md`.
+Otherwise resolve the active path through Pi's `getAgentDir()` API with the bundled resolver:
 
+```bash
+skill_dir="<directory containing this SKILL.md>"
+node "$skill_dir/scripts/config-path.mjs"
+```
+
+Keep the current working directory unchanged so relative agent-directory settings retain their meaning.
 The resolver prints a JSON string containing the exact absolute path, including correct expansion of a configured `~`.
+It first resolves Pi from the skill's module tree; when Pi is absent there, it resolves beside the first `pi` executable on `PATH`, following symbolic links.
+This supports separate npm or Bun global Pi installations without assuming a fixed global directory.
+Make sure `PATH` selects the intended Pi installation when multiple installations exist.
+Shell wrappers or compiled launchers without a nearby Pi package can still fail resolution.
+
+If resolution fails, report the error and stop before reading or writing a guessed settings path.
+Ask for the exact settings path or the intended Pi executable to be made available on `PATH`.
+Do not install another Pi copy, modify `node_modules`, hard-code a Bun global directory, or use an ad hoc loader hook to bypass the failure.
 
 Read the existing document before editing it.
 
