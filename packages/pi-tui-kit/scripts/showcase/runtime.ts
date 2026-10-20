@@ -1,5 +1,5 @@
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
-import { runConfirmation, runLiveChoice, runMenu, runQuestionnaire, runTask } from "@narumitw/pi-tui-kit";
+import { runConfirmation, runLiveChoice, runMenu, runQuestionnaire } from "@narumitw/pi-tui-kit";
 import {
   appendLog,
   createInitialShowcaseState,
@@ -7,6 +7,10 @@ import {
   type ShowcaseStandaloneInteraction,
   type ShowcaseState,
 } from "./menu.js";
+import { inspectShowcaseRuntime } from "./runtime-info.js";
+import { runSyntheticInput } from "./synthetic-inputs.js";
+import { runShowcaseTask } from "./task-demo.js";
+import { runThemeDemo } from "./theme-demo.js";
 
 export interface ShowTuiKitShowcaseOptions {
   signal: AbortSignal;
@@ -17,7 +21,11 @@ export async function showTuiKitShowcase(
   ctx: ExtensionCommandContext,
   options: ShowTuiKitShowcaseOptions,
 ): Promise<void> {
+  if (options.signal.aborted || !options.isCurrent()) return;
   const state = createInitialShowcaseState();
+  const runtimeInfo = await inspectShowcaseRuntime();
+  if (options.signal.aborted || !options.isCurrent()) return;
+  state.runtimeInfo = runtimeInfo;
   let pendingStandalone: ShowcaseStandaloneInteraction | undefined;
   const menu = createShowcaseMenu({
     requestStandalone(interaction) {
@@ -31,9 +39,11 @@ export async function showTuiKitShowcase(
       getState: () => state,
       signal: options.signal,
       isCurrent: options.isCurrent,
-      onError: (_ctx, error) => notify(ctx, safeError(error), "error"),
+      onError: () => reportError(ctx, options),
       onUnsupportedMode: (_ctx, mode) => {
-        notify(ctx, `Pi TUI Kit Showcase needs TUI mode and is unavailable in ${mode} mode.`, "warning");
+        if (!options.signal.aborted && options.isCurrent()) {
+          notify(ctx, `Pi TUI Kit Showcase needs TUI mode and is unavailable in ${mode} mode.`, "warning");
+        }
       },
     });
 
@@ -57,19 +67,27 @@ async function runStandaloneInteraction(
   interaction: ShowcaseStandaloneInteraction,
   options: ShowTuiKitShowcaseOptions,
 ): Promise<void> {
-  if (interaction === "task") {
-    const result = await runTask(ctx, {
-      label: "Running a short showcase task…",
-      signal: options.signal,
-      isCurrent: options.isCurrent,
-      task: ({ signal }) => delay(250, signal),
-      onError: (_ctx, error) => notify(ctx, safeError(error), "error"),
-    });
-    if (options.signal.aborted || !options.isCurrent()) return;
-    if (result.kind === "completed") {
-      appendLog(state, "Standalone task completed.");
-      notify(ctx, "Showcase task completed.", "info");
-    }
+  if (options.signal.aborted || !options.isCurrent()) return;
+  if (interaction === "task" || interaction === "taskFailure" || interaction === "taskCancel") {
+    await runShowcaseTask(ctx, state, interaction, options);
+    return;
+  }
+  if (interaction === "secret" || interaction === "model" || interaction === "thinking") {
+    await runSyntheticInput(ctx, state, interaction, options);
+    return;
+  }
+  if (interaction === "theme") {
+    await runThemeDemo(ctx, options);
+    return;
+  }
+  if (interaction === "copy") {
+    const { runCopyCaptureShowcase } = await import("./copy-demo.js");
+    if (!options.signal.aborted && options.isCurrent()) await runCopyCaptureShowcase(ctx, options);
+    return;
+  }
+  if (interaction === "native") {
+    const { runNativePointerDemo } = await import("./native-demo.js");
+    if (!options.signal.aborted && options.isCurrent()) await runNativePointerDemo(ctx, options);
     return;
   }
 
@@ -81,7 +99,7 @@ async function runStandaloneInteraction(
       cancelLabel: "Back",
       signal: options.signal,
       isCurrent: options.isCurrent,
-      onError: (_ctx, error) => notify(ctx, safeError(error), "error"),
+      onError: () => reportError(ctx, options),
     });
     if (options.signal.aborted || !options.isCurrent()) return;
     if (result.kind === "confirmed") {
@@ -119,7 +137,7 @@ async function runStandaloneInteraction(
       maxTextLength: 200,
       signal: options.signal,
       isCurrent: options.isCurrent,
-      onError: (_ctx, error) => notify(ctx, safeError(error), "error"),
+      onError: () => reportError(ctx, options),
     });
     if (options.signal.aborted || !options.isCurrent()) return;
     if (result.kind === "submitted") {
@@ -147,9 +165,9 @@ async function runStandaloneInteraction(
     signal: options.signal,
     isCurrent: options.isCurrent,
     onSelectionChange: ({ item, signal }) => {
-      if (!signal.aborted && isShowcaseProfile(item.id)) state.profile = item.id;
+      if (!signal.aborted && options.isCurrent() && isShowcaseProfile(item.id)) state.profile = item.id;
     },
-    onError: (_ctx, error) => notify(ctx, safeError(error), "error"),
+    onError: () => reportError(ctx, options),
   });
   if (options.signal.aborted || !options.isCurrent()) return;
 
@@ -169,27 +187,9 @@ function notify(ctx: ExtensionCommandContext, message: string, level: "error" | 
   if (ctx.hasUI) ctx.ui.notify(message, level);
 }
 
-function safeError(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
-
-function delay(milliseconds: number, signal: AbortSignal): Promise<void> {
-  if (signal.aborted) return Promise.reject(new Error("Task was cancelled."));
-  return new Promise<void>((resolve, reject) => {
-    let settled = false;
-    const timeout = setTimeout(() => {
-      settled = true;
-      signal.removeEventListener("abort", abort);
-      resolve();
-    }, milliseconds);
-    const abort = () => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timeout);
-      reject(new Error("Task was cancelled."));
-    };
-    signal.addEventListener("abort", abort, { once: true });
-  });
+function reportError(ctx: ExtensionCommandContext, options: ShowTuiKitShowcaseOptions): void {
+  if (!options.signal.aborted && options.isCurrent())
+    notify(ctx, "Showcase interaction failed. Reopen to retry.", "error");
 }
 
 function isShowcaseProfile(value: string): value is ShowcaseState["profile"] {

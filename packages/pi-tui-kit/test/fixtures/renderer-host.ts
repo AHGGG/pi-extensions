@@ -63,6 +63,7 @@ export function createRendererHost(
   const keys = new KeybindingsManager(
     {
       ...TUI_KEYBINDINGS,
+      "app.message.copy": { defaultKeys: "ctrl+x", description: "Copy document" },
       "app.models.save": { defaultKeys: "ctrl+s", description: "Save default model" },
       "app.thinking.save": { defaultKeys: "ctrl+s", description: "Save default thinking" },
       "app.thinking.cycle": { defaultKeys: "shift+tab", description: "Cycle thinking" },

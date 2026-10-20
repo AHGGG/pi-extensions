@@ -1,4 +1,5 @@
-import { defineMenu, type MenuDefinition } from "@narumitw/pi-tui-kit";
+import { defineMenu, type MenuDefinition, type ModelSelectorItem, type ThinkingLevel } from "@narumitw/pi-tui-kit";
+import { runtimeInfoLines, type ShowcaseRuntimeInfo } from "./runtime-info.js";
 
 export type ShowcaseScreen =
   | "main"
@@ -9,7 +10,9 @@ export type ShowcaseScreen =
   | "settings"
   | "input"
   | "review"
-  | "multiSelect";
+  | "multiSelect"
+  | "runtime"
+  | "prefill";
 
 export type ShowcaseAction =
   | "recordAction"
@@ -23,9 +26,23 @@ export type ShowcaseAction =
   | "openTask"
   | "openConfirmation"
   | "openLiveChoice"
-  | "openQuestionnaire";
+  | "openQuestionnaire"
+  | "submitPrefill"
+  | "openDemo";
 
-export type ShowcaseStandaloneInteraction = "task" | "confirmation" | "liveChoice" | "questionnaire";
+export type ShowcaseStandaloneInteraction =
+  | "task"
+  | "taskFailure"
+  | "taskCancel"
+  | "confirmation"
+  | "liveChoice"
+  | "questionnaire"
+  | "secret"
+  | "model"
+  | "thinking"
+  | "theme"
+  | "native"
+  | "copy";
 
 export interface ShowcaseState {
   profile: "Minimal" | "Balanced" | "Verbose";
@@ -35,6 +52,12 @@ export interface ShowcaseState {
   reviewApplied: boolean;
   featureFlags: Record<"search" | "details" | "bulk", boolean>;
   log: readonly string[];
+  runtimeInfo?: ShowcaseRuntimeInfo;
+  prefillText: string;
+  model: ModelSelectorItem;
+  defaultModel: ModelSelectorItem;
+  thinking: ThinkingLevel;
+  defaultThinking: ThinkingLevel;
 }
 
 export interface ShowcaseMenuRuntime {
@@ -47,6 +70,11 @@ export function createInitialShowcaseState(): ShowcaseState {
     density: "Comfortable",
     accent: "Blue",
     inputText: "",
+    prefillText: "Synthetic editable draft",
+    model: { provider: "demo-alpha", id: "synthetic-fast" },
+    defaultModel: { provider: "demo-beta", id: "synthetic-deep" },
+    thinking: "medium",
+    defaultThinking: "high",
     reviewApplied: false,
     featureFlags: {
       search: true,
@@ -70,6 +98,8 @@ export function createShowcaseMenu(
           "Local demo for maintainers.",
           "It stores no settings and uses only public @narumitw/pi-tui-kit exports.",
           `Current demo state: ${state.profile} · ${state.density} · ${state.accent}`,
+          `Synthetic model: ${state.model.id} · default: ${state.defaultModel.id}`,
+          `Synthetic thinking: ${state.thinking} · default: ${state.defaultThinking}`,
         ],
         items: [
           {
@@ -145,9 +175,89 @@ export function createShowcaseMenu(
             description: "Closes this menu, shows runLiveChoice(), then reopens",
             action: "openLiveChoice",
           },
+          {
+            id: "runtime",
+            label: "Runtime information",
+            description: "Version, API, and actual built module origin",
+            to: "runtime",
+          },
+          {
+            id: "prefill",
+            label: "Editable prefill",
+            description: "Edit a synthetic draft; memory only",
+            to: "prefill",
+          },
+          {
+            id: "secret",
+            label: "Synthetic secret input",
+            description: "Use fake text only; no payload in history",
+            action: "openDemo",
+          },
+          {
+            id: "model",
+            label: "Synthetic model selector",
+            description: "Current, default, selection, and memory-only save intent",
+            action: "openDemo",
+          },
+          {
+            id: "thinking",
+            label: "Synthetic thinking selector",
+            description: "No real thinking-level or settings change",
+            action: "openDemo",
+          },
+          {
+            id: "theme",
+            label: "Theme and style samples",
+            description: "Active host roles versus sample palettes; no host changes",
+            action: "openDemo",
+          },
+          {
+            id: "taskFailure",
+            label: "Task failure and retry",
+            description: "Bounded synthetic failure; select again to retry",
+            action: "openDemo",
+          },
+          {
+            id: "taskCancel",
+            label: "Task cancellation",
+            description: "Cancel before a bounded safety deadline",
+            action: "openDemo",
+          },
+          {
+            id: "native",
+            label: "Native pointer, wheel, and overlays",
+            description: "Native routing demo with keyboard alternatives",
+            action: "openDemo",
+          },
+          {
+            id: "copy",
+            label: "In-memory copy capture",
+            description: "Synthetic exact source, failure/retry; NO OS clipboard",
+            action: "openDemo",
+          },
           { id: "close", label: "Close", close: true },
         ],
         hint: "close",
+      }),
+      runtime: ({ state }) => ({
+        kind: "detail",
+        title: "Kit runtime information",
+        lines: [
+          ...runtimeInfoLines(state.runtimeInfo),
+          "The launcher builds the local workspace before Pi loads this menu.",
+        ],
+        hint: "back",
+      }),
+      prefill: ({ state }) => ({
+        kind: "input",
+        title: "Editable synthetic prefill",
+        lines: [
+          "Synthetic text only. Editing and paste use Kit's native Input behavior.",
+          "Submission keeps this draft in memory; cancellation keeps the previous draft.",
+        ],
+        initialValue: state.prefillText,
+        action: "submitPrefill",
+        hint: "back",
       }),
       actions: ({ state }) => ({
         kind: "actions",
@@ -221,6 +331,7 @@ export function createShowcaseMenu(
           },
         ],
         viewportSize: "adaptive",
+        enableDetailSearch: true,
         hint: "back",
       }),
       choice: ({ state }) => ({
@@ -300,6 +411,7 @@ export function createShowcaseMenu(
           "diff --git a/showcase.txt b/showcase.txt\n--- a/showcase.txt\n+++ b/showcase.txt\n@@ -1,3 +1,4 @@\n actions\n detail\n browse\n+review\n",
         format: { kind: "diff", filePath: "showcase.txt" },
         viewportSize: "adaptive",
+        enableSearch: true,
         confirm: {
           id: "apply",
           label: state.reviewApplied ? "Apply again" : "Apply demo",
@@ -355,6 +467,15 @@ export function createShowcaseMenu(
       }),
     },
     actions: {
+      openDemo: ({ itemId }) => {
+        if (isDemoInteraction(itemId)) runtime.requestStandalone(itemId);
+        return { kind: "close" };
+      },
+      submitPrefill: ({ state, value }) => {
+        state.prefillText = value ?? "";
+        appendLog(state, "Synthetic prefill submitted (payload omitted).");
+        return { kind: "back" };
+      },
       recordAction: ({ state, ctx }) => {
         appendLog(state, "Actions screen row activated.");
         if (ctx.hasUI) ctx.ui.notify?.("Recorded an in-memory showcase action.", "info");
@@ -416,6 +537,10 @@ export function createShowcaseMenu(
       },
     },
   });
+}
+
+function isDemoInteraction(value: string): value is ShowcaseStandaloneInteraction {
+  return ["secret", "model", "thinking", "theme", "taskFailure", "taskCancel", "native", "copy"].includes(value);
 }
 
 const FEATURE_IDS = ["search", "details", "bulk"] as const;

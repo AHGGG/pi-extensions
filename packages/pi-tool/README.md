@@ -60,6 +60,7 @@ It rejects arguments, print mode, and JSON mode before opening an interactive fl
 Run `/tool` to browse configured tools and configure the active-tool widget in TUI or RPC mode.
 It accepts no arguments and rejects print and JSON modes.
 The command never enables, disables, or executes tools.
+Exact tool-detail documents support literal search in TUI mode: Space opens search, search-close dismisses it, and Back returns to the catalog with its query and selection retained. RPC keeps its existing paginated detail dialogs.
 
 ## ⚙️ Settings
 

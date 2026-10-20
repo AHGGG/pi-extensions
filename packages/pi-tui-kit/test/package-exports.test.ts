@@ -57,7 +57,7 @@ test("built package entrypoints resolve their documented exports", async (t) => 
   const terminalDocument = await import(terminalDocumentSpecifier);
   const terminalText = await import(terminalTextSpecifier);
   const testing = await import(testingSpecifier);
-  assert.equal(production.PI_EXTENSION_MENU_API_VERSION, 21);
+  assert.equal(production.PI_EXTENSION_MENU_API_VERSION, 22);
   assert.equal(typeof production.renderBoundedFrame, "function");
   assert.equal(typeof production.renderBoundedFrameLayout, "function");
   assert.equal(typeof production.canonicalizeConfiguredKey, "function");
@@ -108,10 +108,10 @@ test("built package entrypoints resolve their documented exports", async (t) => 
   writeFileSync(
     path.join(fixture, "usage.ts"),
     `import type { Theme } from "@earendil-works/pi-coding-agent";\n` +
-      `import { EditorStatusWidget as RootEditorStatusWidget, HorizontalRule, type HorizontalRuleOptions, PI_EXTENSION_MENU_API_VERSION, type BrowseDetailDocument, type ChoiceScreen, type EditorStatusWidgetOptions, type InputScreen, type LiveChoiceItem, type MenuBrowseItem, type MultiSelectItem, type QuestionnaireAnswer, type QuestionnaireQuestion, type ReviewFormat, type RunDocumentReviewOptions, type RunMultiSelectResult, type RunQuestionnaireResult, type RunSecretInputOptions } from "@narumitw/pi-tui-kit";\n` +
+      `import { EditorStatusWidget as RootEditorStatusWidget, HorizontalRule, type HorizontalRuleOptions, PI_EXTENSION_MENU_API_VERSION, type BrowseDetailDocument, type ChoiceScreen, type DocumentCopyAction, type DocumentCopyContext, type EditorStatusWidgetOptions, type InputScreen, type LiveChoiceItem, type MenuBrowseItem, type MultiSelectItem, type QuestionnaireAnswer, type QuestionnaireQuestion, type ReviewFormat, type RunDocumentReviewOptions, type RunMultiSelectResult, type RunQuestionnaireResult, type RunSecretInputOptions } from "@narumitw/pi-tui-kit";\n` +
       `import { runConfirmation, type RunConfirmationResult } from "@narumitw/pi-tui-kit/confirmation";\n` +
       `import { runCustomInteraction, type RunCustomInteractionResult } from "@narumitw/pi-tui-kit/custom-interaction";\n` +
-      `import { runDocumentReview, type DocumentReviewConfirmation } from "@narumitw/pi-tui-kit/document-review";\n` +
+      `import { runDocumentReview, type DocumentReviewConfirmation, type DocumentCopyAction as FocusedCopyAction, type DocumentCopyContext as FocusedCopyContext } from "@narumitw/pi-tui-kit/document-review";\n` +
       `import { EditorStatusWidget } from "@narumitw/pi-tui-kit/editor-status-widget";\n` +
       `import { formatInteractionHints, type FormatInteractionHintsOptions, type InteractionHint, type InteractionKeybindings } from "@narumitw/pi-tui-kit/interaction-hints";\n` +
       `import { runLiveChoice, type RunLiveChoiceResult } from "@narumitw/pi-tui-kit/live-choice";\n` +
@@ -122,7 +122,7 @@ test("built package entrypoints resolve their documented exports", async (t) => 
       `import { hardWrapTerminalDocument, sanitizeTerminalDocument } from "@narumitw/pi-tui-kit/terminal-document";\n` +
       `import { sanitizeTerminalText } from "@narumitw/pi-tui-kit/terminal-text";\n` +
       `import { createRpcHarness, createTuiHarness } from "@narumitw/pi-tui-kit/testing";\n` +
-      `const version: 21 = PI_EXTENSION_MENU_API_VERSION;\n` +
+      `const version: 22 = PI_EXTENSION_MENU_API_VERSION;\n` +
       `const frame: import("@narumitw/pi-tui-kit").BoundedFrameOptions = { width: 20, maxRows: 3, rule: "─", title: [], content: ["row"] };\n` +
       `void (await import("@narumitw/pi-tui-kit")).renderBoundedFrame(frame);\n` +
       `const layout: import("@narumitw/pi-tui-kit").BoundedFrameLayout = (await import("@narumitw/pi-tui-kit")).renderBoundedFrameLayout(frame);\n` +
@@ -140,7 +140,9 @@ test("built package entrypoints resolve their documented exports", async (t) => 
       `const widget = new EditorStatusWidget(widgetOptions);\n` +
       `const rootWidget = new RootEditorStatusWidget(widgetOptions);\n` +
       `const markdown: ReviewFormat = { kind: "markdown", renderLatex: false, renderMermaid: true };\n` +
-      `const document: BrowseDetailDocument = { content: "# Formula\\n\\n$x^2$", format: markdown };\n` +
+      `const copy: DocumentCopyAction = { label: "Copy raw source", onCopy: async (context: DocumentCopyContext) => { const source: string = context.content; const id: string | undefined = context.itemId; const signal: AbortSignal = context.signal; void source; void id; void signal; } };\n` +
+      `const focusedCopy: FocusedCopyAction = copy; const focusedContext: FocusedCopyContext = { content: "raw", signal: new AbortController().signal }; void focusedCopy; void focusedContext;\n` +
+      `const document: BrowseDetailDocument = { content: "# Formula\\n\\n$x^2$", format: markdown, copy };\n` +
       `const item: MenuBrowseItem = { id: "one", label: "One", detailDocument: document };\n` +
       `const safeDocument = sanitizeTerminalDocument("one\\ntwo");\n` +
       `const wrappedDocument = hardWrapTerminalDocument(safeDocument, 20);\n` +
@@ -152,7 +154,7 @@ test("built package entrypoints resolve their documented exports", async (t) => 
       `const answer: QuestionnaireAnswer<"scope"> = { questionId: "scope", answer: "Small", wasCustom: false, optionIndex: 1 };\n` +
       `const questionnaireResult: RunQuestionnaireResult<"scope"> = { kind: "submitted", answers: [answer] };\n` +
       `const reviewConfirmation: DocumentReviewConfirmation = { label: "Apply" };\n` +
-      `const reviewOptions: RunDocumentReviewOptions = { title: "Review", content: "body", confirmation: reviewConfirmation };\n` +
+      `const reviewOptions: RunDocumentReviewOptions = { title: "Review", content: "body", confirmation: reviewConfirmation, copy };\n` +
       `const multiItem: MultiSelectItem<"read"> = { id: "read", label: "Read" };\n` +
       `const multiOptions: RunMultiSelectOptions<typeof multiItem> = { title: "Tools", items: [multiItem] };\n` +
       `const multiResult: RunMultiSelectResult<"read"> = { kind: "completed", selectedItemIds: ["read"] };\n` +

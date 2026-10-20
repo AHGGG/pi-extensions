@@ -98,6 +98,8 @@ export type {
   BrowseScreen,
   ChoiceScreen,
   DetailScreen,
+  DocumentCopyAction,
+  DocumentCopyContext,
   InputScreen,
   MenuActionContext,
   MenuActionHandler,
@@ -120,4 +122,4 @@ export type {
   SettingsScreen,
 } from "./types.js";
 
-export const PI_EXTENSION_MENU_API_VERSION = 21;
+export const PI_EXTENSION_MENU_API_VERSION = 22;
