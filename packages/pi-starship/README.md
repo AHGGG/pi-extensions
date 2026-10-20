@@ -99,6 +99,7 @@ format = "$model$directory$git_branch"
 style = "bold blue"
 ```
 
+Use `fg:pi:accent` to follow Pi's active theme; see [Pi theme colors](./skills/configure-pi-starship/references/configuration.md#pi-theme-colors).
 Provider, model, and thinking modules also accept ordered exact-match `style_rules`.
 For per-extension status colors, add `[extension_status.styles]` entries using raw Pi status keys (or `namespace:*`); unmatched statuses keep the module style.
 See [Configuration and format](./skills/configure-pi-starship/references/configuration.md) for examples and matching rules.

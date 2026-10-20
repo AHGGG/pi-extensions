@@ -1,10 +1,12 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ExtensionCommandContext, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { rgbColor, visibleWidth } from "@earendil-works/pi-tui";
 import { afterEach, expect, test, vi } from "vitest";
 import { createMockContext, createMockPi } from "../../../test/support.js";
 import type { StarshipCommandOptions } from "../src/commands.js";
+import type { ThemeColors } from "../src/format/theme-colors.js";
 import type { GitSnapshot, WorkspaceSnapshot } from "../src/modules/types.js";
 
 const readers = vi.hoisted(() => ({
@@ -41,7 +43,7 @@ afterEach(async () => {
   vi.resetAllMocks();
 });
 
-async function setup(document: string, width = 80) {
+async function setup(document: string, width = 80, initialColors?: ThemeColors) {
   const directory = mkdtempSync(join(tmpdir(), "starship-periodic-"));
   const previous = process.env.PI_CODING_AGENT_DIR;
   process.env.PI_CODING_AGENT_DIR = directory;
@@ -68,15 +70,24 @@ async function setup(document: string, width = 80) {
   let branchChange = () => {};
   const render = vi.fn();
   type Factory = Parameters<ExtensionContext["ui"]["setFooter"]>[0];
-  const footer = (context.footer as NonNullable<Factory>)({ requestRender: render } as never, {} as never, {
-    getGitBranch: () => null,
-    getAvailableProviderCount: () => 0,
-    getExtensionStatuses: () => new Map(),
-    onBranchChange: (callback) => {
-      branchChange = callback;
-      return unsubscribe;
+  let colors = initialColors;
+  const footer = (context.footer as NonNullable<Factory>)(
+    { requestRender: render } as never,
+    {
+      get colors() {
+        return colors;
+      },
+    } as never,
+    {
+      getGitBranch: () => null,
+      getAvailableProviderCount: () => 0,
+      getExtensionStatuses: () => new Map(),
+      onBranchChange: (callback) => {
+        branchChange = callback;
+        return unsubscribe;
+      },
     },
-  });
+  );
   cleanups.push(async () => {
     footer.dispose?.();
     await emit("session_shutdown");
@@ -87,6 +98,7 @@ async function setup(document: string, width = 80) {
   const entries = vi.spyOn((context.ctx as ExtensionContext).sessionManager, "getEntries");
   const branch = vi.spyOn((context.ctx as ExtensionContext).sessionManager, "getBranch");
   return {
+    settingsPath: join(directory, "pi-starship.toml"),
     mock,
     context,
     emit,
@@ -96,6 +108,10 @@ async function setup(document: string, width = 80) {
     branch,
     unsubscribe,
     branchChange: () => branchChange(),
+    setThemeColors(next: ThemeColors) {
+      colors = next;
+      footer.invalidate();
+    },
   };
 }
 
@@ -189,6 +205,50 @@ test("clock comparison follows wall-clock rollback and fresh host renders", asyn
   await vi.advanceTimersByTimeAsync(30_000);
   expect(h.render).not.toHaveBeenCalled();
   expect(h.footer.render(80).join("\n")).toContain("00:00");
+});
+
+test("footer and preview renders read the current callback theme after invalidation", async () => {
+  const first = { accent: rgbColor(1, 2, 3) } as ThemeColors;
+  const next = { accent: rgbColor(4, 5, 6) } as ThemeColors;
+  const document = "format = '[current](pi:accent)'\n";
+  const h = await setup(document, 80, first);
+  let options!: StarshipCommandOptions;
+  readers.command.mockImplementation((_args, _ctx, value) => {
+    options = value;
+  });
+  await h.mock.commands.get("starship")?.handler("", h.context.ctx);
+  const config = options.getLoaded();
+  expect(h.footer.render(80).join("\n")).toContain("38;2;1;2;3");
+  expect(options.renderPreview?.(config, 80, h.context.ctx).join("\n")).toContain("38;2;1;2;3");
+
+  h.setThemeColors(next);
+  for (const width of [0, 1, 3, 80]) {
+    const lines = h.footer.render(width);
+    expect(lines.every((line) => visibleWidth(line) <= width)).toBe(true);
+    if (width > 0) expect(lines.join("\n")).toContain("38;2;4;5;6");
+    expect(lines.join("\n")).not.toContain("38;2;1;2;3");
+  }
+  expect(options.renderPreview?.(config, 80, h.context.ctx).join("\n")).toContain("38;2;4;5;6");
+  const { normalizeConfig } = await import("../src/config.js");
+  const preview = { ...config, ...normalizeConfig({ format: "[preview](pi:accent)" }) };
+  options.preview?.(preview, h.context.ctx as ExtensionCommandContext);
+  expect(h.footer.render(80).join("\n")).toContain("38;2;4;5;6");
+  options.preview?.(undefined, h.context.ctx as ExtensionCommandContext);
+  expect(h.footer.render(80).join("\n")).toContain("38;2;4;5;6");
+  expect(readFileSync(h.settingsPath, "utf8")).toBe(document);
+});
+
+test("periodic comparison uses current theme colors instead of the previous render's colors", async () => {
+  const first = { accent: rgbColor(1, 2, 3) } as ThemeColors;
+  const next = { accent: rgbColor(4, 5, 6) } as ThemeColors;
+  const h = await setup("format = '$time'\n[time]\nstyle = 'pi:accent'\n", 80, first);
+  h.setThemeColors(next);
+  await vi.advanceTimersByTimeAsync(60_000);
+  expect(h.render).toHaveBeenCalledTimes(1);
+  expect(h.footer.render(80).join("\n")).toContain("38;2;4;5;6");
+  h.render.mockClear();
+  await vi.advanceTimersByTimeAsync(30_000);
+  expect(h.render).not.toHaveBeenCalled();
 });
 
 test("failed refreshes keep an already empty footer quiet", async () => {
