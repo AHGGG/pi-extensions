@@ -185,12 +185,12 @@ export function normalizeConfig(value: unknown): {
         }
         const palette: Record<string, string> = {};
         for (const [name, color] of Object.entries(paletteValue)) {
-          if (typeof color !== "string" || !parseColor(color.toLowerCase())) {
+          if (typeof color !== "string" || !parseColor(color)) {
             diagnostics.push(
               diagnostic(
                 "warning",
                 `palettes.${paletteName}.${name}`,
-                "Palette colors must be named, ANSI 0-255, or #RRGGBB",
+                "Palette colors must be named, ANSI 0-255, #RRGGBB, or pi:<role>",
               ),
             );
             continue;

@@ -2,9 +2,15 @@ import assert from "node:assert/strict";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { SourceMap } from "node:module";
 import { join } from "node:path";
-import { DefaultResourceLoader, SettingsManager } from "@earendil-works/pi-coding-agent";
+import {
+  DefaultResourceLoader,
+  type ExtensionCommandContext,
+  type ExtensionContext,
+  SettingsManager,
+} from "@earendil-works/pi-coding-agent";
 import { test } from "vitest";
 import { listFiles, registerRuntimeBuilderContract } from "../../../test/runtime-builder-contract.js";
+import { createMockContext } from "../../../test/support.js";
 
 const { packageRoot, loadBuilder } = registerRuntimeBuilderContract({
   packageId: "pi-starship",
@@ -87,7 +93,11 @@ test("generated runtime is loadable by Pi's Jiti resource loader", async () => {
     await mkdir(agentDir, { recursive: true });
     // The settings file is the representative boundary: reading it is the only
     // thing the runtime needs an external package for.
-    await writeFile(join(agentDir, "pi-starship.toml"), 'format = "$directory"\n', "utf8");
+    await writeFile(
+      join(agentDir, "pi-starship.toml"),
+      'format = "[theme](pi:accent)$directory"\n[directory]\nstyle = "fg:pi:selectedBg bg:pi:accent"\n',
+      "utf8",
+    );
     process.env.PI_CODING_AGENT_DIR = agentDir;
     const loader = new DefaultResourceLoader({
       cwd: root,
@@ -103,6 +113,20 @@ test("generated runtime is loadable by Pi's Jiti resource loader", async () => {
     assert.ok(extension?.commands.has("starship"));
     assert.ok(extension?.handlers.has("session_start"));
     assert.ok(extension?.handlers.has("session_shutdown"));
+    // Resolve a representative lazy chunk through Jiti, not a test-runner import.
+    const context = createMockContext({ mode: "rpc", hasUI: true });
+    loaded.runtime.getThinkingLevel = () => "off";
+    try {
+      for (const handler of extension.handlers.get("session_start") ?? []) {
+        await handler({ type: "session_start", reason: "startup" }, context.ctx as ExtensionContext);
+      }
+      await extension.commands.get("starship")?.handler("status", context.ctx as ExtensionCommandContext);
+      assert.match(context.notifications.at(-1)?.message ?? "", /source: user[\s\S]*warnings: none/u);
+    } finally {
+      for (const handler of extension.handlers.get("session_shutdown") ?? []) {
+        await handler({ type: "session_shutdown" }, context.ctx as ExtensionContext);
+      }
+    }
   } finally {
     if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
     else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
