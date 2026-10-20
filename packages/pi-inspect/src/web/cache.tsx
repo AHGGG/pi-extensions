@@ -1,5 +1,6 @@
 import { Heading } from "@radix-ui/themes";
 import type { CacheHistory, CacheRecord } from "../model.js";
+import { CacheTrend } from "./cache-trend.js";
 import "./cache.css";
 
 function numeric(value: number | null | undefined, suffix = ""): string {
@@ -164,26 +165,7 @@ export function Cache({ report, select }: { report?: CacheHistory; select(id: st
               <dd>{money(report.totals.estimatedSavings)}</dd>
             </div>
           </dl>
-          <Heading size="3">Hit-rate trend</Heading>
-          <p className="cache-note">
-            Latest {report.trend.length} conversational responses, oldest first. Unknown values stay unavailable; epoch
-            boundaries reset comparisons.
-          </p>
-          <ol className="cache-trend" aria-label="Conversational hit-rate trend">
-            {report.trend.map((point) => (
-              <li key={point.entryId}>
-                <span>{numeric(point.hitRatePercent, "%")}</span>
-                {point.hitRatePercent !== null && (
-                  <meter
-                    min={0}
-                    max={100}
-                    value={point.hitRatePercent}
-                    aria-label={`Hit rate ${numeric(point.hitRatePercent, "%")}`}
-                  />
-                )}
-              </li>
-            ))}
-          </ol>
+          <CacheTrend points={report.trend} select={select} />
           <Heading size="3">Recorded usage</Heading>
           <p>
             Showing {report.records.length} of {report.totalRecords} records · {report.omittedRecords} older records

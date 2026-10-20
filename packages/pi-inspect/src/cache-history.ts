@@ -225,7 +225,7 @@ export function cacheHistory(
     } else report.complete = false;
     if (message) {
       previous = { record, startedAt, provider, model };
-      report.trend.push({ entryId: record.entryId, hitRatePercent: record.hitRatePercent });
+      report.trend.push({ entryId: record.entryId, hitRatePercent: record.hitRatePercent, epoch: record.epoch });
       if (report.trend.length > TREND_LIMIT) report.trend.shift();
     }
     report.totalRecords++;
