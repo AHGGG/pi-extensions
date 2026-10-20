@@ -1,9 +1,11 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readdirSync, realpathSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { PI_EXTENSION_MENU_API_VERSION, resolveMenuScreen } from "@narumitw/pi-tui-kit";
 import { createTuiHarness } from "@narumitw/pi-tui-kit/testing";
 import { expect, test, vi } from "vitest";
 import { createMockContext } from "../../../test/support.js";
+import { createInitialShowcaseState, createShowcaseMenu } from "../scripts/showcase/menu.js";
 
 test("Pi Jiti loads the repository showcase and opens its lazy Kit menu", async (t) => {
   const agentDir = mkdtempSync(path.join(os.tmpdir(), "kit-showcase-smoke-"));
@@ -39,9 +41,41 @@ test("Pi Jiti loads the repository showcase and opens its lazy Kit menu", async 
   try {
     await tui.waitForOpen();
     expect(tui.render().join("\n")).toContain("Pi TUI Kit Showcase");
+    const main = resolveMenuScreen(
+      createShowcaseMenu({ requestStandalone() {} }),
+      "main",
+      createInitialShowcaseState(),
+    );
+    const runtimeIndex = main.kind === "actions" ? main.items.findIndex(({ id }) => id === "runtime") : -1;
+    expect(runtimeIndex).toBeGreaterThanOrEqual(0);
+    for (let index = 0; index < runtimeIndex; index += 1) tui.press("tui.select.down");
+    tui.press("tui.select.confirm");
+    await tui.waitForOpen();
+    // The Jiti-loaded runtime itself reports this native built identity.
+    const info = tui.render(180).join("\n");
+    expect(info).toContain(`Kit API version: ${PI_EXTENSION_MENU_API_VERSION}`);
+    expect(info).toContain(realpathSync(path.resolve("packages/pi-tui-kit/dist/index.js")));
+    expect(info).toMatch(/Kit version: \d+\.\d+\.\d+/u);
+    tui.press("tui.select.cancel");
+    await tui.waitForOpen();
+    tui.press("tui.select.down");
+    tui.press("tui.select.down");
+    tui.press("tui.select.confirm");
+    await tui.waitForOpen();
+    tui.type("synthetic-loader-secret");
+    const masked = tui.render().join("\n");
+    expect(masked).toContain("Synthetic secret only");
+    expect(masked).not.toContain("synthetic-loader-secret");
+    tui.press("tui.input.submit");
+    await tui.waitForOpen();
+    expect(tui.render().join("\n")).toContain("Pi TUI Kit Showcase");
     tui.press("ctrl+c");
     await running;
     expect(tui.isOpen).toBe(false);
+    const rpc = createMockContext({ mode: "rpc", hasUI: true });
+    await command.handler("", rpc.ctx);
+    expect(rpc.notifications[0]?.message).toContain("Run /tui-kit-showcase in TUI mode");
+    expect(readdirSync(agentDir)).not.toContain("settings.json");
   } finally {
     tui.dispose();
   }

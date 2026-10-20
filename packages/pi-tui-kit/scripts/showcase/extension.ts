@@ -16,6 +16,7 @@ export function createPiTuiKitShowcaseExtension(
     const loadRuntime = cachedModuleLoader(dependencies.loadRuntime ?? (() => import("./runtime.js")));
     let generation = 0;
     let owner = new AbortController();
+    let pendingCommand: Promise<void> | undefined;
 
     function replaceSessionOwner() {
       owner.abort();
@@ -28,11 +29,13 @@ export function createPiTuiKitShowcaseExtension(
       generation += 1;
     }
 
-    pi.on("session_start", () => {
+    pi.on("session_start", async () => {
       replaceSessionOwner();
+      await pendingCommand?.catch(() => {});
     });
-    pi.on("session_shutdown", () => {
+    pi.on("session_shutdown", async () => {
       abortSessionOwner();
+      await pendingCommand?.catch(() => {});
     });
 
     pi.registerCommand(COMMAND_NAME, {
@@ -46,14 +49,30 @@ export function createPiTuiKitShowcaseExtension(
           return;
         }
 
+        // A new command cancels and drains the previous interaction before it
+        // opens another custom component on the same host.
+        replaceSessionOwner();
         const commandGeneration = generation;
         const signal = owner.signal;
-        const runtime = await loadRuntime();
-        if (signal.aborted || commandGeneration !== generation) return;
-        await runtime.showTuiKitShowcase(ctx, {
-          signal,
-          isCurrent: () => !signal.aborted && commandGeneration === generation,
-        });
+        const isCurrent = () => !signal.aborted && commandGeneration === generation;
+        const previous = pendingCommand;
+        const running = (async () => {
+          await previous?.catch(() => {});
+          if (!isCurrent()) return;
+          try {
+            const runtime = await loadRuntime();
+            if (!isCurrent()) return;
+            await runtime.showTuiKitShowcase(ctx, { signal, isCurrent });
+          } catch (error) {
+            if (isCurrent()) throw error;
+          }
+        })();
+        pendingCommand = running;
+        try {
+          await running;
+        } finally {
+          if (pendingCommand === running) pendingCommand = undefined;
+        }
       },
     });
   };

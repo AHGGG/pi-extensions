@@ -1,7 +1,7 @@
 import { stripVTControlCharacters } from "node:util";
 import { resolveMenuScreen } from "@narumitw/pi-tui-kit";
 import { createTuiHarness } from "@narumitw/pi-tui-kit/testing";
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 import { createMockContext } from "../../../test/support.js";
 import extension, { createPiTuiKitShowcaseExtension } from "../scripts/showcase/extension.js";
 import { createInitialShowcaseState, createShowcaseMenu } from "../scripts/showcase/menu.js";
@@ -143,6 +143,85 @@ describe("Pi TUI Kit showcase", () => {
     expect(notifications).toEqual([
       "Pi TUI Kit Showcase is an interactive visual demo. Run /tui-kit-showcase in TUI mode.",
     ]);
+  });
+
+  test.each(["print", "json"])("rejects %s before loading any demo", async (mode) => {
+    const commands = new Map<string, ShowcaseCommand>();
+    const loadRuntime = vi.fn();
+    createPiTuiKitShowcaseExtension({ loadRuntime })({
+      registerCommand: (name: string, command: ShowcaseCommand) => commands.set(name, command),
+      on() {},
+    } as never);
+    await expect(commands.get("tui-kit-showcase")?.handler("", { mode, hasUI: false })).rejects.toThrow("TUI mode");
+    expect(loadRuntime).not.toHaveBeenCalled();
+  });
+
+  test("command reentry aborts and drains prior work before opening another demo", async () => {
+    const commands = new Map<string, ShowcaseCommand>();
+    const observations: Array<{ signal: AbortSignal; isCurrent(): boolean }> = [];
+    let release!: () => void;
+    let opened!: () => void;
+    const ready = new Promise<void>((resolve) => {
+      opened = resolve;
+    });
+    const drain = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const loadRuntime = vi.fn(async () => ({
+      showTuiKitShowcase: async (_ctx: unknown, options: { signal: AbortSignal; isCurrent(): boolean }) => {
+        observations.push(options);
+        if (observations.length === 1) {
+          opened();
+          await drain;
+        }
+      },
+    }));
+    createPiTuiKitShowcaseExtension({ loadRuntime })({
+      registerCommand: (name: string, command: ShowcaseCommand) => commands.set(name, command),
+      on() {},
+    } as never);
+    const command = commands.get("tui-kit-showcase");
+    const first = command?.handler("", { mode: "tui" });
+    await ready;
+    const second = command?.handler("", { mode: "tui" });
+    expect(observations[0].signal.aborted).toBe(true);
+    expect(observations[0].isCurrent()).toBe(false);
+    expect(observations).toHaveLength(1);
+    release();
+    await Promise.all([first, second]);
+    expect(observations).toHaveLength(2);
+    expect(observations[1].isCurrent()).toBe(true);
+    expect(loadRuntime).toHaveBeenCalledTimes(1);
+  });
+
+  test("session replacement during lazy load prevents the old menu from opening", async () => {
+    const commands = new Map<string, ShowcaseCommand>();
+    const events = new Map<string, () => Promise<void>>();
+    let release!: () => void;
+    let started!: () => void;
+    const ready = new Promise<void>((resolve) => {
+      started = resolve;
+    });
+    const delay = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const show = vi.fn();
+    createPiTuiKitShowcaseExtension({
+      loadRuntime: async () => {
+        started();
+        await delay;
+        return { showTuiKitShowcase: show };
+      },
+    })({
+      registerCommand: (name: string, command: ShowcaseCommand) => commands.set(name, command),
+      on: (name: string, handler: () => Promise<void>) => events.set(name, handler),
+    } as never);
+    const pending = commands.get("tui-kit-showcase")?.handler("", { mode: "tui" });
+    await ready;
+    const replacement = events.get("session_start")?.();
+    release();
+    await Promise.all([pending, replacement]);
+    expect(show).not.toHaveBeenCalled();
   });
 
   test("aborts command-owned showcase work on session shutdown", async () => {
