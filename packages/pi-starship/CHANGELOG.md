@@ -1,5 +1,12 @@
 # @narumitw/pi-starship
 
+## 0.60.0
+
+### Minor Changes
+
+- 8e0942f: Add `pi:<role>` color references for exact public Pi theme roles in styles and palette values. Foreground and background colors follow Pi theme switches and hot reload without reloading TOML, while style modifiers, fixed colors, defaults, and palette-key precedence remain unchanged. Invalid Pi roles report settings diagnostics in either color position.
+- e7f5df0: Add named TOML profiles with live selection previews, editing, switching, renaming, duplication, and deletion. Preserve replaced settings in recovery history and expose existing skill backups without changing the active settings path or command routes.
+
 ## 0.59.2
 
 ### Patch Changes
