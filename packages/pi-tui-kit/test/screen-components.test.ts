@@ -157,6 +157,26 @@ test("standard screens remain bounded and sanitize terminal controls", () => {
   }
 });
 
+test("standard screens render no content at zero or invalid widths and recover after resize", () => {
+  for (const screen of [actionScreen, detailScreen, choiceScreen, settingsScreen, multiSelectScreen]) {
+    const { component } = componentHarness(screen);
+    try {
+      for (const width of [0, -1, Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY]) {
+        assert.deepEqual(component.render(width), [], `${screen.kind} at ${width}`);
+      }
+      component.invalidate();
+      const lines = component.render(80);
+      assert.ok(lines.length > 0, screen.kind);
+      assert.ok(
+        lines.every((line) => visibleWidth(line) <= 80),
+        screen.kind,
+      );
+    } finally {
+      component.dispose?.();
+    }
+  }
+});
+
 test("action screens prioritize actionable rows when terminal height is constrained", () => {
   const screen: MenuScreen<ScreenId, ActionId> = {
     ...actionScreen,
