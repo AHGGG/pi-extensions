@@ -1,5 +1,19 @@
 # @narumitw/pi-btw
 
+## 0.62.0
+
+### Minor Changes
+
+- 7d15a96: Align the BTW workspace with native Pi input, prompt navigation, scrollbars, and cursor-first dock layout. Add a conflict-checked keyboard shortcut to switch panes. Keep effective key hints, native mouse editing, draft safeguards, and queue timing clear. Cancel and drain session-owned work on replacement and shutdown, and contain renderer cleanup and clipboard failures.
+
+### Patch Changes
+
+- d60fa4e: Bring the BTW conversation appearance closer to native Pi. Move side identity, model, thinking, focus, and concise key hints below the editor; match native working borders and message spacing while retaining cursor-first short layouts. Keep tools absent and preserve existing input, queue, lifecycle, and draft-safety behavior.
+- Updated dependencies [077137a]
+- Updated dependencies [9f80b89]
+- Updated dependencies [efc474c]
+  - @narumitw/pi-tui-kit@0.66.0
+
 ## 0.61.2
 
 ### Patch Changes

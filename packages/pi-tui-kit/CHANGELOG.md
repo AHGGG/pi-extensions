@@ -1,5 +1,22 @@
 # @narumitw/pi-tui-kit
 
+## 0.66.0
+
+### Minor Changes
+
+- 077137a: Add optional in-place full-source Copy to review screens, standalone document reviews, and exact browse-detail documents through consumer-owned callbacks.
+  
+  Preserve existing completion and confirmation contracts. Filter effective copy hints, keep search and standard actions first, drain accepted work on exit, and report retryable failures without exposing source-bearing callback errors. RPC never exposes or invokes Copy; no clipboard transport is included.
+- 9f80b89: Expose typed bounded-frame row mappings and configured-key canonicalization while retaining existing frame output and native input ownership.
+  
+  Use native fake-cursor markers for masked input so hardware-cursor mode does not draw a second cursor, and keep secret rendering within zero or invalid width bounds.
+  
+  New frame and key APIs are prepared before consumer adoption; protocol-overlap, global availability, and a second paste parser remain deferred.
+
+### Patch Changes
+
+- efc474c: Keep selected rows, descriptions, and empty-search guidance usable in clipped selectors. Omit interaction hints for keys owned by Pi's native host while preserving document-local search, editing, cancellation, and asynchronous settlement.
+
 ## 0.65.6
 
 ### Patch Changes

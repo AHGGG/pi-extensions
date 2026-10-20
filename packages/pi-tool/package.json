@@ -1,6 +1,6 @@
 {
   "name": "@narumitw/pi-tool",
-  "version": "0.3.2",
+  "version": "0.3.3",
   "description": "Browse configured Pi tools and optionally show the active tool set.",
   "type": "module",
   "license": "MIT",
