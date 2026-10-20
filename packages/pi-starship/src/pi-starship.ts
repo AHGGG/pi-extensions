@@ -265,12 +265,12 @@ export default function piStarship(pi: ExtensionAPI, options: PiStarshipOptions 
     workspaceController.start(generation);
     startGithubPr(target);
 
-    ctx.ui.setFooter((tui, _theme, footerData) => {
+    ctx.ui.setFooter((tui, theme, footerData) => {
       runtime.requestRender = () => tui.requestRender();
       runtime.renderPreview = (preview, width) => {
         const snapshot = runtimeSnapshot(ctx, footerData, runtime);
         return wrapFormattedStatusline(
-          renderStatusline(preview.config, snapshot, width, getCapabilities().trueColor).ansi,
+          renderStatusline(preview.config, snapshot, width, getCapabilities().trueColor, theme.colors).ansi,
           width,
         );
       };
@@ -310,6 +310,7 @@ export default function piStarship(pi: ExtensionAPI, options: PiStarshipOptions 
             { ...lastRender.snapshot, now },
             lastRender.width,
             getCapabilities().trueColor,
+            theme.colors,
           ).ansi,
           lastRender.width,
         );
@@ -346,7 +347,7 @@ export default function piStarship(pi: ExtensionAPI, options: PiStarshipOptions 
           if (!current) return [];
           const snapshot = runtimeSnapshot(ctx, footerData, runtime);
           const lines = wrapFormattedStatusline(
-            renderStatusline(current.config, snapshot, width, getCapabilities().trueColor).ansi,
+            renderStatusline(current.config, snapshot, width, getCapabilities().trueColor, theme.colors).ansi,
             width,
           );
           lastRender = { snapshot, lines, config: current.config, width };

@@ -10,6 +10,7 @@ import {
   type StyledChunk,
 } from "../format/style.js";
 import { sanitizeFormatText } from "../format/terminal-safety.js";
+import type { ThemeColors } from "../format/theme-colors.js";
 import { MODULE_DEFINITIONS, MODULE_NAMES, type ModuleName } from "./catalog.js";
 import { resolveStyleRule } from "./style-rules.js";
 import type { ModuleStyleContext, ModuleValueContext, RenderedStatusline, StarshipRuntimeSnapshot } from "./types.js";
@@ -19,6 +20,7 @@ export function renderStatusline(
   runtime: StarshipRuntimeSnapshot,
   width = 80,
   trueColor = true,
+  themeColors?: ThemeColors,
 ): RenderedStatusline<ModuleName> {
   const palette = activePalette(config);
   const modules = {} as Record<ModuleName, StyledChunk[]>;
@@ -66,7 +68,7 @@ export function renderStatusline(
   const layout = renderFormat(config.formatAst, { variables: rootVariables, palette });
   const chunks = resolveFillLayout(layout, width);
   return {
-    ansi: renderChunksToAnsi(chunks, trueColor),
+    ansi: renderChunksToAnsi(chunks, trueColor, themeColors),
     chunks,
     modules,
   };

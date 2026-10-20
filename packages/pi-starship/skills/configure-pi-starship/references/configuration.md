@@ -363,16 +363,17 @@ Style expressions support:
 
 - Named colors and ANSI numbers `0`–`255`.
 - Hex RGB (`#7aa2f7`), rendered as ANSI-256 when Pi's effective terminal capabilities disable true color.
+- `pi:<role>` references to exact public Pi theme colors; see [Pi theme colors](#pi-theme-colors).
 - `fg:<color>` and `bg:<color>`; an unprefixed color is foreground.
 - `bold`, `dimmed`, `italic`, `underline`, `blink`, `inverted`, `hidden`, and `strikethrough`.
 - `none` and `fg:none`, which make the complete expression unstyled regardless of position.
-- `bg:none`, which clears only the absolute background; an unknown `bg:<value>` has the same Starship-compatible reset behavior.
+- `bg:none`, which clears only the absolute background; an unknown legacy `bg:<value>` keeps the same Starship-compatible reset behavior, but an unknown `bg:pi:<role>` is invalid.
 - `prev_fg` and `prev_bg`, which use the previous rendered chunk's colors when present and retain any absolute foreground/background in the expression as the no-previous fallback.
 - Direct color names from one explicitly selected `[palettes.<name>]` table.
 
 There is no built-in or fallback palette.
-A custom palette is active only when its table is explicitly selected, and its values must be direct named, ANSI, or RGB colors—palette entries cannot reference other entries.
-Palette names override terminal color names such as `blue`:
+A custom palette is active only when its table is explicitly selected, and its values must be direct named, ANSI, RGB, or `pi:<role>` colors—palette entries cannot reference other entries.
+Palette keys override terminal color names such as `blue` and are checked before interpreting `pi:<role>`:
 
 ```toml
 palette = "company"
@@ -385,7 +386,9 @@ accent = "208"
 style = "bold blue"
 ```
 
-Style tokens are case-insensitive and ordinary foreground/background colors are last-wins.
+Existing style keywords and named colors remain case-insensitive, and palette-key matching keeps its existing behavior.
+Pi role names are case-sensitive and retain their exact spelling in direct styles and palette values.
+Ordinary foreground/background colors are last-wins.
 `prev_fg`/`prev_bg` override their absolute fallback only when a previous chunk exists.
 Empty styled groups still advance previous-color state.
 Invalid literal style expressions warn and render unstyled.
@@ -394,6 +397,56 @@ An invalid root format falls back to the built-in root format; an invalid module
 
 The background-free defaults are: `brand = "bold white"`, `provider`/`model` = `"bold blue"`, `thinking`/`git_branch`/`turn` = `"bold purple"`, `directory`/`git_worktree` = `"cyan bold"`, `github_pr = "bold blue"`, `git_commit = "green bold"`, `git_state`/`activity`/`time` = `"bold yellow"`, `git_status = "red bold"`, `tokens = "bold cyan"`, `cache = "bold green"`, `extension_status = "dimmed white"`, `direnv = "bold bright-yellow"`, and `fill = "bold black"`.
 Context, cost, Git metrics, and username use the state/multi-style defaults below.
+
+### Pi theme colors
+
+Use `pi:<role>` wherever a color is accepted: module style fields, literal format styles, `style_rules`, `display` styles, extension-status styles, and palette values.
+The role must be an exact public Pi `ThemeToken`, such as `accent`, `muted`, `thinkingHigh`, or `selectedBg`; preserve camelCase.
+Theme variables and HTML export colors are not public roles.
+
+```toml
+format = "$model$directory"
+
+[model]
+style = "bold fg:pi:accent bg:pi:selectedBg"
+
+[directory]
+style = "fg:pi:muted"
+```
+
+A reference supplies only a color through Pi's public `theme.colors` API, not the role's ANSI styling.
+Any role can supply either foreground or background: `bg:pi:accent` and `fg:pi:selectedBg` are valid regardless of the role's original slot.
+Modifiers remain independent: add `bold` or `dimmed` explicitly when needed; a role adds neither implicitly.
+For terminal-default roles, Pi supplies the terminal's reported default color or an appearance-based fallback when it is unavailable.
+For faint roles, Pi supplies a concrete approximation mixed toward the background, not an implicit dim modifier.
+Theme colors use ANSI-256 output when Pi's effective terminal capabilities disable true color.
+Arbitrary theme colors do not guarantee readable contrast when combined as foreground and background.
+
+Palette-key lookup takes precedence over role interpretation:
+
+```toml
+palette = "company"
+
+[palettes.company]
+"pi:accent" = "#ff0000"
+primary = "pi:accent"
+
+[model]
+style = "fg:pi:accent" # palette key wins: fixed red
+
+[directory]
+style = "fg:primary" # direct palette value: current Pi accent
+```
+
+Palette values resolve directly as colors, not as recursive aliases.
+Thus `primary = "pi:accent"` uses the Pi role even when the palette defines a `"pi:accent"` key.
+An unknown Pi role in either foreground or background, including `bg:pi:unknown`, produces a settings diagnostic and uses the owning field's [fallback behavior](#diagnostic-and-fallback-behavior); an invalid palette value is omitted.
+Validation does not rewrite the TOML file.
+Unknown legacy background colors still clear the background as described above.
+
+The footer and previews follow Pi theme switches and active theme hot reload without reloading TOML.
+Fixed named, ANSI, and RGB colors, built-in defaults, and presets remain unchanged; only explicit `pi:<role>` references follow the theme.
+To use the document with an older extension, replace these references with fixed colors before downgrading.
 
 ### Content-selected styles
 

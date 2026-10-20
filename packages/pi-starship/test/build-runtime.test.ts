@@ -2,7 +2,12 @@ import assert from "node:assert/strict";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { SourceMap } from "node:module";
 import { join } from "node:path";
-import { DefaultResourceLoader, SettingsManager } from "@earendil-works/pi-coding-agent";
+import {
+  DefaultResourceLoader,
+  type ExtensionCommandContext,
+  type ExtensionContext,
+  SettingsManager,
+} from "@earendil-works/pi-coding-agent";
 import { createTuiHarness } from "@narumitw/pi-tui-kit/testing";
 import { test } from "vitest";
 import { listFiles, registerRuntimeBuilderContract } from "../../../test/runtime-builder-contract.js";
@@ -92,7 +97,11 @@ test("generated runtime is loadable by Pi's Jiti resource loader", async () => {
     await mkdir(agentDir, { recursive: true });
     // The settings file is the representative boundary: reading it is the only
     // thing the runtime needs an external package for.
-    await writeFile(join(agentDir, "pi-starship.toml"), 'format = "$directory"\n', "utf8");
+    await writeFile(
+      join(agentDir, "pi-starship.toml"),
+      'format = "[theme](pi:accent)$directory"\n[directory]\nstyle = "fg:pi:selectedBg bg:pi:accent"\n',
+      "utf8",
+    );
     process.env.PI_CODING_AGENT_DIR = agentDir;
     const loader = new DefaultResourceLoader({
       cwd: root,
@@ -112,13 +121,16 @@ test("generated runtime is loadable by Pi's Jiti resource loader", async () => {
     loaded.runtime.getThinkingLevel = () => "off";
     const tui = createTuiHarness({ width: 80, rows: 24 });
     const context = createMockContext({ mode: "tui", hasUI: true, custom: tui.custom });
-    const emit = async (name: string) => {
-      for (const handler of extension.handlers.get(name) ?? []) await handler({}, context.ctx);
+    const emit = async (name: "session_start" | "session_shutdown") => {
+      const event = name === "session_start" ? { type: name, reason: "startup" } : { type: name };
+      for (const handler of extension.handlers.get(name) ?? []) await handler(event, context.ctx as ExtensionContext);
     };
     await emit("session_start");
     try {
       const command = extension.commands.get("starship");
       assert.ok(command);
+      await command.handler("status", { ...(context.ctx as ExtensionCommandContext), mode: "rpc" });
+      assert.match(context.notifications.at(-1)?.message ?? "", /source: user[\s\S]*warnings: none/u);
       // Resolve and exercise the generated command/profile chunks through Jiti, not Vitest imports.
       const running = command.handler("", context.ctx);
       try {
