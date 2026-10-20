@@ -95,7 +95,7 @@ export async function importSettingsGist(
   const initialDisk = readConfigDocumentSnapshot(options.settingsPath);
   const guardedOwner: WorkflowOwner = {
     signal: owner.signal,
-    isSessionCurrent: () => !owner.signal.aborted && (owner.isSessionCurrent?.() ?? owner.isCurrent()),
+    isSessionCurrent: () => owner.isSessionCurrent?.() ?? owner.isCurrent(),
     isCurrent: () =>
       current(owner) &&
       options.getLoadedRevision?.() === revision &&

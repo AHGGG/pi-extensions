@@ -21,7 +21,7 @@ const RELOAD_ACTIONS = {
 export interface WorkflowOwner {
   signal: AbortSignal;
   isCurrent(): boolean;
-  /** Session ownership without candidate/revision guards invalidated by this workflow's own commit. */
+  /** Session ownership independent of command cancellation and candidate/revision guards. */
   isSessionCurrent?(): boolean;
 }
 

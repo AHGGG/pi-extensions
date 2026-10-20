@@ -86,7 +86,7 @@ export async function handleStarshipCommand(
   const owner: WorkflowOwner = {
     signal,
     isCurrent: () => !signal.aborted && base.isCurrent(),
-    isSessionCurrent: () => !signal.aborted && (base.isSessionCurrent?.() ?? base.isCurrent()),
+    isSessionCurrent: () => base.isSessionCurrent?.() ?? base.isCurrent(),
   };
   // Pi delivers bracketed paste as one framed packet. Exact key matching does
   // not treat controls inside pasted text as cancellation or consume native input.
@@ -447,11 +447,11 @@ async function choosePreset(
     },
   });
   if (!commitOwnerCurrent(options, owner, expected)) {
-    options.preview?.(undefined, ctx);
+    clearSessionPreview(ctx, options, owner);
     return "cancel";
   }
   if (selection.kind === "back" || selection.kind === "close") {
-    options.preview?.(undefined, ctx);
+    clearSessionPreview(ctx, options, owner);
     return selection.kind === "close" ? "close" : "cancel";
   }
 
@@ -470,7 +470,7 @@ async function choosePreset(
       owner,
     );
   } finally {
-    options.preview?.(undefined, ctx);
+    clearSessionPreview(ctx, options, owner);
   }
 }
 
@@ -749,6 +749,10 @@ function isCurrentOwner(owner: WorkflowOwner): boolean {
 
 function isSessionOwnerCurrent(owner: WorkflowOwner): boolean {
   return !owner.signal.aborted && (owner.isSessionCurrent?.() ?? owner.isCurrent());
+}
+
+function clearSessionPreview(ctx: ExtensionCommandContext, options: StarshipCommandOptions, owner: WorkflowOwner) {
+  if (owner.isSessionCurrent?.() ?? owner.isCurrent()) options.preview?.(undefined, ctx);
 }
 
 function captureExpectation(

@@ -79,7 +79,7 @@ export async function saveAsProfile(
     flow.ensure();
     return saved;
   } catch (error) {
-    if (!flow.sessionCurrent()) return "close";
+    if (flow.signal.aborted || !flow.sessionCurrent()) return "close";
     report(ctx, flow, error);
     return undefined;
   } finally {
@@ -401,7 +401,7 @@ async function applyReviewedCandidate(
       signal: flow.signal,
       // The shared commit policy captures the active revision before applying.
       // A successful apply changes it; session ownership must remain valid after it.
-      isCurrent: flow.sessionCurrent,
+      isCurrent: () => !flow.signal.aborted && flow.sessionCurrent(),
       isSessionCurrent: flow.sessionCurrent,
     },
     () => flow.ensure(document),
@@ -507,8 +507,9 @@ function createFlow(ctx: ExtensionCommandContext, options: StarshipCommandOption
     if (!previewOwned) return;
     previewOwned = false;
     // The session owner, not a captured footer snapshot, decides whether cleanup
-    // can touch the UI. Runtime lifecycle cleanup owns a replaced session.
-    if (owner.isCurrent()) {
+    // can touch the UI, even after command cancellation. Runtime lifecycle
+    // cleanup owns a replaced session.
+    if (owner.isSessionCurrent?.() ?? owner.isCurrent()) {
       try {
         options.preview?.(undefined, ctx);
       } catch (error) {
@@ -546,7 +547,7 @@ function createFlow(ctx: ExtensionCommandContext, options: StarshipCommandOption
   return {
     signal,
     current: isCurrent,
-    sessionCurrent: () => !signal.aborted && (owner.isSessionCurrent?.() ?? owner.isCurrent()),
+    sessionCurrent: () => owner.isSessionCurrent?.() ?? owner.isCurrent(),
     ensure,
     preview(loaded: LoadedStarshipConfig | undefined) {
       ensure();
