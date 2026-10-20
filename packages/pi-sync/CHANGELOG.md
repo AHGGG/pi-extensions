@@ -1,5 +1,15 @@
 # @narumitw/pi-sync
 
+## 0.57.2
+
+### Patch Changes
+
+- 9f80b89: Use native fake-cursor markers for masked credential input and normalize unusable render widths without changing secret editing, validation, cancellation, or storage policy.
+- Updated dependencies [077137a]
+- Updated dependencies [9f80b89]
+- Updated dependencies [efc474c]
+  - @narumitw/pi-tui-kit@0.66.0
+
 ## 0.57.1
 
 ### Patch Changes
