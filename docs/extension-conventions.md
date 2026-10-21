@@ -213,9 +213,12 @@ Use the same frame for direct command routes and their main-menu actions.
   documentation, tests, tooling, and path migrations may omit a changeset. Keep Changesets `fixed`
   and `linked` groups empty. **Verification:** `Review` of release intent and the Changesets status,
   version PR, or package-specific release as applicable.
-- **MUST:** Publish a new `pi-tui-kit` API before an extension raises its compatibility floor to use
-  that API; do not release an unpublished Kit API and its first consumer together.
-  **Verification:** `Review` of npm availability and the consumer dependency floor.
+- **MUST:** Set each consumer's dependency floor to include every Kit API it uses. A new Kit API
+  and its consumers may share one Version PR and release batch only when Kit publishes first and its
+  exact registry tarball is available before dependent publication. Block dependent publication when
+  Kit publication, artifact verification, or availability checks fail.
+  **Verification:** `Test` of version propagation, publish ordering, failure, and retry fixtures;
+  `Review` of the release plan and consumer dependency floors.
 - **MUST:** Keep package contents aligned with the manifest's `files` list and include required
   notices and licenses. **Verification:** `Smoke` with `npm pack --workspace <name> --dry-run --json`
   for package or publishing changes.
