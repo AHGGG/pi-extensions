@@ -14,6 +14,7 @@ import { abortable } from "./abortable.js";
 import { createCheckpointDetails, fallbackSummary, latestCheckpoint, parseCheckpointDetails } from "./checkpoint.js";
 import { checkpointKeptMessages, projectSessionCheckpointContext } from "./checkpoint-projection.js";
 import { compactionBindingChanges, resolveCompactionBinding, sameCompactionBinding } from "./compaction-binding.js";
+import { fingerprintJsonSequence } from "./compaction-fingerprint.js";
 import { activeTools, type CompactionAttempt, compactRemotely } from "./compaction-operation.js";
 import { captureCompactionBranch } from "./compaction-ownership.js";
 import { type RemoteCompactionProtocol, resolveCompactionRoute } from "./model-api.js";
@@ -31,19 +32,20 @@ export function captureWarmCompactionBranch(
     onInvalid?.(reason);
     return false;
   };
-  const prefix = JSON.stringify(snapshot);
+  const length = snapshot.length;
+  const prefix = fingerprintJsonSequence(snapshot);
   const leafId = snapshot.at(-1)?.id ?? null;
   const snapshotIds = new Set(snapshot.map((entry) => entry.id));
-  const projected = JSON.stringify(
+  const projected = fingerprintJsonSequence(
     buildSessionProjection(snapshot, leafId).entries.map(({ sourceEntry, messages }) => [sourceEntry.id, messages]),
   );
   return (entries) => {
-    if (entries.length < snapshot.length) return invalid("session branch no longer contains the full snapshot");
-    if (JSON.stringify(entries.slice(0, snapshot.length)) !== prefix)
+    if (entries.length < length) return invalid("session branch no longer contains the full snapshot");
+    if (fingerprintJsonSequence(entries.slice(0, length)) !== prefix)
       return invalid("persisted snapshot entries changed");
     const ids = new Set(snapshotIds);
     let parentId = leafId;
-    for (const entry of entries.slice(snapshot.length)) {
+    for (const entry of entries.slice(length)) {
       if (entry.parentId !== parentId) return invalid("appended session ancestry is discontinuous");
       if (ids.has(entry.id)) return invalid("appended session entry ID is duplicated");
       ids.add(entry.id);
@@ -57,7 +59,7 @@ export function captureWarmCompactionBranch(
     const currentPrefix = buildSessionProjection(entries, parentId)
       .entries.filter(({ sourceEntry }) => snapshotIds.has(sourceEntry.id))
       .map(({ sourceEntry, messages }) => [sourceEntry.id, messages]);
-    return JSON.stringify(currentPrefix) === projected || invalid("projected snapshot prefix changed");
+    return fingerprintJsonSequence(currentPrefix) === projected || invalid("projected snapshot prefix changed");
   };
 }
 
@@ -75,7 +77,6 @@ export interface WarmCompactionJob {
   controller: AbortController;
   attempt: CompactionAttempt;
   promise: Promise<CompactionResult>;
-  snapshot: SessionEntry[];
   snapshotLeafId: string;
   state: "Preparing" | "Ready" | "Failed";
   promptAndToolsTokens: number;
@@ -120,10 +121,13 @@ export function startWarmCompaction(
     (usage.tokens / usage.contextWindow) * 100 < settings.asyncThresholdPercent
   )
     return undefined;
-  // Session entries are mutable references. Only persisted JSON values belong to this job.
-  const snapshot = JSON.parse(JSON.stringify(ctx.sessionManager.getBranch())) as SessionEntry[];
+  // Borrow the ancestry for projection, not a second copy of all historical payloads.
+  // Guards capture persisted-value digests before any await; compactRemotely isolates
+  // only the active provider input. Ready jobs retain no copied raw history or
+  // serialized history prefix (Pi still owns the original session entries).
+  const snapshot = ctx.sessionManager.getBranch();
   // Pi recreates label entries with new IDs when forking. Persist a stable
-  // non-label cutoff; keep every raw entry in the live ownership snapshot.
+  // non-label cutoff; guard every raw entry, including trailing labels.
   const snapshotLeafId = [...snapshot].reverse().find((entry) => entry.type !== "label")?.id;
   const projection = buildSessionProjection(snapshot, snapshotLeafId ?? null);
   const first = projection.entries.find(({ messages }) => messages.some((message) => message.role !== "system"));
@@ -191,7 +195,6 @@ export function startWarmCompaction(
   const job: WarmCompactionJob = {
     controller,
     attempt,
-    snapshot,
     snapshotLeafId,
     state: "Preparing",
     isCurrent,
@@ -365,7 +368,9 @@ export async function warmCompactionDraft(
   job.validationFailure = undefined;
   job.applicationFailure = undefined;
   if (job.state !== "Ready") return reject("checkpoint is not ready");
-  const entries = JSON.parse(JSON.stringify(ctx.sessionManager.getBranch())) as SessionEntry[];
+  // No code below mutates these entries. Digest guards reject in-place mutations
+  // and any appended entries across auth/application awaits before using them.
+  const entries = ctx.sessionManager.getBranch();
   // Keep the newest visible raw message as the native anchor. Adoption moves
   // this cut earlier if needed to retain every uncovered suffix message. Do not
   // use projection order: older summaries precede physically earlier messages.
@@ -379,7 +384,7 @@ export async function warmCompactionDraft(
   );
   const first = [...entries].reverse().find((entry) => visible.has(entry.id));
   if (!first) return reject("no visible retained-message anchor");
-  const branch = JSON.stringify(entries);
+  const branch = fingerprintJsonSequence(entries);
   const adoption = await adoptWarmCompaction(
     job,
     {
@@ -401,13 +406,13 @@ export async function warmCompactionDraft(
     ctx,
     runtime,
     signal,
-    () => isCurrent() && JSON.stringify(ctx.sessionManager.getBranch()) === branch,
+    () => isCurrent() && fingerprintJsonSequence(ctx.sessionManager.getBranch()) === branch,
   );
   if (
     signal.aborted ||
     !isCurrent() ||
     !job.isCurrent() ||
-    JSON.stringify(ctx.sessionManager.getBranch()) !== branch ||
+    fingerprintJsonSequence(ctx.sessionManager.getBranch()) !== branch ||
     adoption.kind !== "ready" ||
     !adoption.result ||
     !("compaction" in adoption.result) ||

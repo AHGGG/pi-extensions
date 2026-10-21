@@ -224,7 +224,12 @@ export async function compactRemotely(
     const current = projectedCurrentMessages(event, model, route);
     const context: Context = {
       systemPrompt: ctx.getSystemPrompt(),
-      messages: convertToLlm(current.messages),
+      // Background jobs borrow raw ancestry under persisted-value guards. Keep
+      // provider-owned input isolated from later live-entry mutations, but copy
+      // only the projected messages, not historical payloads already compacted out.
+      messages: convertToLlm(
+        options.background ? (JSON.parse(JSON.stringify(current.messages)) as AgentMessage[]) : current.messages,
+      ),
       tools: activeTools(pi),
     };
     const response = await abortable(
