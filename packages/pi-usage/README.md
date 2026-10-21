@@ -296,6 +296,11 @@ An absent or incompatible peer preserves standalone fallback and fail-closed mis
 - Fast model support is intentionally conservative and may require an extension update when Codex adds or removes service tiers.
 - Another later-loaded extension can replace the final provider payload, so arbitrary third-party payload-rewrite conflicts cannot be prevented.
 
+## Read-only extension API
+
+Other extensions can use the [read-only usage API v1](./docs/api/usage-v1.md) through `pi.events` to query reports and capabilities or receive invalidation notifications, without importing this extension.
+Use `refresh: true` to obtain a report: cache-only queries currently return `cache-miss` because Pi cannot prove effective runtime auth identity without potentially doing network work. No client helper is exported.
+
 ## 🗂️ Package layout
 
 ```text
