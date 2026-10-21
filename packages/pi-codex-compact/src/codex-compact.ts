@@ -16,6 +16,8 @@ import {
 import { projectSessionCheckpointContext } from "./checkpoint-projection.js";
 import { rewriteCheckpointForWork } from "./checkpoint-replay.js";
 import { type CompactionAttempt, compactRemotely } from "./compaction-operation.js";
+import { captureExactCompactionBranch } from "./compaction-ownership.js";
+import { CompactionTimings } from "./compaction-timing.js";
 import { type RemoteCompactionProtocol, resolveCompactionRoute } from "./model-api.js";
 import { hasCheckpointMarker } from "./protocol.js";
 import { RejectedRoutes, rejectionRouteKey } from "./rejection-state.js";
@@ -77,7 +79,7 @@ export function createCodexCompactExtension(
       warmPauseReason?: string;
       warmGeneration: number;
       compactionPending?: boolean;
-      boundaryCheckpoint?: { job: WarmCompactionJob; checkpointId: string };
+      boundaryCheckpoint?: { job: WarmCompactionJob; checkpointId: string; timing?: string };
       autoApply?: { job: WarmCompactionJob; done: Promise<void>; cancelled?: boolean };
       run?: ContinuationRun;
       lastRoute?: { key: string; protocol: RemoteCompactionProtocol };
@@ -182,6 +184,7 @@ export function createCodexCompactExtension(
       pending.job.controller.abort();
       ctx.ui.setStatus(STATUS_KEY, undefined);
       logCompaction(ctx, "Actual compaction completed: checkpoint committed at the turn boundary.");
+      if (pending.timing) logCompaction(ctx, pending.timing);
     };
 
     const stopWarmPreparation = (ctx: ExtensionContext) => {
@@ -383,10 +386,17 @@ export function createCodexCompactExtension(
         stopWarmPreparation(ctx);
         return;
       }
-      if (owner.warm && !owner.warm.isCurrent()) cancelWarm(ctx);
+      const previous = owner.warm;
+      const timings =
+        previous?.state === "Ready" && ctx.hasUI && settingsRuntime.get().settings.logCompaction
+          ? new CompactionTimings()
+          : undefined;
+      if (previous && !(timings ? timings.measure("validation", () => previous.isCurrent()) : previous.isCurrent()))
+        cancelWarm(ctx);
       const job = owner.warm;
-      const boundaryBranch = JSON.stringify(ctx.sessionManager.getBranch());
-      const canApply = () => {
+      // This callback is deliberately cheap: adoption owns the full snapshot and
+      // exact-boundary checks. Do not nest heavy validation inside that validator.
+      const ownsApplication = () => {
         const settings = settingsRuntime.get().settings;
         return (
           settings.enabled &&
@@ -395,8 +405,6 @@ export function createCodexCompactExtension(
           !owner.warmPauseReason &&
           owners.get(ctx.sessionManager) === owner &&
           owner.warm === job &&
-          !!job?.isCurrent() &&
-          JSON.stringify(ctx.sessionManager.getBranch()) === boundaryBranch &&
           !owner.controller.signal.aborted &&
           !ctx.signal?.aborted &&
           !owner.operation &&
@@ -406,35 +414,56 @@ export function createCodexCompactExtension(
       };
       if (
         job?.state === "Ready" &&
-        canApply() &&
+        ownsApplication() &&
         !autoApplyAttempts.has(job) &&
         !(event.entries ?? []).some((entry) => entry.type === "compaction" || entry.type === "context_edit")
       ) {
         autoApplyAttempts.add(job);
-        const draft = await warmCompactionDraft(
-          job,
-          ctx,
-          settingsRuntime,
-          AbortSignal.any([owner.controller.signal, ...(ctx.signal ? [ctx.signal] : [])]),
-          canApply,
-        ).catch(() => {
-          if (canApply()) job.applicationFailure = "automatic checkpoint validation failed";
-          return undefined;
-        });
-        if (draft && canApply()) {
-          const details = parseCheckpointDetails(draft.details);
-          if (details) {
-            owner.boundaryCheckpoint = { job, checkpointId: details.checkpointId };
-            logCompaction(ctx, "Actual compaction is reusing the async checkpoint at the turn boundary.");
-            return { entries: [...(event.entries ?? []), draft] };
+        let draftReturned = false;
+        try {
+          const captureBoundary = () => captureExactCompactionBranch(ctx.sessionManager.getBranch());
+          const exactBranchIsCurrent = timings ? timings.measure("boundary", captureBoundary) : captureBoundary();
+          const validate = () =>
+            ownsApplication() && job.isCurrent() && exactBranchIsCurrent(ctx.sessionManager.getBranch());
+          let draft: Awaited<ReturnType<typeof warmCompactionDraft>>;
+          let failed = false;
+          try {
+            draft = await warmCompactionDraft(
+              job,
+              ctx,
+              settingsRuntime,
+              AbortSignal.any([owner.controller.signal, ...(ctx.signal ? [ctx.signal] : [])]),
+              ownsApplication,
+              { exactBranchIsCurrent, timings },
+            );
+          } catch {
+            failed = true;
           }
+          // Notify before the final guard: host UI/settings callbacks may reenter.
+          if (draft) logCompaction(ctx, "Actual compaction is reusing the async checkpoint at the turn boundary.");
+          // Fresh after the draft await, then reused only within this synchronous
+          // phase. Neither IDs, object identity nor a microtask cache is sufficient.
+          const applicable = timings ? timings.measure("validation", validate) : validate();
+          if (failed && applicable) job.applicationFailure = "automatic checkpoint validation failed";
+          if (draft && applicable) {
+            const details = parseCheckpointDetails(draft.details);
+            if (details) {
+              owner.boundaryCheckpoint = { job, checkpointId: details.checkpointId, timing: timings?.message() };
+              draftReturned = true;
+              return { entries: [...(event.entries ?? []), draft] };
+            }
+          }
+          if (job.applicationFailure && applicable) pauseWarm(ctx, owner, job.applicationFailure);
+          // A cancelled wait/toggle preserves valid prepared work. A completed
+          // validation failure discards the candidate without starting inference.
+          if (!ctx.signal?.aborted && owner.warm === job && settingsRuntime.get().settings.asyncAutoApply)
+            cancelWarm(ctx);
+          return;
+        } finally {
+          // A notification can invoke host callbacks. Report successful timing
+          // only after commit, never add such a callback after the final guard.
+          if (timings && !draftReturned) logCompaction(ctx, timings.message());
         }
-        if (job.applicationFailure && canApply()) pauseWarm(ctx, owner, job.applicationFailure);
-        // A cancelled wait/toggle preserves valid prepared work. A completed
-        // validation failure discards the candidate without starting inference.
-        if (!ctx.signal?.aborted && owner.warm === job && settingsRuntime.get().settings.asyncAutoApply)
-          cancelWarm(ctx);
-        return;
       }
       if (owner.warmPauseReason || owner.warm || owner.operation || owner.controller.signal.aborted) return;
       let warm: WarmCompactionJob | undefined;

@@ -16,7 +16,8 @@ import { checkpointKeptMessages, projectSessionCheckpointContext } from "./check
 import { compactionBindingChanges, resolveCompactionBinding, sameCompactionBinding } from "./compaction-binding.js";
 import { fingerprintJsonSequence } from "./compaction-fingerprint.js";
 import { activeTools, type CompactionAttempt, compactRemotely } from "./compaction-operation.js";
-import { captureCompactionBranch } from "./compaction-ownership.js";
+import { captureCompactionBranch, captureExactCompactionBranch } from "./compaction-ownership.js";
+import type { CompactionTimings } from "./compaction-timing.js";
 import { type RemoteCompactionProtocol, resolveCompactionRoute } from "./model-api.js";
 import { type RejectedRoutes, rejectionRouteKey } from "./rejection-state.js";
 import { type CodexCompactSettingsRuntime, compactionSettingsKey } from "./settings.js";
@@ -234,6 +235,12 @@ export type WarmCompactionAdoption =
   | { kind: "failed"; attempt: CompactionAttempt }
   | { kind: "ready"; result: CompactionResult };
 
+interface WarmCompactionApplicationOptions {
+  /** Exact raw-entry guard shared by the serialized boundary, never a cached verdict. */
+  exactBranchIsCurrent?: (entries: SessionEntry[]) => boolean;
+  timings?: CompactionTimings;
+}
+
 /** Wait only for the existing request's deadline; do not start a second request. */
 export async function adoptWarmCompaction(
   job: WarmCompactionJob,
@@ -242,15 +249,18 @@ export async function adoptWarmCompaction(
   runtime: CodexCompactSettingsRuntime,
   operationSignal: AbortSignal,
   isCurrent: () => boolean,
+  options: WarmCompactionApplicationOptions = {},
 ): Promise<WarmCompactionAdoption> {
   const signal = AbortSignal.any([event.signal, operationSignal]);
-  const adoptionBranchIsCurrent = captureCompactionBranch(event.branchEntries);
+  // Exact equality is stronger than the foreground guard (which allows harmless
+  // bookkeeping descendants). Reuse its captured digest, not an earlier verdict.
+  const adoptionBranchIsCurrent = options.exactBranchIsCurrent ?? captureCompactionBranch(event.branchEntries);
   const stale = (reason: string, failure = false): WarmCompactionAdoption => {
     job.validationFailure = reason;
     if (failure) job.applicationFailure = reason;
     return { kind: "stale" };
   };
-  const valid = () => {
+  const validate = () => {
     if (signal.aborted) return false;
     if (!isCurrent()) {
       job.validationFailure ??= "application ownership or boundary changed";
@@ -263,6 +273,7 @@ export async function adoptWarmCompaction(
     }
     return true;
   };
+  const valid = () => (options.timings ? options.timings.measure("validation", validate) : validate());
   if (signal.aborted) return { kind: "cancel" };
   if (!valid()) return { kind: "stale" };
   const cancel = () => {
@@ -274,7 +285,8 @@ export async function adoptWarmCompaction(
     // lookup here could hide its deadline; validate once before using the result.
     let result: CompactionResult;
     try {
-      result = await abortable(job.promise, signal);
+      const pending = abortable(job.promise, signal);
+      result = await (options.timings ? options.timings.wait("preparedWait", () => pending) : pending);
     } catch {
       return signal.aborted ? { kind: "cancel" } : stale("prepared checkpoint promise failed", valid());
     }
@@ -283,7 +295,10 @@ export async function adoptWarmCompaction(
     if (!ctx.model) return stale("active model is unavailable");
     let binding: Awaited<ReturnType<typeof resolveCompactionBinding>>;
     try {
-      binding = await abortable(resolveCompactionBinding(ctx, ctx.model, runtime.get().settings, valid), signal);
+      binding = await abortable(
+        resolveCompactionBinding(ctx, ctx.model, runtime.get().settings, valid, options.timings),
+        signal,
+      );
     } catch {
       return signal.aborted
         ? { kind: "cancel" }
@@ -296,57 +311,62 @@ export async function adoptWarmCompaction(
     if (job.attempt.failure) return { kind: "failed", attempt: job.attempt };
     if (!result || !("compaction" in result) || !result.compaction)
       return stale("prepared checkpoint result is unavailable", true);
-    const entries = event.branchEntries;
-    if (!completeToolPairs(buildSessionContext(entries).messages))
-      return stale("session contains an unmatched tool call");
-    const cutoffIndex = entries.findIndex((entry) => entry.id === job.snapshotLeafId);
-    if (cutoffIndex < 0) return stale("snapshot cutoff is absent from the session");
-    const leafId = entries.at(-1)?.id ?? null;
-    const projection = buildSessionProjection(entries, leafId);
-    const suffixIds = new Set(entries.slice(cutoffIndex + 1).map((entry) => entry.id));
-    const suffix = projection.entries.filter(({ sourceEntry }) => suffixIds.has(sourceEntry.id));
-    const nativeCutIndex = entries.findIndex((entry) => entry.id === event.preparation.firstKeptEntryId);
-    if (nativeCutIndex < 0) return stale("retained-message cut point is absent from the session");
-    const firstSuffix = suffix.find(({ messages }) => messages.length > 0);
-    const firstKeptEntryId =
-      firstSuffix && entries.findIndex((entry) => entry.id === firstSuffix.sourceEntry.id) < nativeCutIndex
-        ? firstSuffix.sourceEntry.id
-        : event.preparation.firstKeptEntryId;
-    const details = parseCheckpointDetails(result.compaction.details);
-    if (!details) return stale("prepared checkpoint details are invalid", true);
-    // A large untouched tail can erase the benefit. Use the current-history foreground
-    // path instead of truncating it or immediately overflowing the adopted checkpoint.
-    const replacementTokens = Math.ceil(JSON.stringify(details.replacementHistory).length / 4);
-    const suffixTokens = suffix
-      .flatMap(({ messages }) => messages)
-      .reduce((sum, message) => sum + estimateTokens(message), 0);
-    const estimatedTokens = replacementTokens + suffixTokens + job.promptAndToolsTokens;
-    if (estimatedTokens >= ctx.model.contextWindow - event.preparation.settings.reserveTokens) {
-      const number = (value: number) => (Number.isFinite(value) ? String(value) : "unknown");
-      return stale(
-        `token budget exceeded (estimated=${number(estimatedTokens)}, replacement=${number(replacementTokens)}, suffix=${number(suffixTokens)}, prompt/tools=${number(job.promptAndToolsTokens)}, context=${number(ctx.model.contextWindow)}, reserve=${number(event.preparation.settings.reserveTokens)})`,
-        true,
-      );
-    }
-    let keptMessages: AgentMessage[];
+    const rebindStarted = performance.now();
     try {
-      keptMessages = checkpointKeptMessages(entries, leafId, firstKeptEntryId, job.snapshotLeafId);
-    } catch {
-      return stale("retained-message ancestry or snapshot projection validation failed", true);
-    }
-    const adopted = createCheckpointDetails({ ...details, keptMessages, snapshotLeafId: job.snapshotLeafId });
-    return {
-      kind: "ready",
-      result: {
-        compaction: {
-          ...result.compaction,
-          details: adopted,
-          summary: fallbackSummary(adopted.checkpointId),
-          firstKeptEntryId,
-          tokensBefore: event.preparation.tokensBefore,
+      const entries = event.branchEntries;
+      if (!completeToolPairs(buildSessionContext(entries).messages))
+        return stale("session contains an unmatched tool call");
+      const cutoffIndex = entries.findIndex((entry) => entry.id === job.snapshotLeafId);
+      if (cutoffIndex < 0) return stale("snapshot cutoff is absent from the session");
+      const leafId = entries.at(-1)?.id ?? null;
+      const projection = buildSessionProjection(entries, leafId);
+      const suffixIds = new Set(entries.slice(cutoffIndex + 1).map((entry) => entry.id));
+      const suffix = projection.entries.filter(({ sourceEntry }) => suffixIds.has(sourceEntry.id));
+      const nativeCutIndex = entries.findIndex((entry) => entry.id === event.preparation.firstKeptEntryId);
+      if (nativeCutIndex < 0) return stale("retained-message cut point is absent from the session");
+      const firstSuffix = suffix.find(({ messages }) => messages.length > 0);
+      const firstKeptEntryId =
+        firstSuffix && entries.findIndex((entry) => entry.id === firstSuffix.sourceEntry.id) < nativeCutIndex
+          ? firstSuffix.sourceEntry.id
+          : event.preparation.firstKeptEntryId;
+      const details = parseCheckpointDetails(result.compaction.details);
+      if (!details) return stale("prepared checkpoint details are invalid", true);
+      // A large untouched tail can erase the benefit. Use the current-history foreground
+      // path instead of truncating it or immediately overflowing the adopted checkpoint.
+      const replacementTokens = Math.ceil(JSON.stringify(details.replacementHistory).length / 4);
+      const suffixTokens = suffix
+        .flatMap(({ messages }) => messages)
+        .reduce((sum, message) => sum + estimateTokens(message), 0);
+      const estimatedTokens = replacementTokens + suffixTokens + job.promptAndToolsTokens;
+      if (estimatedTokens >= ctx.model.contextWindow - event.preparation.settings.reserveTokens) {
+        const number = (value: number) => (Number.isFinite(value) ? String(value) : "unknown");
+        return stale(
+          `token budget exceeded (estimated=${number(estimatedTokens)}, replacement=${number(replacementTokens)}, suffix=${number(suffixTokens)}, prompt/tools=${number(job.promptAndToolsTokens)}, context=${number(ctx.model.contextWindow)}, reserve=${number(event.preparation.settings.reserveTokens)})`,
+          true,
+        );
+      }
+      let keptMessages: AgentMessage[];
+      try {
+        keptMessages = checkpointKeptMessages(entries, leafId, firstKeptEntryId, job.snapshotLeafId);
+      } catch {
+        return stale("retained-message ancestry or snapshot projection validation failed", true);
+      }
+      const adopted = createCheckpointDetails({ ...details, keptMessages, snapshotLeafId: job.snapshotLeafId });
+      return {
+        kind: "ready",
+        result: {
+          compaction: {
+            ...result.compaction,
+            details: adopted,
+            summary: fallbackSummary(adopted.checkpointId),
+            firstKeptEntryId,
+            tokensBefore: event.preparation.tokensBefore,
+          },
         },
-      },
-    };
+      };
+    } finally {
+      options.timings?.record("rebind", rebindStarted);
+    }
   } finally {
     signal.removeEventListener("abort", cancel);
   }
@@ -359,6 +379,7 @@ export async function warmCompactionDraft(
   runtime: CodexCompactSettingsRuntime,
   signal: AbortSignal,
   isCurrent: () => boolean,
+  options: WarmCompactionApplicationOptions = {},
 ): Promise<CompactionEntryDraft | undefined> {
   const reject = (reason: string, failure = false) => {
     job.validationFailure = reason;
@@ -370,7 +391,9 @@ export async function warmCompactionDraft(
   if (job.state !== "Ready") return reject("checkpoint is not ready");
   // No code below mutates these entries. Digest guards reject in-place mutations
   // and any appended entries across auth/application awaits before using them.
+  const boundaryStarted = performance.now();
   const entries = ctx.sessionManager.getBranch();
+  const exactBranchIsCurrent = options.exactBranchIsCurrent ?? captureExactCompactionBranch(entries);
   // Keep the newest visible raw message as the native anchor. Adoption moves
   // this cut earlier if needed to retain every uncovered suffix message. Do not
   // use projection order: older summaries precede physically earlier messages.
@@ -384,7 +407,7 @@ export async function warmCompactionDraft(
   );
   const first = [...entries].reverse().find((entry) => visible.has(entry.id));
   if (!first) return reject("no visible retained-message anchor");
-  const branch = fingerprintJsonSequence(entries);
+  options.timings?.record("boundary", boundaryStarted);
   const adoption = await adoptWarmCompaction(
     job,
     {
@@ -406,31 +429,36 @@ export async function warmCompactionDraft(
     ctx,
     runtime,
     signal,
-    () => isCurrent() && fingerprintJsonSequence(ctx.sessionManager.getBranch()) === branch,
+    isCurrent,
+    { ...options, exactBranchIsCurrent },
   );
+  const validate = () =>
+    !signal.aborted && isCurrent() && job.isCurrent() && exactBranchIsCurrent(ctx.sessionManager.getBranch());
   if (
-    signal.aborted ||
-    !isCurrent() ||
-    !job.isCurrent() ||
-    fingerprintJsonSequence(ctx.sessionManager.getBranch()) !== branch ||
+    !(options.timings ? options.timings.measure("validation", validate) : validate()) ||
     adoption.kind !== "ready" ||
     !adoption.result ||
     !("compaction" in adoption.result) ||
     !adoption.result.compaction
   )
     return reject(job.validationFailure ?? "application cancelled or boundary changed");
-  const { summary, firstKeptEntryId, details, usage } = adoption.result.compaction;
-  // Verify Pi's own finalized projection before handing it a draft. In
-  // particular, old summaries and system entries are folded during compaction.
-  const header = ctx.sessionManager.getHeader();
-  if (!header) return reject("session header is unavailable");
-  const preview = SessionManager.inMemory(ctx.cwd, undefined, [header, ...entries]);
-  preview.appendCompaction(summary, firstKeptEntryId, 0, details, true, usage);
-  const checkpoint = latestCheckpoint(preview.getBranch());
-  if (
-    !checkpoint ||
-    !projectSessionCheckpointContext(preview.buildSessionContext().messages, preview.getBranch(), checkpoint)
-  )
-    return reject("finalized checkpoint projection did not validate", true);
-  return { type: "compaction", summary, firstKeptEntryId, details, usage };
+  const previewStarted = performance.now();
+  try {
+    const { summary, firstKeptEntryId, details, usage } = adoption.result.compaction;
+    // Verify Pi's own finalized projection before handing it a draft. In
+    // particular, old summaries and system entries are folded during compaction.
+    const header = ctx.sessionManager.getHeader();
+    if (!header) return reject("session header is unavailable");
+    const preview = SessionManager.inMemory(ctx.cwd, undefined, [header, ...entries]);
+    preview.appendCompaction(summary, firstKeptEntryId, 0, details, true, usage);
+    const checkpoint = latestCheckpoint(preview.getBranch());
+    if (
+      !checkpoint ||
+      !projectSessionCheckpointContext(preview.buildSessionContext().messages, preview.getBranch(), checkpoint)
+    )
+      return reject("finalized checkpoint projection did not validate", true);
+    return { type: "compaction", summary, firstKeptEntryId, details, usage };
+  } finally {
+    options.timings?.record("preview", previewStarted);
+  }
 }

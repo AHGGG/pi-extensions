@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import type { Api, Model, Provider } from "@earendil-works/pi-ai";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { CompactionTimings } from "./compaction-timing.js";
 import {
   type CompactionRoute,
   isChatGPTCompactionCandidate,
@@ -33,15 +34,18 @@ export async function resolveCompactionBinding(
   model: Model<Api>,
   settings: CodexCompactSettings,
   isCurrent: () => boolean,
+  timings?: CompactionTimings,
 ) {
   let route = resolveCompactionRoute(model, settings);
   if (route.kind !== "remote") throw new Error("The active Responses route is unavailable");
-  const auth = await ctx.modelRegistry.getApiKeyAndHeaders(model);
+  const pendingAuth = () => ctx.modelRegistry.getApiKeyAndHeaders(model);
+  const auth = await (timings ? timings.wait("authWait", pendingAuth) : pendingAuth());
   if (!isCurrent()) throw new DOMException("Compaction ownership changed", "AbortError");
   if (!auth.ok) throw new Error(auth.error);
   let providerAuth: Awaited<ReturnType<typeof ctx.modelRegistry.getProviderAuth>> | undefined;
   if (route.protocol !== "context-management" && isChatGPTCompactionCandidate(model, auth)) {
-    providerAuth = await ctx.modelRegistry.getProviderAuth?.(model.provider);
+    const pendingProviderAuth = () => Promise.resolve(ctx.modelRegistry.getProviderAuth?.(model.provider));
+    providerAuth = await (timings ? timings.wait("authWait", pendingProviderAuth) : pendingProviderAuth());
     if (!isCurrent()) throw new DOMException("Compaction ownership changed", "AbortError");
     const authenticatedRoute = resolveAuthenticatedCompactionRoute(model, settings, auth, providerAuth);
     if (authenticatedRoute.kind === "remote") route = authenticatedRoute;

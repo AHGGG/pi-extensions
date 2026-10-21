@@ -1,6 +1,13 @@
 import { buildSessionContext, type SessionEntry } from "@earendil-works/pi-coding-agent";
 import { fingerprintJsonSequence } from "./compaction-fingerprint.js";
 
+/** A serialized turn boundary accepts no appended entries, including bookkeeping. */
+export function captureExactCompactionBranch(entries: SessionEntry[]): (current: SessionEntry[]) => boolean {
+  const length = entries.length;
+  const fingerprint = fingerprintJsonSequence(entries);
+  return (current) => current.length === length && fingerprintJsonSequence(current) === fingerprint;
+}
+
 /** Allow bookkeeping descendants without accepting a different branch or compaction input. */
 export function captureCompactionBranch(entries: SessionEntry[]): (current: SessionEntry[]) => boolean {
   // getBranch() returns a new array, not immutable entries. Capture persisted

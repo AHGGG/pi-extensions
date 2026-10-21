@@ -48,3 +48,5 @@ The worker bundle SHA-256 values for these runs were `630bd7464fe1a3014a490e1665
 The same three-process comparison also passed with the repository's installed Pi 1.1.0 peers: extra heap medians were 128.25→0.21 MiB preparing, 128.63→0.55 MiB ready, and 320.80→0.58 MiB during adoption; maximum RSS medians were 827.86→291.00 MiB.
 
 An additional optimized-only Pi 1.1.0 run with `--historical-mib 32 --cycles 16 --samples 1` passed eight ready/adoption and eight cancellation cycles, with exactly 16 mock requests. Released heap rose from a 69.31 MiB baseline to 70.51 MiB after cycle 16 (1.19 MiB additional), rather than retaining another historical-payload copy per job. This remains a bounded synthetic check, not a claim of zero long-run allocation growth.
+
+For complete `turn_end` application timing, including the outer boundary checks omitted by this direct-draft memory harness, use the [apply-latency benchmark](APPLY-LATENCY.md). It separates timed processes from retained-memory probes and records both authentication waits.
