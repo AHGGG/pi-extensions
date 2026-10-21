@@ -619,7 +619,12 @@ export async function queryProviderUsage(
       targetId,
     );
   } catch (error) {
-    if (isStaleExtensionContextError(error) || isAbortError(error)) throw error;
+    if (
+      isStaleExtensionContextError(error) ||
+      isAbortError(error) ||
+      (error instanceof Error && error.name === "UsageStaleContextError")
+    )
+      throw error;
     throw new Error(redactUsageError(errorMessage(error), auth.secrets));
   }
 }
