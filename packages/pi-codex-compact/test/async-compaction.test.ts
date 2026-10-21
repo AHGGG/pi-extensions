@@ -135,7 +135,7 @@ test("cancel while waiting never falls back or starts a duplicate request", asyn
   await h.emit("session_shutdown", {});
 });
 
-test("failed background request is reported only at adoption and is not retried", async () => {
+test("failed background request pauses warm-ahead and reports recovery at adoption", async () => {
   const h = fixture();
   await h.emit("session_start", {});
   await h.start();
@@ -144,7 +144,7 @@ test("failed background request is reported only at adoption and is not retried"
   h.release();
   assert.equal(await h.compact(), undefined);
   assert.equal(h.fetches, 1);
-  assert.match(h.notifications[0]?.message ?? "", /using Pi compaction/);
+  assert.match(h.notifications.map(({ message }) => message).join("\n"), /using Pi compaction/);
   await h.emit("session_shutdown", {});
 });
 
@@ -157,10 +157,10 @@ test("owned deadline bounds a signal-ignoring provider without another request",
     await h.started;
     await vi.advanceTimersByTimeAsync(30_000);
     assert.equal(h.requestSignals[0].aborted, true);
-    assert.equal(h.notifications.length, 0);
+    assert.equal(h.notifications.filter(({ message }) => message.includes("Warm-ahead paused")).length, 1);
     assert.equal(await h.compact(), undefined);
     assert.equal(h.fetches, 1);
-    assert.match(h.notifications[0]?.message ?? "", /timed out/);
+    assert.match(h.notifications.map(({ message }) => message).join("\n"), /timed out/);
   } finally {
     h.release();
     await h.emit("session_shutdown", {});
@@ -190,7 +190,7 @@ test("pending adoption waits for the original deadline before refreshing auth", 
     assert.equal(prematureAuth, false);
     assert.equal(await adoption, undefined);
     assert.equal(h.fetches, 1);
-    assert.match(h.notifications[0]?.message ?? "", /timed out/);
+    assert.match(h.notifications.map(({ message }) => message).join("\n"), /timed out/);
   } finally {
     authGate.resolve();
     h.release();
@@ -397,7 +397,7 @@ for (const mode of ["failure", "timeout"] as const)
         latestCheckpoint(h.manager.getBranch())?.details.replacementHistory[0].encrypted_content,
         "old-opaque",
       );
-      assert.match(h.notifications[0]?.message ?? "", /checkpoint recovery/);
+      assert.match(h.notifications.map(({ message }) => message).join("\n"), /checkpoint recovery/);
     } finally {
       h.release();
       await h.emit("session_shutdown", {});

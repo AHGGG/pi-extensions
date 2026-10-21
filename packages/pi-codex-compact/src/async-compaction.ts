@@ -82,6 +82,8 @@ export interface WarmCompactionJob {
   isCurrent(): boolean;
   /** Fixed diagnostic text only; never include session content or credentials. */
   validationFailure?: string;
+  /** Genuine preparation/application failure, distinct from ordinary invalidation. */
+  applicationFailure?: string;
 }
 
 export function startWarmCompaction(
@@ -240,8 +242,9 @@ export async function adoptWarmCompaction(
 ): Promise<WarmCompactionAdoption> {
   const signal = AbortSignal.any([event.signal, operationSignal]);
   const adoptionBranchIsCurrent = captureCompactionBranch(event.branchEntries);
-  const stale = (reason: string): WarmCompactionAdoption => {
+  const stale = (reason: string, failure = false): WarmCompactionAdoption => {
     job.validationFailure = reason;
+    if (failure) job.applicationFailure = reason;
     return { kind: "stale" };
   };
   const valid = () => {
@@ -270,7 +273,7 @@ export async function adoptWarmCompaction(
     try {
       result = await abortable(job.promise, signal);
     } catch {
-      return signal.aborted ? { kind: "cancel" } : stale("prepared checkpoint promise failed");
+      return signal.aborted ? { kind: "cancel" } : stale("prepared checkpoint promise failed", valid());
     }
     if (signal.aborted) return { kind: "cancel" };
     if (!valid()) return { kind: "stale" };
@@ -281,15 +284,15 @@ export async function adoptWarmCompaction(
     } catch {
       return signal.aborted
         ? { kind: "cancel" }
-        : stale(job.validationFailure ?? "authentication or provider lookup failed");
+        : stale(job.validationFailure ?? "authentication or provider lookup failed", valid());
     }
     if (signal.aborted) return { kind: "cancel" };
     if (!valid()) return { kind: "stale" };
     if (!sameCompactionBinding(job.attempt.binding, binding.binding))
-      return stale(compactionBindingChanges(job.attempt.binding, binding.binding).join("; "));
+      return stale(compactionBindingChanges(job.attempt.binding, binding.binding).join("; "), true);
     if (job.attempt.failure) return { kind: "failed", attempt: job.attempt };
     if (!result || !("compaction" in result) || !result.compaction)
-      return stale("prepared checkpoint result is unavailable");
+      return stale("prepared checkpoint result is unavailable", true);
     const entries = event.branchEntries;
     if (!completeToolPairs(buildSessionContext(entries).messages))
       return stale("session contains an unmatched tool call");
@@ -307,7 +310,7 @@ export async function adoptWarmCompaction(
         ? firstSuffix.sourceEntry.id
         : event.preparation.firstKeptEntryId;
     const details = parseCheckpointDetails(result.compaction.details);
-    if (!details) return stale("prepared checkpoint details are invalid");
+    if (!details) return stale("prepared checkpoint details are invalid", true);
     // A large untouched tail can erase the benefit. Use the current-history foreground
     // path instead of truncating it or immediately overflowing the adopted checkpoint.
     const replacementTokens = Math.ceil(JSON.stringify(details.replacementHistory).length / 4);
@@ -319,13 +322,14 @@ export async function adoptWarmCompaction(
       const number = (value: number) => (Number.isFinite(value) ? String(value) : "unknown");
       return stale(
         `token budget exceeded (estimated=${number(estimatedTokens)}, replacement=${number(replacementTokens)}, suffix=${number(suffixTokens)}, prompt/tools=${number(job.promptAndToolsTokens)}, context=${number(ctx.model.contextWindow)}, reserve=${number(event.preparation.settings.reserveTokens)})`,
+        true,
       );
     }
     let keptMessages: AgentMessage[];
     try {
       keptMessages = checkpointKeptMessages(entries, leafId, firstKeptEntryId, job.snapshotLeafId);
     } catch {
-      return stale("retained-message ancestry or snapshot projection validation failed");
+      return stale("retained-message ancestry or snapshot projection validation failed", true);
     }
     const adopted = createCheckpointDetails({ ...details, keptMessages, snapshotLeafId: job.snapshotLeafId });
     return {
@@ -353,11 +357,13 @@ export async function warmCompactionDraft(
   signal: AbortSignal,
   isCurrent: () => boolean,
 ): Promise<CompactionEntryDraft | undefined> {
-  const reject = (reason: string) => {
+  const reject = (reason: string, failure = false) => {
     job.validationFailure = reason;
+    if (failure) job.applicationFailure = reason;
     return undefined;
   };
   job.validationFailure = undefined;
+  job.applicationFailure = undefined;
   if (job.state !== "Ready") return reject("checkpoint is not ready");
   const entries = JSON.parse(JSON.stringify(ctx.sessionManager.getBranch())) as SessionEntry[];
   // Keep the newest visible raw message as the native anchor. Adoption moves
@@ -420,6 +426,6 @@ export async function warmCompactionDraft(
     !checkpoint ||
     !projectSessionCheckpointContext(preview.buildSessionContext().messages, preview.getBranch(), checkpoint)
   )
-    return reject("finalized checkpoint projection did not validate");
+    return reject("finalized checkpoint projection did not validate", true);
   return { type: "compaction", summary, firstKeptEntryId, details, usage };
 }

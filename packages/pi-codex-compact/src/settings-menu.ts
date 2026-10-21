@@ -7,6 +7,7 @@ import { terminalText as safeText } from "./terminal.js";
 
 type Screen = "main" | "settings" | "invalid";
 type Action =
+  | "resume-warm"
   | "compact-now"
   | "set-enabled"
   | "set-log-compaction"
@@ -28,6 +29,8 @@ export interface SettingsMenuOwner {
   canReplayCheckpoint?(): boolean;
   lastProtocol?(): RemoteCompactionProtocol | undefined;
   backgroundStatus?(): "Preparing" | "Ready" | undefined;
+  warmPauseReason?(): string | undefined;
+  onResumeWarm?(): void;
   onSettingsChanged?(): void;
 }
 
@@ -98,6 +101,8 @@ export function createCodexCompactMenu(
     canReplayCheckpoint?: () => boolean;
     lastProtocol?: () => RemoteCompactionProtocol | undefined;
     backgroundStatus?: () => "Preparing" | "Ready" | undefined;
+    warmPauseReason?: () => string | undefined;
+    onResumeWarm?: () => void;
     onSettingsChanged?: () => void;
   } = {},
 ): MenuDefinition<CodexCompactSettingsState, Screen, Action, ExtensionCommandContext> {
@@ -115,6 +120,7 @@ export function createCodexCompactMenu(
           `Apply when ready: ${state.settings.asyncAutoApply ? "On" : "Off"}`,
           `Compaction logs: ${state.settings.logCompaction ? "On" : "Off"}`,
           ...backgroundStatusLines(options.backgroundStatus?.()),
+          ...(options.warmPauseReason?.() ? [`Warm-ahead paused: ${safeText(options.warmPauseReason() ?? "")}`] : []),
           `Protocol setting: ${protocolLabel(state.settings.protocol)}`,
           `Active model: ${safeText(options.status?.model ?? "none")}`,
           `Preferred route: ${safeText(compactRoute(state, options.status))}`,
@@ -137,6 +143,16 @@ export function createCodexCompactMenu(
             : []),
         ],
         items: [
+          ...(options.warmPauseReason?.()
+            ? [
+                {
+                  id: "resume-warm",
+                  label: "Resume warm-ahead",
+                  action: "resume-warm" as const,
+                  description: "Clear the session-only failure pause; retry after the next completed turn.",
+                },
+              ]
+            : []),
           {
             id: "compact-now",
             label: "Compact now",
@@ -266,6 +282,10 @@ export function createCodexCompactMenu(
       }),
     },
     actions: {
+      "resume-warm": () => {
+        options.onResumeWarm?.();
+        return { kind: "stay" };
+      },
       "compact-now": async () => {
         options.onCompactRequested?.();
         return { kind: "close" };
@@ -336,6 +356,10 @@ export async function showCodexCompactMenu(
       canReplayCheckpoint: owner.canReplayCheckpoint,
       lastProtocol: owner.lastProtocol,
       backgroundStatus: owner.backgroundStatus,
+      warmPauseReason: owner.warmPauseReason,
+      onResumeWarm: () => {
+        if (!owner.signal.aborted && owner.isCurrent()) owner.onResumeWarm?.();
+      },
       onSettingsChanged: () => {
         if (!owner.signal.aborted && owner.isCurrent()) owner.onSettingsChanged?.();
       },

@@ -669,3 +669,30 @@ test("auto-apply toggle applies immediately without cancelling compaction work",
   }
   assert.equal(cancellations, 0);
 });
+
+test("paused menu shows a reason and resumes without saving settings", async () => {
+  const memory = memoryRuntime();
+  let reason: string | undefined = "background preparation failed";
+  const menu = createCodexCompactMenu(memory.runtime, {
+    warmPauseReason: () => reason,
+    onResumeWarm: () => {
+      reason = undefined;
+    },
+  });
+  const screen = resolveMenuScreen(menu, "main", memory.runtime.get());
+  assert.equal(screen.kind, "actions");
+  if (screen.kind !== "actions") assert.fail("Expected actions screen");
+  assert.match(screen.lines?.join("\n") ?? "", /Warm-ahead paused: background preparation failed/);
+  assert.ok(screen.items.some((item) => item.id === "resume-warm"));
+  await menu.actions["resume-warm"]({
+    ctx: createMockContext({ mode: "tui" }).ctx,
+    state: memory.runtime.get(),
+    signal: new AbortController().signal,
+    itemId: "resume-warm",
+  });
+  assert.equal(reason, undefined);
+  assert.equal(memory.patches.length, 0);
+  const resumed = resolveMenuScreen(menu, "main", memory.runtime.get());
+  if (resumed.kind !== "actions") assert.fail("Expected actions screen");
+  assert.ok(!resumed.items.some((item) => item.id === "resume-warm"));
+});

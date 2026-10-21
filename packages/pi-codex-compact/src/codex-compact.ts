@@ -74,9 +74,11 @@ export function createCodexCompactExtension(
       sessionId: string;
       operation?: AbortController;
       warm?: WarmCompactionJob;
+      warmPauseReason?: string;
+      warmGeneration: number;
       compactionPending?: boolean;
       boundaryCheckpoint?: { job: WarmCompactionJob; checkpointId: string };
-      autoApply?: { job: WarmCompactionJob; done: Promise<void> };
+      autoApply?: { job: WarmCompactionJob; done: Promise<void>; cancelled?: boolean };
       run?: ContinuationRun;
       lastRoute?: { key: string; protocol: RemoteCompactionProtocol };
     };
@@ -89,7 +91,7 @@ export function createCodexCompactExtension(
       if (!owner || owner.sessionId !== sessionId) {
         owner?.controller.abort();
         if (owner) ctx.ui.setStatus(STATUS_KEY, undefined);
-        owner = { controller: new AbortController(), rejected: new RejectedRoutes(), sessionId };
+        owner = { controller: new AbortController(), rejected: new RejectedRoutes(), warmGeneration: 0, sessionId };
         owners.set(ctx.sessionManager, owner);
       }
       return owner;
@@ -116,10 +118,49 @@ export function createCodexCompactExtension(
           ctx,
           `${owner.warm.state === "Ready" ? "Async compaction checkpoint discarded." : "Async compaction cancelled."} Reason: ${reason ?? owner.warm.validationFailure ?? "checkpoint is no longer current"}.`,
         );
+      if (owner.autoApply?.job === owner.warm) owner.autoApply.cancelled = true;
       owner.warm.controller.abort();
       owner.warm = undefined;
       owner.boundaryCheckpoint = undefined;
       if (!owner.operation) ctx.ui.setStatus(STATUS_KEY, undefined);
+    };
+
+    const pauseWarm = (ctx: ExtensionContext, owner: Owner, reason: string, generation = owner.warmGeneration) => {
+      if (
+        owners.get(ctx.sessionManager) !== owner ||
+        owner.controller.signal.aborted ||
+        owner.sessionId !== ctx.sessionManager.getSessionId() ||
+        owner.warmGeneration !== generation ||
+        owner.warmPauseReason
+      )
+        return;
+      owner.warmPauseReason = reason;
+      if (ctx.hasUI)
+        ctx.ui.notify(
+          `[codex-compact] Warm-ahead paused for this session. Reason: ${reason}. Manual /compact and Pi automatic compaction remain available. Use /codex-compact resume to retry.`,
+          "warning",
+        );
+    };
+
+    const resumeWarm = (ctx: ExtensionContext, owner: Owner) => {
+      if (
+        owners.get(ctx.sessionManager) !== owner ||
+        owner.controller.signal.aborted ||
+        owner.sessionId !== ctx.sessionManager.getSessionId()
+      )
+        return;
+      if (!owner.warmPauseReason) {
+        if (ctx.hasUI) ctx.ui.notify("Warm-ahead is not paused.", "info");
+        return;
+      }
+      owner.warmGeneration += 1;
+      owner.warmPauseReason = undefined;
+      cancelWarm(ctx, "warm-ahead explicitly resumed");
+      if (ctx.hasUI)
+        ctx.ui.notify(
+          "Warm-ahead resumed for this session; preparation can start after the next completed turn.",
+          "info",
+        );
     };
 
     // Returning a draft is not a commit. Confirm persisted identity at the next
@@ -178,6 +219,7 @@ export function createCodexCompactExtension(
         !settings.enabled ||
         !settings.asyncEnabled ||
         !settings.asyncAutoApply ||
+        owner.warmPauseReason ||
         !job ||
         job.state !== "Ready" ||
         !job.isCurrent() ||
@@ -195,7 +237,9 @@ export function createCodexCompactExtension(
       const done = new Promise<void>((resolve) => {
         finish = resolve;
       });
-      const claim = { job, done };
+      const generation = owner.warmGeneration;
+      const runSignal = ctx.signal;
+      const claim: NonNullable<Owner["autoApply"]> = { job, done };
       owner.autoApply = claim;
       const release = () => {
         if (owner.autoApply === claim) owner.autoApply = undefined;
@@ -204,12 +248,27 @@ export function createCodexCompactExtension(
       try {
         ctx.compact({
           onComplete: release,
-          onError: () => {
+          onError: (error) => {
+            // Pi reports both user and extension cancellation through onError.
+            if (
+              error.message !== "Compaction cancelled" &&
+              !claim.cancelled &&
+              !runSignal?.aborted &&
+              owner.autoApply === claim
+            )
+              pauseWarm(ctx, owner, "automatic checkpoint application failed", generation);
             logCompaction(ctx, "Automatic checkpoint application did not complete; history preserved.");
             release();
           },
         });
-      } catch {
+      } catch (error) {
+        if (
+          !(error instanceof Error && error.message === "Compaction cancelled") &&
+          !claim.cancelled &&
+          !runSignal?.aborted &&
+          owner.autoApply === claim
+        )
+          pauseWarm(ctx, owner, "automatic checkpoint application failed", generation);
         release();
       }
       await done;
@@ -217,9 +276,15 @@ export function createCodexCompactExtension(
 
     pi.registerCommand("codex-compact", {
       description: "Compact now or configure Responses compaction",
+      getArgumentCompletions: (prefix) =>
+        "resume".startsWith(prefix) ? [{ value: "resume", label: "resume — resume warm-ahead for this session" }] : [],
       handler: async (args, ctx) => {
-        if (args.trim()) throw new Error("Usage: /codex-compact");
+        if (args.trim() && args.trim() !== "resume") throw new Error("Usage: /codex-compact [resume]");
         const owner = ownerFor(ctx);
+        if (args.trim() === "resume") {
+          resumeWarm(ctx, owner);
+          return;
+        }
         const controller = owner.controller;
         const { showCodexCompactMenu } = await import("./settings-menu.js");
         if (owners.get(ctx.sessionManager) !== owner || controller.signal.aborted) return;
@@ -241,6 +306,8 @@ export function createCodexCompactExtension(
               ? owner.lastRoute.protocol
               : undefined;
           },
+          warmPauseReason: () => owner.warmPauseReason,
+          onResumeWarm: () => resumeWarm(ctx, owner),
           backgroundStatus: () => (owner.warm?.state === "Failed" ? undefined : owner.warm?.state),
           onSettingsChanged: () => {
             cancelOperation(ctx);
@@ -262,6 +329,7 @@ export function createCodexCompactExtension(
       const owner: Owner = {
         controller: new AbortController(),
         rejected: new RejectedRoutes(),
+        warmGeneration: 0,
         sessionId: ctx.sessionManager.getSessionId(),
       };
       owners.set(ctx.sessionManager, owner);
@@ -324,6 +392,7 @@ export function createCodexCompactExtension(
           settings.enabled &&
           settings.asyncEnabled &&
           settings.asyncAutoApply &&
+          !owner.warmPauseReason &&
           owners.get(ctx.sessionManager) === owner &&
           owner.warm === job &&
           !!job?.isCurrent() &&
@@ -348,7 +417,10 @@ export function createCodexCompactExtension(
           settingsRuntime,
           AbortSignal.any([owner.controller.signal, ...(ctx.signal ? [ctx.signal] : [])]),
           canApply,
-        );
+        ).catch(() => {
+          if (canApply()) job.applicationFailure = "automatic checkpoint validation failed";
+          return undefined;
+        });
         if (draft && canApply()) {
           const details = parseCheckpointDetails(draft.details);
           if (details) {
@@ -357,13 +429,14 @@ export function createCodexCompactExtension(
             return { entries: [...(event.entries ?? []), draft] };
           }
         }
+        if (job.applicationFailure && canApply()) pauseWarm(ctx, owner, job.applicationFailure);
         // A cancelled wait/toggle preserves valid prepared work. A completed
         // validation failure discards the candidate without starting inference.
         if (!ctx.signal?.aborted && owner.warm === job && settingsRuntime.get().settings.asyncAutoApply)
           cancelWarm(ctx);
         return;
       }
-      if (owner.warm || owner.operation || owner.controller.signal.aborted) return;
+      if (owner.warmPauseReason || owner.warm || owner.operation || owner.controller.signal.aborted) return;
       let warm: WarmCompactionJob | undefined;
       warm = startWarmCompaction(
         pi,
@@ -392,7 +465,9 @@ export function createCodexCompactExtension(
           } else logCompaction(ctx, message);
         };
         void job.promise.then(
-          () =>
+          () => {
+            if (job.attempt.failure && owner.warm === job && job.isCurrent())
+              pauseWarm(ctx, owner, "background preparation failed");
             report(
               job.state === "Ready"
                 ? settingsRuntime.get().settings.asyncAutoApply
@@ -400,8 +475,11 @@ export function createCodexCompactExtension(
                   : "Async compaction ready: run /compact to apply the prepared checkpoint. History is unchanged until compaction."
                 : "Async compaction failed: actual compaction will use the foreground recovery path.",
               job.state === "Ready",
-            ),
-          () => report("Async compaction failed: actual compaction will use the foreground path."),
+            );
+          },
+          () => {
+            if (owner.warm === job && job.isCurrent()) pauseWarm(ctx, owner, "background preparation failed");
+          },
         );
       }
     });
@@ -480,6 +558,8 @@ export function createCodexCompactExtension(
               ctx,
               `Async checkpoint application rejected. Reason: ${warm.validationFailure ?? (adoption.kind === "failed" ? "background preparation failed" : "checkpoint is no longer current")}.`,
             );
+          if (autoApply && warm.applicationFailure && isCurrent() && !event.signal.aborted)
+            pauseWarm(ctx, owner, warm.applicationFailure);
           if (owner.warm === warm) owner.warm = undefined;
           warm.controller.abort();
           if (adoption.kind === "cancel") return { cancel: true };
@@ -632,8 +712,9 @@ export function createCodexCompactExtension(
       };
     });
 
-    pi.on("session_compact_failed", (_event, ctx) => {
+    pi.on("session_compact_failed", (event, ctx) => {
       const owner = owners.get(ctx.sessionManager);
+      if (owner?.autoApply && event.aborted) owner.autoApply.cancelled = true;
       if (owner?.compactionPending) {
         logCompaction(ctx, "Actual compaction did not complete (failed or cancelled).");
         owner.compactionPending = false;

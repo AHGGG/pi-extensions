@@ -14,17 +14,17 @@ async function ready(logCompaction = true) {
 }
 
 for (const logging of [true, false])
-  test(`binding rejection diagnostics respect logging=${logging}`, async () => {
+  test(`binding failure pause is visible with logging=${logging}`, async () => {
     const h = await ready(logging);
     h.setKey("SECRET-CHANGED-CREDENTIAL");
     assert.equal(await h.start(), undefined);
     const messages = h.notifications.map(({ message }) => message).join("\n");
-    assert.equal(messages.includes("request authentication changed"), logging);
+    assert.equal(messages.includes("request authentication changed"), true);
     assert.doesNotMatch(messages, /SECRET-CHANGED-CREDENTIAL|fixture-key|example\.test/);
     assert.equal(h.fetches, 1);
   });
 
-test("budget rejection includes only safe numeric components and can prepare again", async () => {
+test("budget rejection includes only safe numeric components and pauses further preparation", async () => {
   const h = await ready();
   h.manager.appendMessage({ role: "user", content: "PRIVATE-TAIL ".repeat(50_000), timestamp: 3 });
   assert.equal(await h.start(), undefined);
@@ -35,7 +35,7 @@ test("budget rejection includes only safe numeric components and can prepare aga
   assert.equal(h.fetches, 1);
   await h.start();
   await new Promise<void>((resolve) => setImmediate(resolve));
-  assert.equal(h.fetches, 2);
+  assert.equal(h.fetches, 1);
 });
 
 for (const change of ["prompt", "unpaired", "projection", "auth-lookup", "navigation"])
@@ -116,7 +116,7 @@ test("a discarded candidate is reported once across subsequent context hooks", a
 });
 
 for (const logging of [true, false])
-  test(`multiple binding changes use fixed ordered labels with logging=${logging}`, async () => {
+  test(`binding failure pause uses fixed ordered labels with logging=${logging}`, async () => {
     const h = await ready(logging);
     const originalBranch = JSON.stringify(h.manager.getBranch());
     h.setKey("PRIVATE-ROTATED-TOKEN");
@@ -133,14 +133,14 @@ for (const logging of [true, false])
       notices.includes(
         "Reason: request authentication changed; provider instance changed; stream function changed; streamSimple function changed.",
       ),
-      logging,
+      true,
     );
     assert.doesNotMatch(notices, /PRIVATE-|fixture-key|example\.test|[a-f0-9]{64}/);
     assert.equal(JSON.stringify(h.manager.getBranch()), originalBranch);
     assert.equal(h.fetches, 1);
     await h.start();
     await new Promise<void>((resolve) => setImmediate(resolve));
-    assert.equal(h.fetches, 2);
+    assert.equal(h.fetches, 1);
   });
 
 test("binding diagnostics remain silent without UI", async () => {

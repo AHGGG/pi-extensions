@@ -235,7 +235,7 @@ test("command rejects undocumented arguments in every mode", async () => {
       async () => {
         await command.handler("unexpected", createMockContext({ mode }).ctx);
       },
-      { message: "Usage: /codex-compact" },
+      { message: "Usage: /codex-compact [resume]" },
     );
   }
 });
