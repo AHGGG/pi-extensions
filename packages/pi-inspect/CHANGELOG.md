@@ -1,5 +1,11 @@
 # @narumitw/pi-inspect
 
+## 0.3.4
+
+### Patch Changes
+
+- 57cf529: Prebuild the Inspector runtime for faster package startup. Keep browser assets in a separate output directory and preserve source loading for production Git installs.
+
 ## 0.3.3
 
 ### Patch Changes

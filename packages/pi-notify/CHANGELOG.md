@@ -1,5 +1,11 @@
 # @narumitw/pi-notify
 
+## 0.4.1
+
+### Patch Changes
+
+- 57cf529: Prebuild the package-owned TypeScript into a split Jiti runtime to reduce package loading work while preserving lazy menu loading and notification behavior. Local package-directory loading now requires a build; published packages include the generated runtime.
+
 ## 0.4.0
 
 ### Minor Changes
