@@ -111,6 +111,7 @@ Root checks build and typecheck this workspace; root tests include its determini
 - `dist/`: generated Jiti entrypoint and source map.
 - `browser-dist/`: generated browser HTML, JavaScript and CSS, built before packing.
 - `docs/`: bundled viewer reference and historical review/verification evidence.
+- [benchmarks/](https://github.com/narumiruna/pi-extensions/tree/main/packages/pi-inspect/benchmarks): repository-only startup measurements and reproduction commands; not published.
 - `scripts/`, `test/`: repository build/smoke helpers and deterministic/browser tests; not published.
 
 ## 🔎 Keywords

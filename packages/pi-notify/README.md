@@ -121,6 +121,7 @@ Before reverting to a version without Teams, remove its IDs from every affected 
 - `src/`: session coordination, metadata, settings, menu, and provider contract.
 - `src/providers/`: provider-specific transports and shared bounded HTTP handling.
 - `docs/`: installed settings and behavior reference.
+- [benchmarks/](https://github.com/narumiruna/pi-extensions/tree/main/packages/pi-notify/benchmarks): repository-only startup measurements and reproduction commands; not published.
 - `scripts/`: repository-only runtime builder wrapper.
 - `test/`: repository-only deterministic tests.
 
