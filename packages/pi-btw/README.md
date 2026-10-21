@@ -56,7 +56,7 @@ Both routes require TUI mode and a model with usable credentials; see [Settings]
 Side questions and selected conversation context are sent to that model's provider.
 Bringing context back fills the main editor without submitting; replacing an existing draft requires confirmation.
 Ctrl+C cancels the response and discards the current draft and queued questions, but completed exchanges remain resumable in memory.
-Read the [workflow guide](./docs/workflows.md) for context selection, copying, search, steering, and draft recovery; `/new`, `/resume`, `/reload`, and restart discard retained threads.
+Read the [workflow guide](./docs/workflows.md) for context selection, copying, search, steering, and draft recovery; `/new`, `/resume`, `/fork`, `/reload`, and restart discard retained threads.
 
 ## ⚙️ Settings
 
@@ -182,9 +182,10 @@ The file is read for every `/btw` invocation, so edits apply without `/reload`.
 ## 🚧 Limitations
 
 - `/btw` supports TUI mode only.
+- The side model does not execute tools. Answers appear only after the response completes, not token by token.
 - Only the active pane receives keyboard input; hovering or scrolling over the other pane does not move focus.
 - Resume state is memory-only and lasts only for the current extension instance.
-- A side thread retains the latest 40,000 characters of main-conversation context and adds a truncation notice when earlier content is omitted.
+- Main-conversation context is a limited text snapshot, not the complete session; see [context scope](./docs/workflows.md#choose-context-and-resume-threads).
 - Clipboard access depends on Pi's host helper, the operating system, and the terminal.
 - The live workspace still uses a BTW-owned terminal handoff and private host-layout access because Pi has no public workspace-composition API; see the [core-alignment handoff](./docs/core-alignment.md) for tested safeguards, exact limits, and proposed APIs.
 - Pi does not expose all effective renderer options or a public clipboard-read callback. BTW uses native automatic wheel behavior but does not inherit private host wheel overrides or right-click clipboard paste.
