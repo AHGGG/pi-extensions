@@ -25,16 +25,20 @@
   ],
   "files": [
     "src",
+    "dist",
     "README.md",
     "LICENSE",
     "docs"
   ],
   "pi": {
     "extensions": [
-      "./src/index.ts"
+      "./dist/index.ts"
     ]
   },
   "scripts": {
+    "build": "node scripts/build-runtime.mjs",
+    "benchmark:first-use": "node scripts/benchmark-first-use.mjs",
+    "prepack": "npm run build",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

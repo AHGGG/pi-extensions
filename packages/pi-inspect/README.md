@@ -34,7 +34,9 @@ For one invocation without saving an installation:
 pi -e ./packages/pi-inspect
 ```
 
-Extensions run with Pi's permissions; review the source before installing. Root `npm install` builds browser assets during prepare, including Pi's production-only Git installation path. Rebuild after frontend changes. Packaged browser assets require no development server; frontend/build dependencies remain production dependencies so asset-free Git checkouts can build with dev dependencies omitted. Factory loading does not start the server or read those assets.
+Extensions run with Pi's permissions; review the source before installing. An unbuilt local checkout must run the package build before loading the package directory. Published packages include a prebuilt TypeScript runtime for Pi's Jiti loader and browser assets; they need no development server. Factory loading does not start the server or read those assets.
+
+Root `npm install` builds only browser assets during prepare, including Pi's production-only Git installation path, which retains source entrypoints. Frontend/build dependencies remain production dependencies so asset-free Git checkouts can build with dev dependencies omitted. Rebuild the package after source changes. Runtime and browser output have separate directories; a failed build/prepack stops packaging, but publication of the two directories is not one transaction.
 
 The old project-local extension is removed. Replace explicit `.pi/extensions/inspect/index.ts` references with `packages/pi-inspect/src/index.ts`, or load the package directory. Reload an existing session after updating its installation.
 
@@ -106,8 +108,10 @@ Root checks build and typecheck this workspace; root tests include its determini
 - `src/index.ts`: thin Pi entrypoint forwarding to `src/extension.ts`.
 - `src/`: session ownership, bounded collection, projection, privacy and loopback server.
 - `src/web/`: React/Radix browser viewer and styles.
-- `dist/`: generated browser assets, built before packing and included in the package.
+- `dist/`: generated Jiti entrypoint and source map.
+- `browser-dist/`: generated browser HTML, JavaScript and CSS, built before packing.
 - `docs/`: bundled viewer reference and historical review/verification evidence.
+- [benchmarks/](https://github.com/narumiruna/pi-extensions/tree/main/packages/pi-inspect/benchmarks): repository-only startup measurements and reproduction commands; not published.
 - `scripts/`, `test/`: repository build/smoke helpers and deterministic/browser tests; not published.
 
 ## 🔎 Keywords
