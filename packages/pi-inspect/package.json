@@ -29,6 +29,7 @@
   },
   "scripts": {
     "build": "node scripts/build.mjs && node scripts/build-runtime.mjs",
+    "benchmark:first-use": "node scripts/benchmark-first-use.mjs",
     "check": "npm run build && biome check . && npm run typecheck",
     "format": "biome check --write .",
     "prepack": "npm run build",

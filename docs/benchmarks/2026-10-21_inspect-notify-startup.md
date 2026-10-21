@@ -58,11 +58,13 @@ To reproduce from the repository root after `npm install` and `npm run build`:
 ```sh
 npm run benchmark:extension-startup -- --entry packages/pi-inspect --entry packages/pi-notify --baseline --runs 7 --cache-mode warm
 npm run benchmark:extension-startup -- --entry packages/pi-inspect --entry packages/pi-notify --baseline --runs 7 --cache-mode cold
-npm run benchmark:inspect-notify-first-use -- inspect package
-npm run benchmark:inspect-notify-first-use -- notify package
-JITI_FS_CACHE=false npm run benchmark:inspect-notify-first-use -- inspect source
-JITI_FS_CACHE=false npm run benchmark:inspect-notify-first-use -- notify source
+npm --workspace @narumitw/pi-inspect run benchmark:first-use -- package
+npm --workspace @narumitw/pi-notify run benchmark:first-use -- package
+JITI_FS_CACHE=false npm --workspace @narumitw/pi-inspect run benchmark:first-use -- source
+JITI_FS_CACHE=false npm --workspace @narumitw/pi-notify run benchmark:first-use -- source
 ```
+
+Each package owns its `scripts/benchmark-first-use.mjs` and workspace command; these repository-only helpers are not published. The generic startup harness and this cross-package comparison remain repository-owned. Each first-use script resolves its own entry from its file location, independently of the working directory.
 
 Repeat first-use commands in separate processes and discard the first sample. For isolated startup, pass one entry. For source startup, append `/src/index.ts` to each entry. For installed startup, pass the installed package directories. Timing thresholds are not deterministic unit-test assertions.
 
@@ -74,8 +76,9 @@ Inspector's browser-builder tests import an isolated checkout copy. They cannot 
 
 Completed checks:
 
-- `npm run typecheck`, `npm run check`, and plain `npm test`: 714 files passed, 12,381 tests passed, 19 existing skips, no unhandled errors.
-- Focused Notify suite: 1,809 tests; Inspector suite: 467 tests before the three added isolation/build-order regression cases, which also pass in the full root gate.
+- `npm run typecheck`, `npm run check`, and plain `npm test`: 716 files passed, 12,391 tests passed, 19 existing skips, no unhandled errors after the package-owned benchmark relocation.
+- Ten benchmark regression tests cover default/package/source entries from another working directory and rejection of invalid or trailing arguments; both package workspace commands also passed warm/cold smokes. The recorded timing samples and measured intervals are unchanged.
+- Initial focused Notify suite: 1,809 tests; Inspector suite: 467 tests before the three added isolation/build-order regression cases, which also pass in the full root gate.
 - Inspector Playwright browser suite: 134 passed, including real Pi live session, credential rotation and shutdown.
 - Both explicit workspace builds, both `npm run package:pack` commands, and actual tarball inspection passed. Inspector has 68 files; Notify has 32. Required runtime entries/maps, browser assets and licenses are present; tests and build helpers are excluded.
 - Both tarballs installed into a production-only temporary npm root. Jiti startup and first menu/viewer use passed with published Kit 0.65.6.
@@ -84,6 +87,6 @@ Completed checks:
 - The fenced-code-aware README heading audit and diff whitespace review passed.
 - [GitHub CI](https://github.com/narumiruna/pi-extensions/actions/runs/39543297781) passed its checks and test gates for implementation commit `57cf5295`.
 
-Two full root attempts failed unchanged `pi-sync` timing assertions: journal recovery, and once the unchanged-refuse takeover case. A focused rerun and subsequent complete plain `npm test` runs passed, including the final 12,381-test run, without changing Sync or increasing a timeout. A direct Notify suite with macOS's noncanonical temp path also exposed an existing `/var` versus `/private/var` fixture mismatch; the canonical-temp focused run and root runner passed.
+Two full root attempts failed unchanged `pi-sync` timing assertions: journal recovery, and once the unchanged-refuse takeover case. A focused rerun and subsequent complete plain `npm test` runs passed, including the final 12,391-test run, without changing Sync or increasing a timeout. A direct Notify suite with macOS's noncanonical temp path also exposed an existing `/var` versus `/private/var` fixture mismatch; the canonical-temp focused run and root runner passed.
 
 Direct interactive terminal/desktop-browser smoke is not run in this non-interactive execution environment. Generated Jiti TUI callbacks, real HTTP assets, the browser suite, and RPC reload cover the changed paths deterministically; live terminal rendering remains unverified. Linux CI checks and tests passed. Windows behavior and live notification-provider delivery were not newly verified. No packages, version tags or release workflows were published or dispatched.
