@@ -24,7 +24,7 @@ From a local checkout, run these commands from the repository root:
 
 ```sh
 npm install
-npm run build
+npm --workspace @narumitw/pi-notify run build
 pi -e ./packages/pi-notify
 ```
 
@@ -35,7 +35,7 @@ pi install npm:@narumitw/pi-notify
 pi -e npm:@narumitw/pi-notify
 ```
 
-Restart Pi or run `/reload` after persistent installation. The extension uses Pi's TypeScript loader and does not require a package-owned build. It requires Pi APIs for `agent_settled`, `getAgentDir()`, and trusted project settings, plus Node.js with native `fetch` and `AbortSignal.any()`.
+Restart Pi or run `/reload` after persistent installation. Published packages include a generated split `dist/index.ts` runtime for Pi's Jiti loader. Build an unbuilt local checkout before loading the package directory; repository Git/source installation retains `src/index.ts`. The `/notify` menu loads only when opened. The extension requires Pi APIs for `agent_settled`, `getAgentDir()`, and trusted project settings, plus Node.js with native `fetch` and `AbortSignal.any()`.
 
 ## 🚀 Quick start
 
@@ -116,13 +116,15 @@ Before reverting to a version without Teams, remove its IDs from every affected 
 
 ## 🗂️ Package layout
 
-- `src/index.ts`: Pi entrypoint forwarding to `src/notify.ts`.
+- `dist/index.ts`: generated package entrypoint with split runtime chunks and source maps.
+- `src/index.ts`: repository source entrypoint forwarding to `src/notify.ts`.
 - `src/`: session coordination, metadata, settings, menu, and provider contract.
 - `src/providers/`: provider-specific transports and shared bounded HTTP handling.
 - `docs/`: installed settings and behavior reference.
+- `scripts/`: repository-only runtime builder wrapper.
 - `test/`: repository-only deterministic tests.
 
-The package publishes TypeScript source, documentation, and its license. It does not publish test fixtures or credentials.
+The package publishes the generated runtime, TypeScript source, documentation, and its license. It does not publish build scripts, test fixtures, or credentials.
 
 ## 🔎 Keywords
 

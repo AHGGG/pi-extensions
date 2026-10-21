@@ -25,16 +25,19 @@
   ],
   "files": [
     "src",
+    "dist",
     "README.md",
     "LICENSE",
     "docs"
   ],
   "pi": {
     "extensions": [
-      "./src/index.ts"
+      "./dist/index.ts"
     ]
   },
   "scripts": {
+    "build": "node scripts/build-runtime.mjs",
+    "prepack": "npm run build",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
