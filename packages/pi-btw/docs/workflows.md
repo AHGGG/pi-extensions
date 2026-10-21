@@ -6,6 +6,10 @@
 
 `/btw` lets you start from the current conversation or choose **Start from main thread tree…** to use the root-to-selected-entry path, including the selected entry.
 The tree snapshots persisted entries and preserves the main editor draft without navigating, forking, appending to, or switching the main conversation.
+
+For either context source, only user and assistant messages contribute text and formatted tool-call or tool-result blocks.
+Images, standalone tool-result messages, compaction summaries, branch summaries, and other session entries are excluded.
+The side thread retains the last 40,000 characters of this text and adds a truncation notice when earlier content is omitted.
 Side-thread context stays immutable if the main conversation later changes.
 An explicit `Shift+L` label edit is the selector's only main-session mutation and persists through Pi.
 Native tree copying reports success or failure; Escape returns to the manager and Ctrl+C closes the flow.
@@ -43,14 +47,15 @@ The view reports `No selection to copy`, `Copied!`, or a sanitized clipboard err
 Right-click clipboard paste is not installed because Pi has no public clipboard-read callback for this workspace.
 Ctrl+C always cancels the side flow, even if `app.message.copy` is also mapped to Ctrl+C.
 
-Use Pi's effective transcript-search binding (`Ctrl+Shift+F` by default) to search completed or in-progress transcript text, excluding the footer.
+Use Pi's effective transcript-search binding (`Ctrl+Shift+F` by default) to search the displayed transcript, excluding the footer.
+Search remains available while answering, covering previous turns and the current question; the current answer appears only after the response completes.
 The default next-match keys are Enter or `Ctrl+G`; previous-match keys are `Shift+Enter` or `Ctrl+Shift+G`.
 Pi's effective search-close binding, Escape by default, closes search and returns focus to the composer.
 
 Scroll with the mouse wheel, trackpad, or Pi's effective viewport paging bindings (`PgUp`/`PgDn` by default).
 Remapped or disabled bindings control behavior; the composer does not retain hidden literal paging shortcuts.
 The native transcript uses automatic scrollbars and previous/next-message navigation metadata.
-Manual scrolling stays fixed during incoming output, resize, and temporary content fits; explicitly returning to the latest content resumes follow mode.
+Manual scrolling stays fixed when new turns appear, during resize, and when content temporarily fits; explicitly returning to the latest content resumes follow mode.
 On Pi 0.85 or newer, scrolling away from the latest content reveals **Jump to latest message**.
 Click it or use Pi's effective `tui.altScreen.bottom` binding (`Ctrl+End` by default) to resume following new output.
 
@@ -75,6 +80,7 @@ Completed questions, answers, and visible errors remain resumable until the exte
 ## Bring context to the main editor
 
 After a successful answer, use the bring-to-main shortcut (`Ctrl+R` by default) to choose the latest question and answer, everything from one question onward, an exact range, or the full thread.
+All scopes, including the exact-range selector, use successful question-and-answer exchanges only; failed questions and error messages are excluded.
 The scope chooser reports the latest exchange and full-thread sizes.
 Question-suffix, exact-range, and full-thread choices show an exact, read-only preview before closing the side thread.
 The context block is editable after it is loaded into the main editor.
@@ -92,7 +98,7 @@ Cancel returns to the side thread without changing either draft, and concurrent 
 The success message reports whether context was loaded, appended, or replaced and its approximate size.
 
 Without an explicit bring action, closing `/btw` never changes the main conversation.
-Resume state is memory-only: `/new`, Pi `/resume`, `/reload`, extension replacement, and process restart discard it.
+Resume state is memory-only: `/new`, Pi `/resume`, `/fork`, `/reload`, extension replacement, and process restart discard it.
 Unsent drafts, steering queues, interrupted answers, and model credentials are not retained.
 
 ## Core compatibility and verification
