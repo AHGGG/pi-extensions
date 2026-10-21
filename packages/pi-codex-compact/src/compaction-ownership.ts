@@ -1,43 +1,105 @@
-import { buildSessionContext, type SessionEntry } from "@earendil-works/pi-coding-agent";
+import { buildSessionProjection, type SessionEntry } from "@earendil-works/pi-coding-agent";
+import { hasActiveCheckpointClaim, latestCheckpoint } from "./checkpoint.js";
+import { projectSessionCheckpointContext } from "./checkpoint-projection.js";
 import { fingerprintJsonSequence } from "./compaction-fingerprint.js";
+
+/** Reject malformed paths before Pi's tolerant traversal can guess or loop. */
+function ancestry(entries: SessionEntry[], prefixLength = entries.length): string | undefined {
+  const ids = new Set<string>();
+  let parentId: string | null = null;
+  for (const entry of entries) {
+    if (typeof entry.id !== "string" || !entry.id || ids.has(entry.id) || entry.parentId !== parentId) return undefined;
+    ids.add(entry.id);
+    parentId = entry.id;
+  }
+  return fingerprintJsonSequence(
+    entries.slice(0, prefixLength).map((entry) => [
+      entry.id,
+      entry.parentId,
+      entry.type,
+      // These small entries influence Pi's context settings, even outside the
+      // active message range. They are not archived conversation payloads.
+      ...(entry.type === "model_change" ? [entry.provider, entry.modelId] : []),
+      ...(entry.type === "thinking_level_change" ? [entry.thinkingLevel] : []),
+      ...(entry.type === "message" && entry.message.role === "assistant"
+        ? [entry.message.provider, entry.message.model]
+        : []),
+    ]),
+  );
+}
+
+function workingSet(entries: SessionEntry[], snapshotIds: Set<string>): string {
+  // Project the FULL current branch first: later context edits can replace or
+  // resurrect a captured contribution, including one previously omitted.
+  const projection = buildSessionProjection(entries, entries.at(-1)?.id ?? null);
+  const checkpoint = latestCheckpoint(entries);
+  // Latest-checkpoint reconstruction can depend on older cutoffs and edits that
+  // today's projection hides. Keep the authoritative replay/fingerprint checks;
+  // never treat unchanged current messages alone as proof of valid replay.
+  const replayValid = checkpoint
+    ? !!projectSessionCheckpointContext(projection.messages, entries, checkpoint)
+    : !hasActiveCheckpointClaim(entries);
+  // An already-invalid checkpoint still belongs to the foreground operation:
+  // it must report the existing actionable error/cancel policy, not masquerade
+  // as stale ownership. A valid snapshot becoming invalid changes this digest.
+  const latest = [...entries].reverse().find((entry) => entry.type === "compaction");
+  return fingerprintJsonSequence([
+    replayValid,
+    // Keep all latest opaque data and metadata, including malformed/native
+    // details, but never serialize superseded checkpoint payloads.
+    [latest?.id, latest?.firstKeptEntryId, latest?.details],
+    ...projection.entries
+      .filter(({ sourceEntry }) => snapshotIds.has(sourceEntry.id))
+      .map(({ sourceEntry, messages }) => [sourceEntry.id, messages]),
+  ]);
+}
+
+function captureBranch(
+  entries: SessionEntry[],
+  mode: "exact" | "bookkeeping" | "warm",
+  onInvalid?: (reason: string) => void,
+): (current: SessionEntry[]) => boolean {
+  const invalid = (reason: string) => {
+    onInvalid?.(reason);
+    return false;
+  };
+  const length = entries.length;
+  const prefix = ancestry(entries);
+  const snapshotIds = new Set(entries.map((entry) => entry.id));
+  const input = prefix === undefined ? undefined : workingSet(entries, snapshotIds);
+  return (current) => {
+    if (current.length < length || (mode === "exact" && current.length !== length))
+      return invalid("session branch length changed");
+    if (prefix === undefined || ancestry(current, length) !== prefix)
+      return invalid("snapshot ancestry changed, is incomplete, or is duplicated");
+    for (const entry of current.slice(length)) {
+      if (
+        !["custom", "usage", "label", "session_info", "context_edit"].includes(entry.type) &&
+        !(mode === "warm" && (entry.type === "message" || entry.type === "custom_message"))
+      )
+        return invalid("session transition invalidated the snapshot");
+    }
+    return (
+      (input !== undefined && workingSet(current, snapshotIds) === input) ||
+      invalid("projected snapshot or checkpoint replay changed")
+    );
+  };
+}
 
 /** A serialized turn boundary accepts no appended entries, including bookkeeping. */
 export function captureExactCompactionBranch(entries: SessionEntry[]): (current: SessionEntry[]) => boolean {
-  const length = entries.length;
-  const fingerprint = fingerprintJsonSequence(entries);
-  return (current) => current.length === length && fingerprintJsonSequence(current) === fingerprint;
+  return captureBranch(entries, "exact");
 }
 
 /** Allow bookkeeping descendants without accepting a different branch or compaction input. */
 export function captureCompactionBranch(entries: SessionEntry[]): (current: SessionEntry[]) => boolean {
-  // getBranch() returns a new array, not immutable entries. Capture persisted
-  // JSON values before awaiting; schema symbols and prototypes are not session data.
-  const length = entries.length;
-  const prefix = fingerprintJsonSequence(entries);
-  const leafId = entries.at(-1)?.id ?? null;
-  const context = fingerprintJsonSequence([buildSessionContext(entries, leafId)]);
-  const capturedIds = entries.map((entry) => entry.id);
-  return (current) => {
-    if (current.length < length || fingerprintJsonSequence(current.slice(0, length)) !== prefix) return false;
-    const ids = new Set(capturedIds);
-    let parentId = leafId;
-    for (const entry of current.slice(length)) {
-      if (entry.parentId !== parentId || ids.has(entry.id)) return false;
-      ids.add(entry.id);
-      switch (entry.type) {
-        case "custom":
-        case "usage":
-        case "label":
-        case "session_info":
-        case "context_edit":
-          break;
-        default:
-          return false;
-      }
-      parentId = entry.id;
-    }
-    // A context_edit contributes no message itself, but can omit or replace an
-    // earlier message. Pi's finalized projection is authoritative, not raw types.
-    return fingerprintJsonSequence([buildSessionContext(current, parentId)]) === context;
-  };
+  return captureBranch(entries, "bookkeeping");
+}
+
+/** Preserve snapshot ancestry, effective input, and replay while allowing new turns. */
+export function captureWarmCompactionBranch(
+  entries: SessionEntry[],
+  onInvalid?: (reason: string) => void,
+): (current: SessionEntry[]) => boolean {
+  return captureBranch(entries, "warm", onInvalid);
 }

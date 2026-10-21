@@ -596,7 +596,7 @@ for (const transition of [
     if (transition === "shutdown")
       await h.mock.events.get("session_shutdown")?.[0]({ type: "session_shutdown", reason: "exit" }, h.ctx);
     if (transition === "model") h.setModel({ id: "new" });
-    if (transition === "branch") h.entries.push(user("new-leaf", 10));
+    if (transition === "branch") h.entries.push({ ...user("new-leaf", 10), parentId: "tail" });
     if (transition === "model-event") {
       h.setModel({ id: "new" });
       await h.mock.events.get("model_select")?.[0]({ type: "model_select", model: { ...baseModel, id: "new" } }, h.ctx);

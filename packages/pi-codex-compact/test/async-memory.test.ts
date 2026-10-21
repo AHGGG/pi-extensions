@@ -72,7 +72,7 @@ test("fingerprints preserve persisted JSON semantics, value boundaries, and orde
     assert.notEqual(fingerprintJsonSequence(left), fingerprintJsonSequence(right));
 });
 
-test("warm guard fixes the captured length and rejects compacted-out historical mutations", () => {
+test("warm guard fixes the captured length but accepts irrelevant archived body mutations", () => {
   const h = history();
   const captured = h.manager.getBranch();
   const current = captureWarmCompactionBranch(captured);
@@ -81,7 +81,7 @@ test("warm guard fixes the captured length and rejects compacted-out historical 
   const first = h.manager.getEntry(h.first);
   assert.ok(first?.type === "message" && first.message.role === "user");
   first.message.content = "same ID, changed hidden history";
-  assert.equal(current(h.manager.getBranch()), false);
+  assert.equal(current(h.manager.getBranch()), true);
 });
 
 test("only active provider messages are detached from borrowed, mutable session entries", async () => {
@@ -128,7 +128,7 @@ test("only active provider messages are detached from borrowed, mutable session 
 });
 
 for (const changed of ["hidden", "active"] as const)
-  test(`preparation rejects ${changed} in-place mutation during authentication before provider dispatch`, async () => {
+  test(`preparation ${changed === "hidden" ? "accepts archived" : "rejects active"} mutation during authentication`, async () => {
     const h = history();
     const authStarted = deferred<void>();
     const authRelease = deferred<void>();
@@ -145,8 +145,16 @@ for (const changed of ["hidden", "active"] as const)
       assert.ok(entry?.type === "message" && entry.message.role === "user");
       entry.message.content = "mutated during authentication";
       authRelease.resolve();
-      assert.deepEqual(await pending.job.promise, { cancel: true });
-      assert.equal(h.captured.length, 0);
+      if (changed === "hidden") {
+        await pending.started;
+        pending.release();
+        const result = await pending.job.promise;
+        assert.ok(result && "compaction" in result && result.compaction);
+        assert.equal(h.captured.length, 1);
+      } else {
+        assert.deepEqual(await pending.job.promise, { cancel: true });
+        assert.equal(h.captured.length, 0);
+      }
     } finally {
       authRelease.resolve();
       pending.owner.abort();
@@ -155,7 +163,7 @@ for (const changed of ["hidden", "active"] as const)
   });
 
 for (const change of ["hidden", "suffix", "append", "cancel"] as const)
-  test(`borrowed auto-adoption rejects ${change} changes during authentication`, async () => {
+  test(`borrowed auto-adoption ${change === "hidden" ? "accepts archived" : "rejects"} ${change} changes during authentication`, async () => {
     const h = history();
     const pending = start(h);
     const authStarted = deferred<void>();
@@ -183,7 +191,8 @@ for (const change of ["hidden", "suffix", "append", "cancel"] as const)
         entry.message.content = "changed while authenticating";
       }
       authRelease.resolve();
-      assert.equal(await adoption, undefined);
+      if (change === "hidden") assert.equal((await adoption)?.type, "compaction");
+      else assert.equal(await adoption, undefined);
     } finally {
       applying.abort();
       authRelease.resolve();

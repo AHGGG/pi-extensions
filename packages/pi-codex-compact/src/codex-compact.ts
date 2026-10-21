@@ -15,8 +15,8 @@ import {
 } from "./checkpoint.js";
 import { projectSessionCheckpointContext } from "./checkpoint-projection.js";
 import { rewriteCheckpointForWork } from "./checkpoint-replay.js";
-import { type CompactionAttempt, compactRemotely } from "./compaction-operation.js";
-import { captureExactCompactionBranch } from "./compaction-ownership.js";
+import { activeTools, type CompactionAttempt, compactRemotely } from "./compaction-operation.js";
+import { captureCompactionBranch, captureExactCompactionBranch } from "./compaction-ownership.js";
 import { CompactionTimings } from "./compaction-timing.js";
 import { type RemoteCompactionProtocol, resolveCompactionRoute } from "./model-api.js";
 import { hasCheckpointMarker } from "./protocol.js";
@@ -538,6 +538,12 @@ export function createCodexCompactExtension(
       const model = ctx.model;
       const route = resolveCompactionRoute(model, settings);
       const key = model && route.kind === "remote" ? rejectionRouteKey(model, route) : undefined;
+      const branchIsCurrent = captureCompactionBranch(event.branchEntries);
+      const modelKey = JSON.stringify(model);
+      const systemPrompt = ctx.getSystemPrompt?.();
+      const toolsKey = JSON.stringify([pi.getActiveTools(), activeTools(pi)]);
+      const thinkingLevel = pi.getThinkingLevel();
+      let statusCleared = false;
       const isCurrent = () => {
         if (owners.get(ctx.sessionManager) !== owner || owner.operation !== operation || operation.signal.aborted)
           return false;
@@ -626,6 +632,13 @@ export function createCodexCompactExtension(
               logCompaction(ctx, "Actual compaction handed to Pi native compaction.");
             }
           }
+          // Both reuse notices and status cleanup can reenter host code. Run
+          // those callbacks before the final handoff check, not in finally after it.
+          if (owners.get(ctx.sessionManager) === owner && owner.operation === operation) {
+            statusCleared = true;
+            if (!owner.controller.signal.aborted && owner.sessionId === ctx.sessionManager.getSessionId())
+              ctx.ui.setStatus(STATUS_KEY, undefined);
+          }
           const details =
             result && "compaction" in result ? parseCheckpointDetails(result.compaction?.details) : undefined;
           if (
@@ -650,12 +663,31 @@ export function createCodexCompactExtension(
               settingsKey: compactionSettingsKey(settings),
             };
           }
+          if (
+            !isCurrent() ||
+            owner.controller.signal.aborted ||
+            event.signal.aborted ||
+            owner.sessionId !== ctx.sessionManager.getSessionId() ||
+            JSON.stringify(ctx.model) !== modelKey ||
+            ctx.getSystemPrompt?.() !== systemPrompt ||
+            JSON.stringify([pi.getActiveTools(), activeTools(pi)]) !== toolsKey ||
+            pi.getThinkingLevel() !== thinkingLevel ||
+            !branchIsCurrent(ctx.sessionManager.getBranch())
+          ) {
+            owner.compactionPending = false;
+            if (run && owner.run === run) run.pending = undefined;
+            return { cancel: true };
+          }
           return result;
         })
         .finally(() => {
           if (owners.get(ctx.sessionManager) === owner && owner.operation === operation) {
             owner.operation = undefined;
-            if (!owner.controller.signal.aborted && owner.sessionId === ctx.sessionManager.getSessionId()) {
+            if (
+              !statusCleared &&
+              !owner.controller.signal.aborted &&
+              owner.sessionId === ctx.sessionManager.getSessionId()
+            ) {
               ctx.ui.setStatus(STATUS_KEY, undefined);
             }
           }

@@ -14,9 +14,12 @@ import { abortable } from "./abortable.js";
 import { createCheckpointDetails, fallbackSummary, latestCheckpoint, parseCheckpointDetails } from "./checkpoint.js";
 import { checkpointKeptMessages, projectSessionCheckpointContext } from "./checkpoint-projection.js";
 import { compactionBindingChanges, resolveCompactionBinding, sameCompactionBinding } from "./compaction-binding.js";
-import { fingerprintJsonSequence } from "./compaction-fingerprint.js";
 import { activeTools, type CompactionAttempt, compactRemotely } from "./compaction-operation.js";
-import { captureCompactionBranch, captureExactCompactionBranch } from "./compaction-ownership.js";
+import {
+  captureCompactionBranch,
+  captureExactCompactionBranch,
+  captureWarmCompactionBranch,
+} from "./compaction-ownership.js";
 import type { CompactionTimings } from "./compaction-timing.js";
 import { type RemoteCompactionProtocol, resolveCompactionRoute } from "./model-api.js";
 import { type RejectedRoutes, rejectionRouteKey } from "./rejection-state.js";
@@ -24,45 +27,7 @@ import { type CodexCompactSettingsRuntime, compactionSettingsKey } from "./setti
 
 type CompactionResult = Awaited<ReturnType<typeof compactRemotely>>;
 
-/** The immutable snapshot remains an ancestor; edits cannot rewrite its context. */
-export function captureWarmCompactionBranch(
-  snapshot: SessionEntry[],
-  onInvalid?: (reason: string) => void,
-): (entries: SessionEntry[]) => boolean {
-  const invalid = (reason: string) => {
-    onInvalid?.(reason);
-    return false;
-  };
-  const length = snapshot.length;
-  const prefix = fingerprintJsonSequence(snapshot);
-  const leafId = snapshot.at(-1)?.id ?? null;
-  const snapshotIds = new Set(snapshot.map((entry) => entry.id));
-  const projected = fingerprintJsonSequence(
-    buildSessionProjection(snapshot, leafId).entries.map(({ sourceEntry, messages }) => [sourceEntry.id, messages]),
-  );
-  return (entries) => {
-    if (entries.length < length) return invalid("session branch no longer contains the full snapshot");
-    if (fingerprintJsonSequence(entries.slice(0, length)) !== prefix)
-      return invalid("persisted snapshot entries changed");
-    const ids = new Set(snapshotIds);
-    let parentId = leafId;
-    for (const entry of entries.slice(length)) {
-      if (entry.parentId !== parentId) return invalid("appended session ancestry is discontinuous");
-      if (ids.has(entry.id)) return invalid("appended session entry ID is duplicated");
-      ids.add(entry.id);
-      // New turns and bookkeeping are safe; model/branch/compaction transitions are not.
-      if (
-        !["message", "custom_message", "custom", "usage", "label", "session_info", "context_edit"].includes(entry.type)
-      )
-        return invalid("session transition invalidated the snapshot");
-      parentId = entry.id;
-    }
-    const currentPrefix = buildSessionProjection(entries, parentId)
-      .entries.filter(({ sourceEntry }) => snapshotIds.has(sourceEntry.id))
-      .map(({ sourceEntry, messages }) => [sourceEntry.id, messages]);
-    return fingerprintJsonSequence(currentPrefix) === projected || invalid("projected snapshot prefix changed");
-  };
-}
+export { captureWarmCompactionBranch } from "./compaction-ownership.js";
 
 function completeToolPairs(messages: AgentMessage[]): boolean {
   const pending = new Set<string>();
@@ -128,16 +93,17 @@ export function startWarmCompaction(
   // serialized history prefix (Pi still owns the original session entries).
   const snapshot = ctx.sessionManager.getBranch();
   // Pi recreates label entries with new IDs when forking. Persist a stable
-  // non-label cutoff; guard every raw entry, including trailing labels.
+  // non-label cutoff; guard the full ancestry, including trailing labels.
   const snapshotLeafId = [...snapshot].reverse().find((entry) => entry.type !== "label")?.id;
-  const projection = buildSessionProjection(snapshot, snapshotLeafId ?? null);
-  const first = projection.entries.find(({ messages }) => messages.some((message) => message.role !== "system"));
-  if (!snapshotLeafId || !first || !completeToolPairs(buildSessionContext(snapshot, snapshotLeafId).messages))
-    return undefined;
   let branchFailure: string | undefined;
   const branchIsCurrent = captureWarmCompactionBranch(snapshot, (reason) => {
     branchFailure = reason;
   });
+  if (!branchIsCurrent(snapshot)) return undefined;
+  const projection = buildSessionProjection(snapshot, snapshotLeafId ?? null);
+  const first = projection.entries.find(({ messages }) => messages.some((message) => message.role !== "system"));
+  if (!snapshotLeafId || !first || !completeToolPairs(buildSessionContext(snapshot, snapshotLeafId).messages))
+    return undefined;
   const settingsKey = compactionSettingsKey(settings);
   const modelKey = JSON.stringify(model);
   const systemPrompt = ctx.getSystemPrompt();
@@ -236,7 +202,7 @@ export type WarmCompactionAdoption =
   | { kind: "ready"; result: CompactionResult };
 
 interface WarmCompactionApplicationOptions {
-  /** Exact raw-entry guard shared by the serialized boundary, never a cached verdict. */
+  /** Exact ancestry and working-set guard shared by the boundary, never a cached verdict. */
   exactBranchIsCurrent?: (entries: SessionEntry[]) => boolean;
   timings?: CompactionTimings;
 }

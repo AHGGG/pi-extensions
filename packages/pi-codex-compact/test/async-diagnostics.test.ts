@@ -55,7 +55,7 @@ for (const change of ["prompt", "unpaired", "projection", "auth-lookup", "naviga
       const entry = h.manager.getBranch().find((entry) => entry.type === "message");
       assert.ok(entry && entry.type === "message" && "content" in entry.message);
       entry.message.content = "PRIVATE-EDIT";
-      reason = /persisted snapshot entries changed/;
+      reason = /projected snapshot or checkpoint replay changed/;
     } else if (change === "auth-lookup") {
       h.ctx.modelRegistry.getApiKeyAndHeaders = async () => {
         throw new Error("PRIVATE-AUTH-ERROR");

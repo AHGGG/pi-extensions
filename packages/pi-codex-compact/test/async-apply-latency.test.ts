@@ -37,10 +37,15 @@ test("exact boundary guard compares persisted values and rejects even bookkeepin
   assert.equal(valid(h.manager.getBranch()), false);
 });
 
-test("turn boundaries never serialize the complete raw-history array", async () => {
+test("turn boundaries never serialize raw histories, archived bodies, or superseded blobs", async () => {
   const h = fixture({ asyncAutoApply: true });
+  h.manager.appendCompaction("older native summary", h.first, 80_000, { blob: "SUPERSEDED-BLOB" });
+  h.manager.appendMessage({ role: "user", content: "ARCHIVED-BODY", timestamp: 3 });
+  const active = h.manager.appendMessage({ role: "user", content: "active tail", timestamp: 4 });
+  h.manager.appendCompaction("latest native summary", active, 80_000);
   await h.emit("session_start", {});
   let wholeHistories = 0;
+  let archivedPayloads = 0;
   const stringify = JSON.stringify;
   const spy = vi.spyOn(JSON, "stringify").mockImplementation((value, ...args) => {
     if (
@@ -49,7 +54,9 @@ test("turn boundaries never serialize the complete raw-history array", async () 
       value.every((entry) => entry && typeof entry === "object" && "id" in entry && "parentId" in entry)
     )
       wholeHistories += 1;
-    return stringify(value, ...args);
+    const result = stringify(value, ...args);
+    if (result && /ARCHIVED-BODY|SUPERSEDED-BLOB/.test(result)) archivedPayloads += 1;
+    return result;
   });
   try {
     await h.start();
@@ -58,6 +65,7 @@ test("turn boundaries never serialize the complete raw-history array", async () 
     await new Promise<void>((resolve) => setImmediate(resolve));
     assert.ok(await h.start());
     assert.equal(wholeHistories, 0, "do not reintroduce an eager or retained full-history JSON string");
+    assert.equal(archivedPayloads, 0, "irrelevant archived bodies and superseded payloads are never fingerprinted");
     assert.equal(h.fetches, 1);
   } finally {
     spy.mockRestore();
@@ -139,8 +147,8 @@ test("notification callbacks run before the final draft validation", async () =>
 });
 
 for (const phase of ["getApiKeyAndHeaders", "getProviderAuth"] as const)
-  for (const change of ["hidden", "append", "projection", "owner"] as const)
-    test(`ChatGPT boundary rejects ${change} across ${phase}`, async () => {
+  for (const change of ["hidden", "active", "append", "projection", "owner"] as const)
+    test(`ChatGPT boundary ${change === "hidden" ? "accepts archived" : "rejects"} ${change} across ${phase}`, async () => {
       const h = await ready(true, true);
       const started = deferred<void>();
       const release = deferred<void>();
@@ -169,11 +177,18 @@ for (const phase of ["getApiKeyAndHeaders", "getProviderAuth"] as const)
           const entry = h.manager.getEntry(h.first);
           assert.ok(entry?.type === "message" && entry.message.role === "user");
           entry.message.content = "same-ID hidden mutation";
+        } else if (change === "active") {
+          const entry = h.manager
+            .getBranch()
+            .find((entry) => entry.type === "message" && entry.message.role === "assistant");
+          assert.ok(entry?.type === "message" && entry.message.role === "assistant");
+          entry.message.content = [{ type: "text", text: "changed active assistant" }];
         } else if (change === "append") h.manager.appendCustomEntry("racing-bookkeeping", {});
         else if (change === "projection") h.manager.appendContextEdit(h.first, { content: "changed snapshot" });
         else await h.emit("session_start", {});
         release.resolve();
-        assert.equal(await applying, undefined);
+        if (change === "hidden") assert.ok(await applying);
+        else assert.equal(await applying, undefined);
         assert.equal(h.fetches, 1);
         assert.equal(h.manager.getBranch().filter((entry) => entry.type === "compaction").length, 1);
       } finally {
@@ -181,3 +196,91 @@ for (const phase of ["getApiKeyAndHeaders", "getProviderAuth"] as const)
         await h.emit("session_shutdown", {});
       }
     });
+
+for (const [mode, callback] of [
+  ["ready", "notify"],
+  ["ready", "cleanup"],
+  ["foreground", "cleanup"],
+] as const)
+  for (const change of ["body", "prompt", "tools", "owner"] as const)
+    test(`${mode} manual handoff rejects ${change} mutation from ${callback} callbacks`, async () => {
+      const h = mode === "ready" ? await ready() : fixture({ logCompaction: true });
+      if (mode === "foreground") {
+        await h.emit("session_start", {});
+        h.release();
+      }
+      let mutated = false;
+      const mutate = () => {
+        mutated = true;
+        if (change === "prompt") h.setPrompt("changed after preparation");
+        else if (change === "tools") h.rawPi.setActiveTools(["read"]);
+        else if (change === "owner") void h.emit("session_shutdown", {});
+        else {
+          const entry = h.manager.getEntry(h.first);
+          assert.ok(entry?.type === "message" && entry.message.role === "user");
+          entry.message.content = "changed after preparation";
+        }
+      };
+      const notify = h.ctx.ui.notify;
+      const setStatus = h.ctx.ui.setStatus;
+      if (callback === "notify") {
+        h.ctx.ui.notify = (message, type) => {
+          notify(message, type);
+          if (message.includes("Actual compaction is reusing the async checkpoint.")) mutate();
+        };
+      }
+      h.ctx.ui.setStatus = (key, value) => {
+        setStatus(key, value);
+        if (callback === "cleanup" && value === undefined && !mutated) mutate();
+      };
+      try {
+        assert.deepEqual(await h.compact("manual"), { cancel: true });
+        assert.equal(mutated, true);
+        assert.equal(h.fetches, 1);
+        assert.equal(
+          h.manager.getBranch().some((entry) => entry.type === "compaction"),
+          false,
+        );
+      } finally {
+        h.ctx.ui.setStatus = setStatus;
+        await h.emit("session_shutdown", {});
+      }
+    });
+
+test("continuation bookkeeping cannot run mutable callbacks after the final foreground guard", async () => {
+  const h = await ready();
+  await h.emit("before_agent_start", {});
+  let reuse = false;
+  let cleanup = false;
+  let reads = 0;
+  let mutated = false;
+  const notify = h.ctx.ui.notify;
+  const setStatus = h.ctx.ui.setStatus;
+  const get = h.runtime.get;
+  h.ctx.ui.notify = (message, type) => {
+    notify(message, type);
+    if (message.includes("Actual compaction is reusing the async checkpoint.")) reuse = true;
+  };
+  h.ctx.ui.setStatus = (key, value) => {
+    setStatus(key, value);
+    if (reuse && value === undefined) cleanup = true;
+  };
+  h.runtime.get = () => {
+    if (cleanup && ++reads === 2) {
+      const entry = h.manager.getEntry(h.first);
+      assert.ok(entry?.type === "message" && entry.message.role === "user");
+      entry.message.content = "changed by continuation settings callback";
+      mutated = true;
+    }
+    return get();
+  };
+  try {
+    assert.deepEqual(await h.compact("threshold"), { cancel: true });
+    assert.equal(mutated, true);
+    assert.equal(h.fetches, 1);
+  } finally {
+    h.runtime.get = get;
+    h.ctx.ui.setStatus = setStatus;
+    await h.emit("session_shutdown", {});
+  }
+});
