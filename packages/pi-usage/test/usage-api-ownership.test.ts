@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { test } from "vitest";
+import { test, vi } from "vitest";
 import { deferred, routerResponse, usageApiRuntime } from "./fixtures/usage-api-runtime.js";
 
 type Runtime = Awaited<ReturnType<typeof usageApiRuntime>>;
@@ -88,11 +88,12 @@ for (const successor of ["report", "failure"] as const) {
   });
 }
 
-test("a configured manual query waiting for old auth cannot overwrite an API successor", async () => {
+test("API waits for captured manual auth before publishing the new account report", async () => {
   const runtime = await usageApiRuntime({ mode: "rpc" });
   const entered = deferred<void>();
   const resume = deferred<void>();
   let manual: ReturnType<typeof manualConfigured> | undefined;
+  vi.useFakeTimers();
   try {
     let key = "old-account-key";
     let first = true;
@@ -107,24 +108,26 @@ test("a configured manual query waiting for old auth cannot overwrite an API suc
       }
       return { source: "API key", auth: { apiKey: captured } };
     };
-    runtime.onFetch(async () => routerUsage(36));
+    runtime.onFetch(async (_url, init) =>
+      routerUsage((init.headers as Record<string, string>).Authorization === "Bearer old-account-key" ? 90 : 36),
+    );
     manual = manualConfigured(runtime, "OpenRouter");
     await entered.promise;
     key = "new-account-key";
     runtime.key(key);
-    const successor = await runtime.query({ refresh: true });
+    const pending = runtime.query({ refresh: true });
+    await vi.advanceTimersByTimeAsync(0);
+    assert.equal(runtime.fetches.length, 0, "API must not take ownership while manual auth is pending");
+    resume.resolve();
+    const successor = await pending;
+    await manual;
     assert.equal(successor.status, "ready");
     if (successor.status === "ready")
       assert.equal(successor.report.metrics.find((metric) => metric.id === "usage-total")?.value, 36);
-    assert.equal(runtime.fetches.length, 1);
-    const notifications = [...runtime.changes];
-    resume.resolve();
-    await manual;
-    assert.equal(runtime.fetches.length, 1, "old resolved auth must not reach transport");
-    assert.deepEqual(runtime.changes, notifications, "old auth must not clear the new identity or report");
+    assert.equal(runtime.fetches.length, 2, "API must validate and query the new account after the presentation");
     const titles: string[] = [];
     await manualConfigured(runtime, "OpenRouter", titles);
-    assert.equal(runtime.fetches.length, 1, "the API successor report must remain cached");
+    assert.equal(runtime.fetches.length, 2, "the API successor report must remain cached");
     assert.ok(
       titles.some((title) => title.includes("64.00")),
       "the configured view must show the successor report",
@@ -132,10 +135,11 @@ test("a configured manual query waiting for old auth cannot overwrite an API suc
     key = "old-account-key";
     runtime.key(key);
     await manualConfigured(runtime, "OpenRouter");
-    assert.equal(runtime.fetches.length, 2, "the old account must not have a stale cached report");
+    assert.equal(runtime.fetches.length, 3, "the old account must not have a stale cached report");
   } finally {
     resume.resolve();
     await manual;
+    vi.useRealTimers();
     await runtime.close();
   }
 });
@@ -230,7 +234,7 @@ function fireworksResponse(url: string) {
   );
 }
 
-for (const successor of ["scheduled", "manual", "API"] as const) {
+for (const successor of ["scheduled", "manual"] as const) {
   test(`an old Fireworks discovery failure cannot install backoff after ${successor} success`, async () => {
     const runtime = await usageApiRuntime({ mode: "rpc", model: fireworksModel });
     const entered = deferred<void>();
@@ -250,12 +254,8 @@ for (const successor of ["scheduled", "manual", "API"] as const) {
       if (successor === "scheduled") {
         Object.assign(runtime.currentModel, runtime.providerModel);
         await scheduled(runtime);
-      } else if (successor === "manual") {
-        await manualConfigured(runtime, "Fireworks");
       } else {
-        const result = await runtime.query({ refresh: true });
-        assert.equal(result.status, "ready");
-        if (result.status === "ready") assert.equal(result.report.accountLabel, "acme");
+        await manualConfigured(runtime, "Fireworks");
       }
       assert.equal(runtime.fetches.length, 3);
       assert.equal(runtime.changes.filter((event) => event.reason === "updated").length, 1);
@@ -276,6 +276,43 @@ for (const successor of ["scheduled", "manual", "API"] as const) {
     }
   });
 }
+
+test("API waits for target discovery failure and preserves its backoff before retrying", async () => {
+  const runtime = await usageApiRuntime({ mode: "rpc", model: fireworksModel });
+  const entered = deferred<void>();
+  const response = deferred<Response>();
+  let manual: ReturnType<typeof manualConfigured> | undefined;
+  vi.useFakeTimers();
+  try {
+    runtime.onFetch(async (url) => {
+      if (runtime.fetches.length === 1) {
+        entered.resolve();
+        return response.promise;
+      }
+      return fireworksResponse(url);
+    });
+    manual = manualConfigured(runtime, "Fireworks");
+    await entered.promise;
+    const pending = runtime.query({ refresh: true });
+    await vi.advanceTimersByTimeAsync(0);
+    assert.equal(runtime.fetches.length, 1);
+    response.resolve(new Response("discovery unavailable", { status: 503 }));
+    assert.deepEqual(await pending, { status: "unavailable", providerId: "fireworks", reason: "query-failed" });
+    await manual;
+    assert.equal(runtime.fetches.length, 1, "API must respect the presentation's discovery backoff");
+    assert.equal(runtime.changes.filter((event) => event.reason === "query-failed").length, 1);
+    await vi.advanceTimersByTimeAsync(30_000);
+    const result = await runtime.query({ refresh: true });
+    assert.equal(result.status, "ready");
+    if (result.status === "ready") assert.equal(result.report.accountLabel, "acme");
+    assert.equal(runtime.fetches.length, 3);
+  } finally {
+    response.resolve(new Response("{}", { status: 503 }));
+    await manual;
+    vi.useRealTimers();
+    await runtime.close();
+  }
+});
 
 const guardedModels = [
   ["baseten", "https://inference.baseten.co/v1"],

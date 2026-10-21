@@ -164,6 +164,7 @@ export default function usageExtension(pi: ExtensionAPI, dependencies: UsageExte
   const failureBackoff = new Map<string, { until: number; message: string }>();
   const latestQueries = new Map<string, number>();
   const providerQueries = new Map<string, number>();
+  const presentationQueries = new Map<string, Set<Promise<QueryOutcome>>>();
   const providerIdentities = new Map<string, string>();
   const activeControllers = new Set<AbortController>();
   const nativeQueryControllers = new Set<AbortController>();
@@ -666,7 +667,7 @@ export default function usageExtension(pi: ExtensionAPI, dependencies: UsageExte
     }
   };
 
-  const queryAdapterState = async (...args: Parameters<typeof queryAdapterStateInternal>): Promise<QueryOutcome> => {
+  const executeAdapterState = async (...args: Parameters<typeof queryAdapterStateInternal>): Promise<QueryOutcome> => {
     const [ctx, adapter, displayState, force, signal, ...rest] = args;
     if (adapter.id !== "openai") return queryAdapterStateInternal(...args);
     const policy = openaiPolicy();
@@ -689,6 +690,20 @@ export default function usageExtension(pi: ExtensionAPI, dependencies: UsageExte
     }
   };
 
+  const queryAdapterState = (...args: Parameters<typeof queryAdapterStateInternal>): Promise<QueryOutcome> => {
+    const providerId = args[1].id;
+    const apiRequest = args[7];
+    if (apiRequest) return executeAdapterState(...args);
+    const queries = presentationQueries.get(providerId) ?? new Set<Promise<QueryOutcome>>();
+    const pending = executeAdapterState(...args);
+    queries.add(pending);
+    presentationQueries.set(providerId, queries);
+    return pending.finally(() => {
+      queries.delete(pending);
+      if (queries.size === 0 && presentationQueries.get(providerId) === queries) presentationQueries.delete(providerId);
+    });
+  };
+
   usageApi = registerUsageApi(pi, {
     policyIdentity: () =>
       JSON.stringify({ openai: openaiPolicy(), targets: settingsRuntime.get().settings.selectedTargets }),
@@ -704,6 +719,19 @@ export default function usageExtension(pi: ExtensionAPI, dependencies: UsageExte
       checkCurrent();
       const adapter = adapterForProvider(providerId);
       if (!adapter) return { status: "unavailable", providerId, reason: "unsupported" };
+      // API work must not take ownership from a status or menu read. Waiting observes its
+      // completion, not its result, and cancellation belongs only to this API waiter.
+      while (true) {
+        const presentations = presentationQueries.get(providerId);
+        if (!presentations?.size) break;
+        await awaitWithDeadline(
+          Promise.allSettled([...presentations]),
+          signal,
+          Math.max(1, deadlineAt - Date.now()),
+          "waiting for usage presentation queries",
+        );
+        checkCurrent();
+      }
       const outcome = await queryAdapterState(ctx, adapter, "configured", true, signal, 0, deadlineAt, {
         checkCurrent,
       });
@@ -1684,6 +1712,7 @@ export default function usageExtension(pi: ExtensionAPI, dependencies: UsageExte
     failureBackoff.clear();
     latestQueries.clear();
     providerQueries.clear();
+    presentationQueries.clear();
     providerIdentities.clear();
     activeCurrentIdentity = undefined;
     cache.clear();
@@ -1732,6 +1761,7 @@ export default function usageExtension(pi: ExtensionAPI, dependencies: UsageExte
     failureBackoff.clear();
     latestQueries.clear();
     providerQueries.clear();
+    presentationQueries.clear();
     providerIdentities.clear();
     activeCurrentIdentity = undefined;
     cache.clear();

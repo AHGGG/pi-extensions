@@ -180,6 +180,8 @@ A cached report must match the active session, provider, credential identity, ef
 
 With `refresh: true`, the service revalidates runtime auth and the selected target through its existing guarded read-only query path. It must not satisfy the request with an older cached report. It may join an in-flight query only when that query has the same validated identity and policy. Ready results use `source: "refresh"`.
 
+An API refresh waits for already-running status and menu queries for the same provider before starting its own guarded read. It does not reuse their reports or cancel their work. Waiting uses the original 15-second API deadline; cancellation stops only the API waiter. Queries for other providers do not block it. A newer presentation query can still supersede API work so the user-facing flow retains ownership.
+
 Refresh respects provider support, explicit opt-ins, request limits, and failure backoff. It cannot enable an experimental source or bypass authentication and origin checks. If a target needs user selection, it returns `selection-required`; it must not open UI, persist a choice, or query every visible target. A failed refresh returns `query-failed`, not an older ready report.
 
 The API must not change the statusline, open menus, send notifications, append session messages, or activate tools. A successful refresh may update the shared in-memory cache and emit `usage:changed:v1`.
@@ -337,7 +339,8 @@ Named verification coverage lives under `packages/pi-usage/test/`:
 | `core.test.ts` | Exact cache expiry, bounded storage, metadata, post-mutation notifications, and synchronous reentry |
 | `usage-api-runtime.test.ts` | Guarded refresh, backoff, no-network cache reads, opt-in preservation, target selection rejection, settings ordering, and all four modes |
 | `usage-api-lifecycle.test.ts` | Cancellation and session/model/auth/target/policy replacement across asynchronous phases |
-| `usage-api-ownership.test.ts` | Obsolete auth/discovery/transport cannot erase successor reports or backoff; internal guard errors preserve stale-context; unsupported exposure stays bounded |
+| `usage-api-ownership.test.ts` | Obsolete auth/discovery/transport cannot erase successor reports or backoff; serialized API reads preserve presentation failures and backoff; internal guard errors preserve stale-context; unsupported exposure stays bounded |
+| `usage-api-presentation.test.ts` | API waits preserve status polling and menus, remain provider-scoped, retain the original deadline, and release correctly across cancellation, recursive auth retry, and session replacement |
 | `usage-client.test.ts` | Independent structural consumer, malformed responses, absent service, notification races, local expiry, and disposal |
 | `usage-api-example.test.ts` | The bounded example above is compiled and executed, including deadline cleanup |
 | `usage-api-prefix.test.ts` | Consecutive real Pi requests preserve the normalized model-visible prefix and ordered tool definitions |
