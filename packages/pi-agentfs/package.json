@@ -39,6 +39,7 @@
     "node": ">=22.19.0"
   },
   "dependencies": {
+    "@narumitw/pi-tui-kit": "^0.66.0",
     "@tursodatabase/database": "0.4.4",
     "agentfs-sdk": "0.6.4",
     "just-bash": "3.6.0"

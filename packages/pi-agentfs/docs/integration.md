@@ -190,6 +190,7 @@ Unicode spaces, `@` prefixes, and file-URL-looking names are literal virtual fil
 
 Tool rendering intentionally omits host-file hyperlinks and speculative edit previews because Pi's default edit preview reads host files.
 The renderers use only supplied arguments, results, and completed edit diffs. They remove terminal controls from display copies without changing stored filenames or tool payloads.
+Display rows use cell-aware hard wrapping. Spaces and blank lines remain in the sanitized text; a grapheme wider than the available row is shown as `?` instead of overflowing the row.
 Read paging accepts positive integer offsets and limits, and reserves space for continuation notices within the complete output bound.
 
 ## Deployment and publication handoff

@@ -1,6 +1,7 @@
 import { stripVTControlCharacters } from "node:util";
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
-import { type Component, Text, truncateToWidth } from "@earendil-works/pi-tui";
+import type { Component } from "@earendil-works/pi-tui";
+import { hardWrapTerminalDocument } from "@narumitw/pi-tui-kit";
 
 function displayText(text: string): string {
   // Preserve raw tool payloads; strip terminal controls only at the display boundary.
@@ -9,15 +10,31 @@ function displayText(text: string): string {
   return stripVTControlCharacters(text).replace(controls, "").replaceAll("\t", "   ");
 }
 
-function boundedComponent(text: string, padding = 0): Component {
-  const component = new Text(text, padding, 0);
+function boundedComponent(text: string, style: (line: string, offset: number) => string, padding = 0): Component {
+  let cachedWidth: number | undefined;
+  let cachedLines: string[] | undefined;
   return {
     render(width) {
-      if (width <= 0) return [];
-      // Text can retain one two-cell character in a one-cell viewport.
-      return component.render(width).map((line) => truncateToWidth(line, width, ""));
+      if (!Number.isFinite(width) || width < 1) return [];
+      const safeWidth = Math.floor(width);
+      if (cachedWidth === safeWidth && cachedLines) return cachedLines;
+      const marginWidth = Math.min(padding, Math.max(0, Math.floor((safeWidth - 1) / 2)));
+      const margin = " ".repeat(marginWidth);
+      let offset = 0;
+      // Word wrapping trims spaces and hides whitespace-only documents. Wrap sanitized text
+      // by display cells first, then apply trusted theme styles to each complete output row.
+      cachedLines = hardWrapTerminalDocument(text, safeWidth - marginWidth * 2).map((line) => {
+        const rendered = margin + style(line, offset) + margin;
+        offset += line.length;
+        return rendered;
+      });
+      cachedWidth = safeWidth;
+      return cachedLines;
     },
-    invalidate: () => component.invalidate(),
+    invalidate() {
+      cachedWidth = undefined;
+      cachedLines = undefined;
+    },
   };
 }
 
@@ -30,7 +47,12 @@ export function virtualRenderers(name: string): Pick<ToolDefinition, "renderCall
       const args = input && typeof input === "object" ? (input as Record<string, unknown>) : {};
       const value = name === "bash" ? args.command : args.path;
       const label = typeof value === "string" ? displayText(value).replaceAll("\n", "\\n") : "...";
-      return boundedComponent(`${theme.fg("toolTitle", theme.bold(name))} ${theme.fg("accent", label)}`);
+      return boundedComponent(`${name} ${label}`, (line, offset) => {
+        const titleLength = Math.max(0, name.length - offset);
+        return (
+          theme.fg("toolTitle", theme.bold(line.slice(0, titleLength))) + theme.fg("accent", line.slice(titleLength))
+        );
+      });
     },
     renderResult(result, options, theme, context) {
       const details =
@@ -44,7 +66,11 @@ export function virtualRenderers(name: string): Pick<ToolDefinition, "renderCall
               .join("\n");
       const text = displayText(raw);
       const visible = options.expanded ? text : text.split("\n").slice(0, 10).join("\n");
-      return boundedComponent(theme.fg(context.isError ? "error" : "toolOutput", visible), context.outputPad);
+      return boundedComponent(
+        visible,
+        (line) => theme.fg(context.isError ? "error" : "toolOutput", line),
+        context.outputPad,
+      );
     },
   };
 }
