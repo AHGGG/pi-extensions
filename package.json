@@ -5,11 +5,13 @@
   "description": "Monorepo for @narumitw pi extension packages.",
   "type": "module",
   "workspaces": [
+    "packages/pi-tui-kit",
     "packages/*"
   ],
   "pi": {
     "extensions": [
       "./packages/pi-accounts/src/index.ts",
+      "./packages/pi-agentfs/src/index.ts",
       "./packages/pi-analytics/src/index.ts",
       "./packages/pi-btw/src/index.ts",
       "./packages/pi-cache-hit-monitor/src/index.ts",
@@ -112,6 +114,8 @@
     "esbuild@0.28.2": true,
     "@google/genai": false,
     "protobufjs": false,
-    "fsevents": false
+    "fsevents": false,
+    "@mongodb-js/zstd": false,
+    "node-liblzma": false
   }
 }
