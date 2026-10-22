@@ -49,6 +49,7 @@ Unlisted Gists are readable by anyone with the link; remove sensitive data befor
 Import accepts a Gist ID or URL, validates the complete document, requires raw TOML review, footer preview, and full-replacement confirmation, and preserves the previous document before applying; review untrusted settings for command execution and network access before accepting.
 Overview combines state, source, path, health, and bounded diagnostics.
 Effective configuration shows deterministic catalog-ordered public TOML from the normalized state currently in use; comments, unknown fields, parser ASTs, and private runtime selectors are excluded.
+Ordered legacy substitution maps and structured arrays keep their effective replacement order in this projection.
 Settings document shows the exact loaded UTF-8 text through a terminal-safe, cell-aware read-only review without changing the raw payload.
 A missing file is **Built-in defaults**, an exact bundled document uses its preset name, and read or parse errors are **Built-in fallback**.
 Reload from disk reads only after the explicit action, validates and previews the current external state from the existing runtime snapshot, and asks for separate confirmation before changing the active session.
@@ -237,12 +238,13 @@ styles = { "foo:*" = "bold green", "foo:error" = "bold red", fallback = "dimmed 
 
 Every module table supports `format`, `symbol`, and `disabled`.
 Most modules also support one `style`.
-The exceptions are `git_metrics` (`added_style` and `deleted_style`), `username` (`style_user` and `style_root`), and the threshold-selected `context` and `cost` `display` arrays described below.
+The exceptions include Git/Jujutsu metrics (`added_style` and `deleted_style`), `jj_change` (prefix/suffix/offset styles), `username` (`style_user` and `style_root`), and threshold-selected `context`, `cost`, and `battery` `display` arrays.
+Directory root/read-only styles and Node.js/Go requirement styles supplement their ordinary `style`; see [module behavior](modules.md).
 `thinking` retains its `style` fallback and also accepts the per-level overrides documented below.
 Module-specific options are catalog-owned and type-checked; unknown options warn and stay inactive.
-Version formats replace `$raw`.
-Detection arrays replace defaults when non-empty and inspect only one listing of the current directory.
-A leading `!` is supported by language detection arrays and rejects a matching project.
+[Version formats](#version-formats) support raw and numeric component variables.
+Detection arrays inspect one bounded listing of the current directory; replacement and fallback rules are [module-specific](modules.md#reachability-and-collection-rules).
+Language and Kubernetes file detectors support leading `!` rejection rules; [environment detectors](modules.md#environment-detection-and-messages) have separate presence rules.
 `[extension_status].icons` accepts arbitrary exact Pi status keys and explicit colon namespace wildcards such as `foo:*`; `fallback` controls unmatched statuses.
 Icon matching uses the exact key, the longest `:*` wildcard, a leading status emoji, then `fallback`/`🔌`.
 An empty configured icon suppresses only the icon.
@@ -283,11 +285,14 @@ The exact accepted style fields, display arrays, module-specific options, defaul
 A standard `style` field must be a valid style string.
 `thinking` accepts `style` plus `style_off`, `style_minimal`, `style_low`, `style_medium`, `style_high`, `style_xhigh`, and `style_max`.
 `provider`, `model`, and `thinking` additionally accept the ordered `style_rules` arrays described under [Content-selected styles](#content-selected-styles).
-`git_metrics` accepts `added_style` and `deleted_style` instead of `style`.
+`git_metrics` and `jj_metrics` accept `added_style` and `deleted_style` instead of `style`.
+`jj_change` accepts `prefix_style`, `suffix_style`, and `change_offset_style` instead of `style`.
+`directory` additionally accepts `repo_root_style`, `before_repo_root_style`, and `read_only_style`.
+`nodejs` and `golang` additionally accept `not_capable_style`; its exact default `"none"` disables requirement checks.
 `username` accepts `style_user` and `style_root` instead of `style`.
-`context` and `cost` accept `display` arrays instead of a direct `style` field.
+`context`, `cost`, and `battery` accept `display` arrays instead of a direct `style` field.
 
-`[[context.display]]` and `[[cost.display]]` entries require these typed fields:
+`[[context.display]]`, `[[cost.display]]`, and `[[battery.display]]` entries require these typed fields:
 
 ```toml
 threshold = 60 # finite number
@@ -313,12 +318,70 @@ Module-specific options use these validation rules:
 | string enum | An exact case-sensitive listed string. |
 | boolean | A TOML boolean, not a quoted string. |
 | integer | An integer inside the inclusive range listed in the module catalog. |
+| number | A finite number inside the inclusive range listed in the module catalog; fractions are accepted. |
 | string array | An array containing only non-empty strings. |
 | string-to-string table | A TOML table whose values are all strings. |
+| command alternatives | One command string, or at most 16 command strings/argv arrays; see below. |
+| context rules | At most 64 ordered Kubernetes rule tables; see below. |
+| substitutions | A legacy string-to-string table or at most 64 ordered structured rows; see below. |
 
-Language `detect_files`, `detect_extensions`, and `detect_folders` arrays allow entries beginning with `!` as rejection rules.
+Language and Kubernetes `detect_files`, `detect_extensions`, and `detect_folders` arrays allow entries beginning with `!` as rejection rules.
+`detect_env_vars` allows negation for `python`, `conda`, `direnv`, `gcloud`, `hostname`, and `kubernetes`; `username` retains positive-only detection.
 Other string-array options reject entries beginning with `!`.
 Detection fallback and replacement behavior differs by module and is specified in [module behavior](modules.md).
+
+### Version formats
+
+`version_format` applies to package, language, Pixi, and Terraform/OpenTofu versions and defaults to `v$raw`.
+It uses the [format grammar](#-format-grammar): `$raw`, `$major`, `$minor`, `$patch`, their `${name}` forms, escapes, and conditional groups, but returns plain text without ANSI styles.
+One leading lowercase `v` is removed from `$raw`; suffixes and leading zeroes remain in that raw value.
+Numeric components are available only for a dotted numeric release with an optional suffix matching `[-+][0-9A-Za-z.+_-]+` or `[A-Za-z][0-9A-Za-z.+_-]*`.
+A single numeric component is valid; missing minor/patch values are empty, extra components after patch are ignored, and component leading zeroes are removed.
+For example, `01.002.0003-rc1` exposes `1`, `2`, `3`, and raw `01.002.0003-rc1`; malformed `1..2` exposes only raw text.
+Unknown variables render empty, and an empty template hides the version.
+Custom formats now use formatter variable boundaries and escapes, not raw substring replacement: use `${raw}_suffix` for appended identifier text and `\$` for a literal dollar sign.
+Malformed format syntax or a template over 4,096 characters falls back to `v` plus the raw value.
+Python's explicit pyenv-label mode bypasses this formatter.
+
+### Bounded regex and structured options
+
+Directory regex substitutions and Kubernetes context patterns use RE2JS, not JavaScript's backtracking regex engine.
+Patterns are limited to 512 source characters; input and replacement strings to 4,096 characters; replacement output to 8,192 characters; the cache retains at most 64 compiled patterns, including invalid-pattern entries.
+Backreferences and lookaround are unsupported and rejected.
+Replacement fields are `$1`/`${1}`, `$name`/`${name}`, or `$$` for a literal dollar; unknown captures become empty.
+These are regex capture fields, not footer module variables.
+
+`directory.substitutions` accepts either an ordered legacy literal map or ordered `{ from, to, regex }` rows.
+Each structured row requires string `from` (at most 512 characters) and `to` (at most 4,096 characters); optional boolean `regex` defaults to `false`.
+No other row keys are accepted; empty `from`/`to` strings are allowed.
+Literal rules replace all occurrences with literal text and skip empty search strings; regex rules replace only the first match, including an empty regex match.
+The legacy map has no schema row/string bound, but rendering skips the complete sequence when it has more than 64 rules; all sequences have a 16,384-character intermediate path bound.
+See [directory behavior](modules.md#directory-git-and-environment-contraction) for order and runtime-failure fallback.
+
+`kubernetes.contexts` requires `context_pattern` and allows only `user_pattern`, `context_alias`, `user_alias`, `symbol`, and `style` as optional strings.
+Both patterns use the 512-character bound; other strings use the 4,096-character bound, and `style` must be a valid style under the selected palette.
+Rules match bounded source context/user labels before aliases with AND and first-match semantics; [Kubernetes behavior](modules.md#kubernetes-detection-and-context-rules) defines exact-match precedence and alias order.
+An invalid row, unsupported regex, unknown row key, or oversized array rejects the entire corresponding substitutions/rules option with a warning and restores its default, not just the failing row.
+Unknown document fields still remain on disk.
+
+### Python command alternatives
+
+`python_binary = []` preserves the existing active-virtualenv interpreter or `python` fallback.
+A scalar such as `python_binary = "python3"` becomes one alternative; a non-empty array replaces that choice, for example `python_binary = ["python3", ["py", "-3"]]`.
+Each string is one executable name/path, not a shell command line; each nested argv array contains 1–16 elements including its executable.
+A flat string array lists alternative executables, not arguments to one executable.
+There can be at most 16 alternatives, and each element must contain 1–1,024 characters without C0/C1 controls (`U+0000`–`U+001F`, `U+007F`–`U+009F`).
+The runner appends `--version`, never starts an implicit shell, and stops at the first successful command even if its version output is malformed.
+Invalid settings warn and restore the empty-array default.
+Only use trusted executables and arguments: direct argv execution does not make a configured program safe.
+
+### Status templates
+
+Git's 20 status options and Jujutsu status options use the normal format grammar with at most 4,096 characters and 16 nested groups.
+Static group styles and the selected palette are supported; style variables such as `$style` are not.
+Counted states accept only `$count`/`${count}`; Git `diverged` accepts only `ahead_count` and `behind_count`; clean/boolean/description templates accept no variables.
+Invalid templates warn and restore that field's default; empty templates suppress that state.
+See [Git status behavior](modules.md#git-display-controls-and-status-templates) and [Jujutsu behavior](modules.md#jujutsu-modules) for count formatting, activation, and ordering.
 
 ### Diagnostic and fallback behavior
 
@@ -396,7 +459,7 @@ An invalid root format falls back to the built-in root format; an invalid module
 `/starship status` reports warnings.
 
 The background-free defaults are: `brand = "bold white"`, `provider`/`model` = `"bold blue"`, `thinking`/`git_branch`/`turn` = `"bold purple"`, `directory`/`git_worktree` = `"cyan bold"`, `github_pr = "bold blue"`, `git_commit = "green bold"`, `git_state`/`activity`/`time` = `"bold yellow"`, `git_status = "red bold"`, `tokens = "bold cyan"`, `cache = "bold green"`, `extension_status = "dimmed white"`, `direnv = "bold bright-yellow"`, and `fill = "bold black"`.
-Context, cost, Git metrics, and username use the state/multi-style defaults below.
+Context, cost, battery, metrics, Jujutsu IDs, and username use state/multi-style fields; see below and the [complete module catalog](module-catalog.md).
 
 ### Pi theme colors
 
@@ -533,7 +596,11 @@ style = "bold red"
 hidden = false
 ```
 
-`git_metrics` exposes `$added_style` and `$deleted_style` in its module format.
+`git_metrics` and `jj_metrics` expose `$added_style` and `$deleted_style` in their module formats.
+`jj_change` styles its composite IDs with `prefix_style`, `suffix_style`, and `change_offset_style`.
+`battery` uses upper bounds: it selects the lowest threshold greater than or equal to the raw charge percentage, with the first entry winning a tie; no match or `hidden = true` hides the module.
+Its default display is visible through 10% with `red bold`, not a context-style lower-bound rule.
+`memory_usage.threshold` is a finite number from -100 through 10,000 (default 75); it gates the rounded native RAM percentage and is not a display array.
 `username` still uses `$style` in its format, but selects `style_user` or `style_root` from private execution metadata; the selector is not a format variable.
 
 ### Breaking palette migration

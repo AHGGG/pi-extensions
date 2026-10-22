@@ -14,6 +14,7 @@ The extension parses and renders the footer itself, so it does not need the `sta
 - Supports root and module formats, conditional groups, `$all`, styles, palettes, and width-aware `$fill` alignment.
 - Selects provider, model, and thinking styles from exact runtime values with ordered module rules.
 - Provides Pi, model, usage, Git, pull request, package, language, environment, deployment, cloud, and execution modules, with usage totals including persisted cache warming.
+- Offers opt-in Jujutsu, native RAM/optional Linux swap, and Linux sysfs battery modules, all disabled by default.
 - Wraps native multiline layouts to terminal width instead of truncating them.
 - Keeps rendering pure while refreshing filesystem, process, and network-derived data through bounded caches.
 - Uses `/starship` for named TOML profiles, live previews, presets, customization, and recovery history.
@@ -106,6 +107,10 @@ See [Configuration and format](./skills/configure-pi-starship/references/configu
 Use `/starship` for interactive configuration, preview, diagnostics, presets, and recovery.
 Manual file edits load at the next `session_start`, including `/reload`.
 
+Existing defaults and the built-in footer remain unchanged.
+Module references cover bounded regex substitutions/context rules, component version formats, Git templates/controls, clock zones/ranges, Python argv alternatives, environment detectors, requirement styling, and private-package visibility.
+The six Jujutsu/system modules require explicit `disabled = false` plus a root reference or `$all`; see [module behavior](./skills/configure-pi-starship/references/modules.md#jujutsu-modules).
+
 ## 🗃️ Profiles and history
 
 Open `/starship` → **Profiles** to save the current TOML under a name, edit it, duplicate it, rename it, or delete it.
@@ -153,8 +158,11 @@ Cancelling or losing an upload response cannot undo a Gist already created on Gi
 
 ## 🔒 Security and privacy
 
-Some opt-in modules read local development, deployment, cloud, host, or user metadata, run bounded local commands, or query GitHub through `gh`.
-Review [Runtime and security](./skills/configure-pi-starship/references/runtime-and-security.md) before enabling them.
+Some opt-in modules read local development, deployment, cloud, host, user, or system metadata, run bounded local commands, or query GitHub through `gh`.
+Review [Runtime and security](./skills/configure-pi-starship/references/runtime-and-security.md) before enabling them or accepting imported settings, especially configured Python executables/arguments and environment detector names.
+Jujutsu reads the recorded change without snapshotting dirty files or integrating operations.
+Battery is Linux sysfs only; memory uses native RAM totals with Linux swap only when requested.
+Physical battery-state transitions remain unverified; no cross-platform battery support is claimed.
 
 ## 🚧 Limitations
 

@@ -786,6 +786,10 @@ function optionType(kind: string): string {
   return {
     boolean: "boolean",
     integer: "integer",
+    number: "number",
+    "command-alternatives": "command alternatives",
+    "context-rules": "context-rule array",
+    substitutions: "substitution table or array",
     string: "string",
     "string-array": "string array",
     "string-enum": "string enum",

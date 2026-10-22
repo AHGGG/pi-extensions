@@ -31,6 +31,8 @@ async function emit(
 
 function piStarship(pi: Parameters<typeof piStarshipRuntime>[0]) {
   return piStarshipRuntime(pi, {
+    gitExec: (command, args, options) =>
+      pi.exec(command, args, { cwd: options.cwd, signal: options.signal, timeout: options.timeout }),
     githubPrExec: (command, args, options) =>
       pi.exec(command, args, {
         cwd: options.cwd,
