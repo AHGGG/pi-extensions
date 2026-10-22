@@ -292,7 +292,7 @@ for (const failure of ["refuse", "malformed", "secret", "unsupported", "delete"]
         ),
       );
       assert.deepEqual(await f.backend.readHead(), head);
-      assert.equal(mock.requests.length, failure === "secret" || failure === "delete" ? 0 : 1);
+      assert.equal(mock.requests.length, ["secret", "delete", "unsupported"].includes(failure) ? 0 : 1);
     }));
 
 test("off preserves reviewed behavior and does not call model", async () =>

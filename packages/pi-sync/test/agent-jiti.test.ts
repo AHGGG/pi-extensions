@@ -42,7 +42,7 @@ afterAll(async () => {
   if (fixtureRoot) await fs.rm(fixtureRoot, { recursive: true, force: true });
 });
 
-for (const trigger of ["command", "startup", "continuous"] as const)
+for (const trigger of ["command", "startup", "continuous", "retry"] as const)
   test(`generated Jiti runtime resolves a real WebDAV conflict via ${trigger}`, async ({ signal }) => {
     // A timeout can leave an uncancellable build or reload pending; do not overlap HOME scopes.
     await scenarioReady.catch(() => {});
@@ -54,7 +54,12 @@ for (const trigger of ["command", "startup", "continuous"] as const)
       let extension: LoadedExtensions["extensions"][number] | undefined;
       let shutdown: Promise<void> | undefined;
       let done: (() => void) | undefined;
-      const mock = agentContext(selectRemote);
+      let replies = 0;
+      const mock = agentContext((units) =>
+        trigger === "retry" && ++replies === 1
+          ? JSON.stringify({ version: 1, results: units.map((unit) => ({ id: unit.id, refuse: true })) })
+          : selectRemote(units),
+      );
       const stop = (): Promise<void> => {
         if (!extension) return Promise.resolve();
         const current = extension;
@@ -132,11 +137,22 @@ for (const trigger of ["command", "startup", "continuous"] as const)
         assert.equal(loaded.extensions.length, 1);
         assert.ok(extension);
         assert.equal(extension.resolvedPath, entry);
-        if (trigger === "command") {
+        if (trigger === "command" || trigger === "retry") {
           const command = extension.commands.get("sync");
           assert.ok(command);
           await command.handler("sync", mock.ctx as ExtensionCommandContext);
           signal.throwIfAborted();
+          if (trigger === "retry") {
+            assert.equal(mock.requests.length, 1);
+            assert.equal(await fs.readFile(path.join(agentDir, "AGENTS.md"), "utf8"), "local\n");
+            const choices = ["Retry refused model result…", "Yes, Send one fresh request", undefined];
+            mock.ctx.ui.select = async () => choices.shift();
+            await command.handler("", mock.ctx as ExtensionCommandContext);
+            signal.throwIfAborted();
+            assert.equal(choices.length, 0);
+            const candidates = await fs.readdir(path.join(agentDir, "pi-sync/agent-resolver"));
+            assert.ok(candidates.some((name) => name.includes(".refusal-")));
+          }
         } else {
           const complete = new Promise<void>((resolve) => {
             done = resolve;
@@ -156,7 +172,7 @@ for (const trigger of ["command", "startup", "continuous"] as const)
         }
         await stop();
         signal.throwIfAborted();
-        assert.equal(mock.requests.length, 1, JSON.stringify(mock.notifications));
+        assert.equal(mock.requests.length, trigger === "retry" ? 2 : 1, JSON.stringify(mock.notifications));
         assert.equal(
           await fs.readFile(path.join(agentDir, "AGENTS.md"), "utf8"),
           "remote\n",

@@ -377,9 +377,9 @@ A verified accepted ancestor is required.
 Enabling Agent mode cannot recover historical ancestor bytes that were never retained.
 If the original accepted bytes are still available on both sides, a conflict-free sync can seed the text ancestors for future runs; otherwise use the existing reviewed recovery flow rather than inventing a base from current edits.
 
-Bounds are 8 KiB per input file, 16 conflict paths/units, 24 KiB of serialized model evidence, 16 KiB of candidate output, 8,192 maximum output tokens (or the selected model's smaller positive output limit), and one provider request per candidate.
+Bounds are 8 KiB per input file, 16 conflict paths/units, 24 KiB of serialized model evidence, 16 KiB of candidate output, 8,192 maximum output tokens (or the selected model's smaller positive output limit), and one provider request per candidate attempt. A separately confirmed refusal retry can request the same candidate evidence again.
 An unknown model limit of zero retains the resolver cap; invalid limits pause before disclosure.
-Each resolver has a 20-second deadline; the existing overall startup deadline is 30 seconds.
+Each resolver has a 20-second deadline that also cancels its validation and reservation prerequisites where cancellation is supported; the existing overall startup deadline is 30 seconds. Cleanup drains owned work and can take additional time. An atomic reservation or file replacement cannot be undone after publication.
 At most two candidate requests are made during one triggered flow when remote commit competition changes the plan.
 Provider retries are disabled.
 Invalid output, detected stale evidence, missing model/auth, or recovery uncertainty pauses the flow rather than forcing acceptance.
@@ -404,6 +404,16 @@ Private claim and content-keyed candidate records reside under `<state-root>/age
 Candidates can be reused only for matching evidence, policies and model identity, and are validated again.
 They can contain merged text; retain them as private data.
 Different candidates are retained without automatic retention pruning.
+Ordinary **Sync now** and `/sync sync` reuse a valid cached refusal without another provider request.
+The manager's **Retry refused model result…** action separately reviews the setup, destination, conflict paths, selected model, disclosure and cost before one fresh request for that exact refusal.
+It requires foreground TUI/RPC, Agent mode, an accepted baseline and no pending journal; use ordinary Sync now or reviewed recovery first when those prerequisites are absent.
+Changed evidence, settings, model, session or cached bytes invalidate the review without disclosure.
+A repeated refusal, invalid response or failed pre-publication replacement retains the original result.
+A complete validated result replaces the active candidate only after the original refusal is archived privately in the same directory.
+These archives use the existing candidate format and remain retained; no settings or accounting format migration is added.
+Cancellation cannot undo an already committed replacement or provider request.
+The action does not reset automatic accounting and never runs from background polling; no new textual command or flag is provided.
+When partial sync is off, known unsupported groups stop before inference rather than paying for a result that cannot complete the transfer.
 Duplicate provider billing remains possible at crash boundaries.
 Corrupt or unsafe records block reuse rather than being overwritten blindly.
 
@@ -472,7 +482,7 @@ Cycles do not overlap.
 Each cycle has a 30-second deadline plus underlying cleanup.
 Changes during a cycle coalesce into one later fresh inspection rather than a queue of stale commands.
 
-Known transient network/server errors and rate limits retry from five seconds with exponential backoff, bounded jitter and a five-minute cap.
+Known transient network/server errors, rate limits and proven pre-publication local/baseline/remote freshness races retry from five seconds with exponential backoff, bounded jitter and a five-minute cap.
 Valid server Retry-After delays are capped at five minutes.
 Backoff survives restart and is reset by successful work or relevant configuration changes, not every file event.
 
@@ -505,8 +515,9 @@ Automatic requests are limited to:
 A refusal or invalid output blocks unchanged evidence rather than requesting another completion each poll.
 When the rolling window is full, Status shows the next eligible attempt.
 Checks, conflict-free transfers and journal recovery can continue without another model request.
-When the candidate's two attempts are spent, use changed evidence or an explicit retry.
-The explicit **Sync now** / `/sync sync` path retains its existing per-flow limits; it does not erase automatic accounting.
+When the candidate's two automatic attempts are spent, waiting does not restore them.
+The explicit **Sync now** / `/sync sync` path retains its existing per-flow limits; it does not erase automatic accounting and continues to reuse cached refusals.
+Use changed evidence, the separately confirmed **Retry refused model result…** action for a current cached refusal, or an existing reviewed recovery route as appropriate.
 Opening Status never reserves requests or clears limits.
 
 These limits are not a currency spending cap or an exactly-once billing guarantee.
@@ -523,6 +534,11 @@ Keep the directory as private evidence; do not delete it to repair a transfer.
 
 The existing status key shows waiting, checking/syncing, scheduled retry, another local owner, or a stable blocked reason.
 **Check remote status** and the manager show advisory ownership, the last successful background check/transfer and safe next actions.
+Status also shows normalized rolling-window usage, the next window allowance, exhausted-candidate counts, serialized accounting bytes/capacity and on-disk bytes.
+Window allowance is not dispatch permission: candidate, capacity, ownership and safety checks still apply.
+Status normalization affects only the detached read; it does not expire durable calls, reserve requests, create private directories or reset limits.
+The scheduler owner's model is reported as unavailable rather than inferred from the observing session.
+A full or unverifiable record is not unused allowance; retain it and use reviewed repair instead of deleting accounting.
 Notifications are deduplicated by error/evidence/configuration.
 Status may itself need network access for its existing remote check, but does not call the model.
 
