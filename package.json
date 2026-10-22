@@ -18,6 +18,7 @@
       "./packages/pi-caffeinate/src/index.ts",
       "./packages/pi-chat/src/index.ts",
       "./packages/pi-codex-compact/src/index.ts",
+      "./packages/pi-codex-imagegen/src/index.ts",
       "./packages/pi-context-management/src/index.ts",
       "./packages/pi-dotenv/src/index.ts",
       "./packages/pi-file-context/src/index.ts",
