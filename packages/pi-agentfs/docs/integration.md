@@ -42,7 +42,7 @@ flowchart LR
 ## CLI and RPC startup
 
 Load the package with `-e` and pass `--agentfs-path` on the same invocation.
-For example, from a checkout with dependencies installed:
+For example, from a checkout after `npm install` and the root `npm run build`:
 
 ```bash
 pi --mode rpc --no-extensions -e ./packages/pi-agentfs \
@@ -93,7 +93,7 @@ Follow the full runnable [service example](../examples/service.ts). It makes no 
 From the repository root, with an approved path whose parent already exists:
 
 ```bash
-npm --workspace @narumitw/pi-agentfs run build
+npm run build
 node --experimental-strip-types packages/pi-agentfs/examples/service.ts /srv/agentfs/alice.db
 ```
 

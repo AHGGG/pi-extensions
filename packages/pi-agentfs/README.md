@@ -27,18 +27,16 @@ pi install npm:@narumitw/pi-agentfs
 pi -e npm:@narumitw/pi-agentfs
 ```
 
-From a local repository checkout with dependencies installed:
+From a local repository checkout:
 
 ```bash
+npm install
+npm run build
 pi --no-extensions -e ./packages/pi-agentfs
 ```
 
-Pi loads the source entrypoint, so local extension loading does not require a build.
-SDK imports use built JavaScript; build before using the SDK example:
-
-```bash
-npm --workspace @narumitw/pi-agentfs run build
-```
+The root build prepares Kit before its consumers. Run it before local extension loading or the SDK example.
+Pi loads the source entrypoint. SDK imports use built JavaScript.
 
 Only install trusted code. The restricted tool interface does not remove the extension's process permissions.
 

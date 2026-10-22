@@ -5,6 +5,7 @@
   "description": "Monorepo for @narumitw pi extension packages.",
   "type": "module",
   "workspaces": [
+    "packages/pi-tui-kit",
     "packages/*"
   ],
   "pi": {

@@ -1,6 +1,6 @@
 /**
  * No-model SDK startup check. The service must authorize this database path first.
- * From the repository root, build the package, then run:
+ * From the repository root, run npm run build, then run:
  * node --experimental-strip-types packages/pi-agentfs/examples/service.ts /approved/absolute/workspace.db
  * The database parent must already exist. This does not implement authentication.
  */
