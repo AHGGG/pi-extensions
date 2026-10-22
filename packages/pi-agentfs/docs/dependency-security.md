@@ -1,6 +1,7 @@
 # Dependency security
 
 The root manifest overrides `just-bash`'s `guarded-fetch` dependency to use its patched HTTP dependency chain.
+The root manifest also aligns `agentfs-sdk`'s Turso database dependencies with this workspace's direct database dependency.
 The lockfile records the selected versions.
 These overrides apply to repository installs, not independent installs of published workspace packages.
 Remove each override when the declared upstream dependencies resolve to compatible, patched releases without it.
