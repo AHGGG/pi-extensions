@@ -101,11 +101,15 @@
     "husky": "9.1.7",
     "npm-check-updates": "23.1.1",
     "semver": "7.8.5",
-    "typebox": "^1.4.0",
+    "typebox": "^1.4.2",
     "typescript": "^7.0.2",
     "vitest": "^5.0.5"
   },
   "overrides": {
+    "agentfs-sdk": {
+      "@tursodatabase/database": "0.8.3",
+      "@tursodatabase/database-common": "0.8.3"
+    },
     "brace-expansion": "5.0.12",
     "just-bash": {
       "guarded-fetch": "0.1.6",
