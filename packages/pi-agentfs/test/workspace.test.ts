@@ -270,6 +270,18 @@ describe("restricted shell and workspace ownership", () => {
     await expect(readFile(join(dir, "fallback"))).rejects.toThrow();
     expect(fetch).not.toHaveBeenCalled();
   });
+  it.each(["%.101f", "%.101e", "%.101g", "%.0g"])(
+    "keeps untrusted precision %s outside the restricted shell",
+    async (format) => {
+      const { call } = await fixture();
+      expect(SHELL_COMMANDS).not.toContain("printf");
+      expect(SHELL_COMMANDS).not.toContain("awk");
+      for (const command of [`printf '${format}' 1`, `awk 'BEGIN { printf "${format}", 1 }'`]) {
+        await expect(call("bash", { command })).rejects.toThrow(/command not found/);
+      }
+      expect(output(await call("bash", { command: "echo recovered" }))).toBe("recovered\n");
+    },
+  );
   it("bounds successful output, error output, source size, and infinite loops", async () => {
     const { call } = await fixture();
     await call("write", { path: "/lines", content: "line\n".repeat(4000) });

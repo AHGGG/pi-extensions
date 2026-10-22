@@ -99,6 +99,7 @@ Other extensions, MCP tools, native file/search tools, host attachments, and ses
 The shell does not receive `process.env`, service secrets, network commands, or arbitrary program executors.
 This restriction applies to the workspace tools, not to the surrounding Pi process.
 Review dependency advisories and deployment controls before production use; a command allowlist is not a security audit of every installed dependency.
+See [Dependency security](./docs/dependency-security.md) for repository dependency overrides and their scope.
 
 ## 🚧 Limitations
 
