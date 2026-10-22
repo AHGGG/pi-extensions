@@ -125,6 +125,7 @@ function renderJob(job: ActiveJobDisplay, theme: Theme, settings: SubagentSettin
   const tools = job.tools.length > 0 ? job.tools.map(sanitizeLabel).join(", ") : "none";
   const timeout = job.timeout === undefined ? "no timeout" : formatSeconds(job.timeout);
   const details = [
+    `thinking: ${sanitizeLabel(job.thinkingLevel)}`,
     ...(settings.showTiming ? [`${formatSeconds(Math.floor(job.elapsedMs / 1_000))} / ${timeout}`] : []),
     ...(settings.showTools ? [`tools: ${tools}`] : []),
   ];
@@ -136,7 +137,7 @@ function widgetValue(jobs: readonly ActiveJobDisplay[]): string {
   return jobs
     .map(
       (job) =>
-        `${job.jobId}\0${job.task}\0${job.state}\0${Math.floor(job.elapsedMs / 1_000)}\0${job.timeout ?? ""}\0${job.tools.join(",")}`,
+        `${job.jobId}\0${job.task}\0${job.state}\0${job.thinkingLevel}\0${Math.floor(job.elapsedMs / 1_000)}\0${job.timeout ?? ""}\0${job.tools.join(",")}`,
     )
     .join("\n");
 }

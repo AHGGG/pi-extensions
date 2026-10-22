@@ -29,6 +29,7 @@ interface InternalJob extends JobSummary {
   resolveTerminal: () => void;
   task?: Promise<void>;
   taskText: string;
+  thinkingLevel: SubagentThinkingLevel;
   stopRequest?: StopRequest;
   control?: ChildControl;
   controlReady: Promise<ChildControl>;
@@ -51,6 +52,7 @@ export interface ActiveJobDisplay {
   jobId: string;
   task: string;
   state: Extract<SubagentJobState, "queued" | "running">;
+  thinkingLevel: SubagentThinkingLevel;
   elapsedMs: number;
   timeout?: number;
   tools: string[];
@@ -117,6 +119,7 @@ export class SubagentRuntime {
         jobId: job.jobId,
         task: job.taskText,
         state: job.state,
+        thinkingLevel: job.thinkingLevel,
         elapsedMs: Math.max(0, now - (job.startedAt ?? job.createdAt)),
         ...(job.timeout !== undefined ? { timeout: job.timeout } : {}),
         tools: [...job.tools],
@@ -159,6 +162,7 @@ export class SubagentRuntime {
       controller,
       tools: effectiveTools,
       taskText: input.task,
+      thinkingLevel: input.thinkingLevel,
       terminal,
       resolveTerminal,
       controlReady,

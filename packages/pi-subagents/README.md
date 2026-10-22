@@ -67,7 +67,7 @@ In TUI mode, each active-job row shows a preview of its existing `task` after th
 The preview removes terminal controls, collapses whitespace, and uses at most 40 terminal columns, including an ellipsis when shortened.
 It describes the assigned task, not live child activity; the full task sent to the child is unchanged.
 Task text is visible in this local widget, but `subagent_inspect` continues to omit it.
-Rows are clipped to the available terminal width, so trailing state, timing, or tools can be hidden on narrow terminals.
+Rows are clipped to the available terminal width, so trailing state, thinking level, timing, or tools can be hidden on narrow terminals.
 
 Use messaging only when needed:
 
@@ -79,7 +79,9 @@ Completion messages and child requests and responses follow Pi's global tool-out
 Collapsed messages show a summary and the configured expansion key; expanded messages show the full content.
 This display state does not change the content sent to the model.
 
-In TUI mode, the above-editor widget shows each queued or running job's ID, state, elapsed time, timeout, and selected core and extension tool names.
+In TUI mode, the above-editor widget shows each queued or running job's ID, state, thinking level, elapsed time, timeout, and selected core and extension tool names.
+The `thinking: <level>` field shows the resolved configuration passed at spawn, including `off`, even when IDs, timing, and tools are hidden.
+Later main-agent changes do not change this field; it does not track child-side normalization or later setting changes.
 It omits fixed communication tools, attachment paths, and resource totals, disappears when no jobs remain active, and clears when the session ends.
 
 ## 💬 Commands
