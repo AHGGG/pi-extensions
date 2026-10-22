@@ -6,7 +6,12 @@ import { createMockContext, createMockPi } from "../../../test/support.js";
 import { MessageBroker } from "../src/message-broker.js";
 import { type ActiveJobDisplay, SubagentRuntime } from "../src/runtime.js";
 import { DEFAULT_SUBAGENT_SETTINGS } from "../src/settings.js";
-import type { ChildRequest, ChildResult } from "../src/types.js";
+import {
+  type ChildRequest,
+  type ChildResult,
+  SUBAGENT_THINKING_LEVELS,
+  type SubagentThinkingLevel,
+} from "../src/types.js";
 import { createSubagentWidgetController, renderSubagentWidget, SUBAGENT_WIDGET_KEY } from "../src/widget.js";
 
 const theme = { fg: (_role: string, text: string) => text } as Theme;
@@ -14,10 +19,24 @@ const displayJob: ActiveJobDisplay = {
   jobId: "job_preview",
   task: "Review authentication tests",
   state: "running",
+  thinkingLevel: "medium",
   elapsedMs: 123_000,
   tools: ["read", "bash"],
 };
 const cleanups: Array<() => Promise<void>> = [];
+
+test.each(
+  SUBAGENT_THINKING_LEVELS.flatMap((thinkingLevel) =>
+    (["queued", "running"] as const).map((state) => ({ thinkingLevel, state })),
+  ),
+)("renders $thinkingLevel thinking for a $state job", ({ thinkingLevel, state }) => {
+  const lines = renderSubagentWidget([{ ...displayJob, thinkingLevel, state }], theme, 200);
+  assert.equal(lines.length, 3);
+  assert.match(
+    lines[2] ?? "",
+    new RegExp(` · ${state} · thinking: ${thinkingLevel} · 2m 3s / no timeout · tools: read, bash$`, "u"),
+  );
+});
 
 afterEach(async () => {
   for (const cleanup of cleanups.splice(0).reverse()) await cleanup();
@@ -57,7 +76,10 @@ test.each([
   const job = { ...displayJob, task };
   const lines = renderSubagentWidget([job], theme, 200);
   const preview = expected ? ` · ${expected}` : "";
-  assert.equal(lines[2], `▶ job_preview${preview} · running · 2m 3s / no timeout · tools: read, bash`);
+  assert.equal(
+    lines[2],
+    `▶ job_preview${preview} · running · thinking: medium · 2m 3s / no timeout · tools: read, bash`,
+  );
   assert.ok(visibleWidth(expected) <= 40);
   for (const line of lines) assert.doesNotMatch(line, /[\p{Cc}\p{Bidi_Control}]/u);
   assert.equal(job.task, task);
@@ -95,6 +117,7 @@ test("keeps rows bounded across resize and uses the callback theme on every rend
     }
   }
   assert.ok(fg.mock.calls.some(([role, text]) => role === "text" && text.includes("…")));
+  assert.ok(fg.mock.calls.some(([role, text]) => role === "muted" && text.includes("thinking: medium")));
   fg.mockClear();
   themedComponent.invalidate();
   themedComponent.render(200);
@@ -131,24 +154,27 @@ test.each(["rpc", "print", "json"] as const)("does not subscribe, schedule, or p
   assert.equal(setWidget.mock.calls.length, 0);
 });
 
-test("carries separate queued and running tasks without changing child tasks or public metadata", async () => {
+test("carries separate queued and running tasks and levels without changing child requests or public metadata", async () => {
   const { context, runtime, mock, children } = await setupWidget();
   const tasks = ["Review authentication\nwith full constraints", `Implement ${"long task ".repeat(100)}`] as const;
-  const spawned = tasks.map((task) => runtime.start(jobInput(task)));
+  const levels = ["off", "max"] as const;
+  const spawned = tasks.map((task, index) => runtime.start(jobInput(task, levels[index])));
   const [first, second] = spawned;
   assert.ok(first && second);
   const queued = runtime.activeJobsForDisplay();
   assert.deepEqual(
-    queued.map(({ task, state }) => ({ task, state })),
-    tasks.map((task) => ({ task, state: "queued" })),
+    queued.map(({ task, state, thinkingLevel }) => ({ task, state, thinkingLevel })),
+    tasks.map((task, index) => ({ task, state: "queued", thinkingLevel: levels[index] })),
   );
   const queuedRows = widgetComponent(context).render(200);
-  assert.match(queuedRows[2] ?? "", /Review authentication with full constra… · queued/u);
-  assert.match(queuedRows[3] ?? "", /Implement .*… · queued/u);
+  assert.match(queuedRows[2] ?? "", /Review authentication with full constra… · queued · thinking: off/u);
+  assert.match(queuedRows[3] ?? "", /Implement .*… · queued · thinking: max/u);
   const firstSnapshot = queued[0];
   assert.ok(firstSnapshot);
   firstSnapshot.task = "mutated snapshot";
+  firstSnapshot.thinkingLevel = "low";
   assert.equal(runtime.activeJobsForDisplay()[0]?.task, tasks[0]);
+  assert.equal(runtime.activeJobsForDisplay()[0]?.thinkingLevel, "off");
 
   await Promise.resolve();
   assert.deepEqual(
@@ -160,11 +186,15 @@ test("carries separate queued and running tasks without changing child tasks or 
     tasks,
   );
   const runningRows = widgetComponent(context).render(200);
-  assert.match(runningRows[2] ?? "", / · running · /u);
-  assert.match(runningRows[3] ?? "", / · running · /u);
+  assert.deepEqual(
+    [...children.values()].map(({ request }) => request.thinkingLevel),
+    levels,
+  );
+  assert.match(runningRows[2] ?? "", / · running · thinking: off/u);
+  assert.match(runningRows[3] ?? "", / · running · thinking: max/u);
   assert.deepEqual(Object.keys(spawned[0] ?? {}).sort(), ["jobId", "state"]);
   const activeMetadata = JSON.stringify(runtime.inspectJobs());
-  assert.doesNotMatch(activeMetadata, /task|preview|Review authentication|Implement/u);
+  assert.doesNotMatch(activeMetadata, /task|preview|thinkingLevel|Review authentication|Implement/u);
 
   const firstChild = children.get(tasks[0]);
   assert.ok(firstChild);
@@ -178,7 +208,7 @@ test("carries separate queued and running tasks without changing child tasks or 
   assert.deepEqual(runtime.activeJobsForDisplay(), []);
   assert.doesNotMatch(
     JSON.stringify([result, runtime.inspectJobs(), mock.sentMessages]),
-    /taskText|"task"|preview|Review authentication|Implement/u,
+    /taskText|"task"|preview|thinkingLevel|Review authentication|Implement/u,
   );
 });
 
@@ -204,10 +234,35 @@ test("refreshes a changed task even when the remaining display data is unchanged
   assert.match(first.render(200)[2] ?? "", /First task/u, "published snapshots must remain independent");
 });
 
-test("clears task rows and releases refresh ownership across session replacement and repeated shutdown", async () => {
+test("refreshes a changed thinking level without changing previous snapshots or republishing unchanged data", async () => {
+  let refresh: (() => void) | undefined;
+  vi.spyOn(globalThis, "setInterval").mockImplementation((callback) => {
+    refresh = callback as () => void;
+    return { unref() {} } as NodeJS.Timeout;
+  });
+  const { context, runtime } = await setupWidget();
+  const jobs = vi.spyOn(runtime, "activeJobsForDisplay").mockReturnValue([{ ...displayJob, thinkingLevel: "off" }]);
+  assert.ok(refresh);
+  refresh();
+  const firstFactory = context.widgets.get(SUBAGENT_WIDGET_KEY);
+  const first = widgetComponent(context);
+  assert.match(first.render(200)[2] ?? "", /thinking: off/u);
+  refresh();
+  assert.equal(context.widgets.get(SUBAGENT_WIDGET_KEY), firstFactory);
+  jobs.mockReturnValue([{ ...displayJob, thinkingLevel: "max" }]);
+  refresh();
+  const changedFactory = context.widgets.get(SUBAGENT_WIDGET_KEY);
+  assert.notEqual(changedFactory, firstFactory);
+  assert.match(widgetComponent(context).render(200)[2] ?? "", /thinking: max/u);
+  assert.match(first.render(200)[2] ?? "", /thinking: off/u);
+  refresh();
+  assert.equal(context.widgets.get(SUBAGENT_WIDGET_KEY), changedFactory);
+});
+
+test("clears task rows and levels and releases refresh ownership across session replacement and repeated shutdown", async () => {
   const { context, runtime, controller, children } = await setupWidget();
   const timers = vi.spyOn(globalThis, "clearInterval");
-  runtime.start(jobInput("Old session task"));
+  runtime.start(jobInput("Old session task", "off"));
   await Promise.resolve();
   assert.match(widgetComponent(context).render(200)[2] ?? "", /Old session task/u);
   await runtime.shutdown();
@@ -218,9 +273,9 @@ test("clears task rows and releases refresh ownership across session replacement
   controller.start(replacement.ctx);
   cleanups.push(async () => controller.shutdown(replacement.ctx));
   assert.ok(timers.mock.calls.length > 0);
-  runtime.start(jobInput("New session task"));
-  assert.match(widgetComponent(replacement).render(200)[2] ?? "", /New session task/u);
-  assert.doesNotMatch(widgetComponent(replacement).render(200).join("\n"), /Old session task/u);
+  runtime.start(jobInput("New session task", "max"));
+  assert.match(widgetComponent(replacement).render(200)[2] ?? "", /New session task · queued · thinking: max/u);
+  assert.doesNotMatch(widgetComponent(replacement).render(200).join("\n"), /Old session task|thinking: off/u);
   controller.shutdown(context.ctx);
   assert.match(widgetComponent(replacement).render(200)[2] ?? "", /New session task/u);
   controller.shutdown(replacement.ctx);
@@ -243,7 +298,7 @@ test.each(
   assert.equal(text.includes("job_preview"), preferences.showJobId);
   assert.equal(text.includes("tools: read, bash"), preferences.showTools);
   assert.equal(text.includes("2m 3s / 5m"), preferences.showTiming);
-  assert.match(text, /Review authentication tests · running/u);
+  assert.match(text, /Review authentication tests · running · thinking: medium/u);
   assert.equal(text.includes(" ·  · "), false);
   assert.equal(text.endsWith(" · "), false);
   for (const width of [0, 1, 10, 80, 200]) {
@@ -257,15 +312,15 @@ test("keeps state readable when all optional fields and the task preview are abs
   const settings = { showWidget: true, showJobId: false, showTools: false, showTiming: false };
   for (const state of ["queued", "running"] as const) {
     const lines = renderSubagentWidget([{ ...displayJob, task: "\u0007\n", state }], theme, 80, settings);
-    assert.equal(lines[2], `${state === "running" ? "▶" : "○"} ${state}`);
+    assert.equal(lines[2], `${state === "running" ? "▶" : "○"} ${state} · thinking: medium`);
   }
   assert.deepEqual(renderSubagentWidget([displayJob], theme, 80, { ...settings, showWidget: false }), []);
 });
 
 test("applies display settings immediately and preserves active jobs, payloads, and completions", async () => {
   const { context, runtime, controller, children, mock } = await setupWidget();
-  const first = runtime.start(jobInput("Keep running when hidden"));
-  const second = runtime.start(jobInput("Finish while hidden"));
+  const first = runtime.start(jobInput("Keep running when hidden", "off"));
+  const second = runtime.start(jobInput("Finish while hidden", "max"));
   await Promise.resolve();
   const preferences = { ...DEFAULT_SUBAGENT_SETTINGS, showJobId: false, showTools: false, showTiming: false };
   const original = widgetComponent(context);
@@ -273,7 +328,8 @@ test("applies display settings immediately and preserves active jobs, payloads, 
   controller.update(context.ctx, preferences);
   const rows = widgetComponent(context).render(200);
   assert.doesNotMatch(rows.join("\n"), /job_|tools:|no timeout/u);
-  assert.match(rows[2] ?? "", /▶ Keep running when hidden · running/u);
+  assert.match(rows[2] ?? "", /▶ Keep running when hidden · running · thinking: off/u);
+  assert.match(rows[3] ?? "", /Finish while hidden · running · thinking: max/u);
   assert.match(original.render(200)[2] ?? "", /job_.*tools:/u, "old snapshots stay independent");
   controller.update(context.ctx, { ...preferences, showWidget: false });
   assert.equal(context.widgets.get(SUBAGENT_WIDGET_KEY), undefined);
@@ -288,8 +344,9 @@ test("applies display settings immediately and preserves active jobs, payloads, 
   controller.update(context.ctx, preferences);
   const restored = widgetComponent(context).render(200);
   assert.equal(restored.length, 3);
-  assert.match(restored[2] ?? "", /Keep running when hidden · running/u);
-  assert.doesNotMatch(restored.join("\n"), /job_|tools:|no timeout/u);
+  assert.match(restored[2] ?? "", /Keep running when hidden · running · thinking: off/u);
+  assert.doesNotMatch(restored.join("\n"), /job_|tools:|no timeout|thinking: max/u);
+  assert.doesNotMatch(JSON.stringify(mock.sentMessages), /thinkingLevel/u);
   assert.equal(children.get("Keep running when hidden")?.request.task, "Keep running when hidden");
   await runtime.cancel(first.jobId);
 });
@@ -341,7 +398,7 @@ function widgetComponent(context: ReturnType<typeof createMockContext>, callback
   return factory({}, callbackTheme);
 }
 
-function jobInput(task: string) {
+function jobInput(task: string, thinkingLevel: SubagentThinkingLevel = "medium") {
   return {
     task,
     tools: ["read"],
@@ -349,7 +406,7 @@ function jobInput(task: string) {
     extensions: [],
     toolSources: {},
     model: "test-provider/test-model",
-    thinkingLevel: "medium" as const,
+    thinkingLevel,
     cwd: process.cwd(),
     projectTrusted: false,
   };

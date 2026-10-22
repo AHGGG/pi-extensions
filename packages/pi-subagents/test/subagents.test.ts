@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { DefaultPackageManager, type Theme } from "@earendil-works/pi-coding-agent";
+import { DefaultPackageManager, type ExtensionContext, type Theme } from "@earendil-works/pi-coding-agent";
 import type { Component } from "@earendil-works/pi-tui";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { Check } from "typebox/value";
@@ -333,7 +333,7 @@ test("spawns jobs with default and explicit tools and thinking levels", async ()
   );
   assert.doesNotMatch(
     JSON.stringify(inspected.details),
-    /skills|extensions|using-pi-subagents|index\.ts|custom_review/iu,
+    /skills|extensions|thinkingLevel|using-pi-subagents|index\.ts|custom_review/iu,
   );
   release();
   await Promise.all([
@@ -344,10 +344,13 @@ test("spawns jobs with default and explicit tools and thinking levels", async ()
     (entry) => (entry.message as { customType?: string }).customType === "pi-subagents-completion",
   );
   assert.equal(completions.length, 2);
-  assert.doesNotMatch(JSON.stringify(completions), /skills|extensions|using-pi-subagents|index\.ts|custom_review/iu);
+  assert.doesNotMatch(
+    JSON.stringify(completions),
+    /skills|extensions|thinkingLevel|using-pi-subagents|index\.ts|custom_review/iu,
+  );
 });
 
-test("shows active job tasks, timing, timeout, and selected tools above the editor", async () => {
+test("shows spawn-time thinking, tasks, timing, timeout, and selected tools above the editor", async () => {
   let refreshWidget: (() => void) | undefined;
   const fakeTimer = { unref() {} } as NodeJS.Timeout;
   vi.spyOn(globalThis, "setInterval").mockImplementation((callback, delay) => {
@@ -359,13 +362,14 @@ test("shows active job tasks, timing, timeout, and selected tools above the edit
   let now = 0;
   const { mock, context } = await setup(
     { now: () => now, runChild: waitForCancellation },
-    {},
-    { mode: "tui", isProjectTrusted: () => true },
+    { thinkingLevel: "medium" },
+    { mode: "tui", thinkingLevel: "high", isProjectTrusted: () => true },
   );
   const first = await tool(mock, "subagent_spawn").execute(
     "first",
     {
       task: "First",
+      thinkingLevel: "off",
       tools: ["read", "edit"],
       extensions: [{ path: "packages/pi-subagents/src/index.ts", tools: ["custom_review"] }],
       timeout: 120,
@@ -386,26 +390,29 @@ test("shows active job tasks, timing, timeout, and selected tools above the edit
   assert.match(
     lines[2] ?? "",
     new RegExp(
-      `^▶ ${String(first.details.jobId)} · First · running · 1m 5s / 2m · tools: read, edit, custom_review$`,
+      `^▶ ${String(first.details.jobId)} · First · running · thinking: off · 1m 5s / 2m · tools: read, edit, custom_review$`,
       "u",
     ),
   );
   assert.match(
     lines[3] ?? "",
     new RegExp(
-      `^▶ ${String(second.details.jobId)} · Second · running · 0s / no timeout · tools: read, grep, find, ls$`,
+      `^▶ ${String(second.details.jobId)} · Second · running · thinking: high · 0s / no timeout · tools: read, grep, find, ls$`,
       "u",
     ),
   );
+  (context.ctx as ExtensionContext).thinkingLevel = "low";
+  mock.rawPi.setThinkingLevel("max");
   now = 66_000;
   assert.ok(refreshWidget);
   refreshWidget();
   const refreshedFactory = context.widgets.get(SUBAGENT_WIDGET_KEY) as
     | ((_tui: unknown, theme: Theme) => Component)
     | undefined;
-  const refreshedLines = refreshedFactory?.({}, identityTheme()).render(80) ?? [];
-  assert.match(refreshedLines[2] ?? "", /running · 1m 6s \/ 2m/u);
-  assert.match(refreshedLines[3] ?? "", /running · 1s \/ no timeout/u);
+  const refreshedLines = refreshedFactory?.({}, identityTheme()).render(120) ?? [];
+  assert.match(refreshedLines[2] ?? "", /running · thinking: off · 1m 6s \/ 2m/u);
+  assert.match(refreshedLines[3] ?? "", /running · thinking: high · 1s \/ no timeout/u);
+  assert.doesNotMatch(refreshedLines.join("\n"), /thinking: low|thinking: max/u);
   for (const line of refreshedFactory?.({}, identityTheme()).render(24) ?? []) {
     assert.ok(visibleWidth(line) <= 24);
   }
@@ -424,16 +431,17 @@ test.each(["rpc", "json", "print"])("does not install the component widget in %s
   assert.equal(context.widgets.has(SUBAGENT_WIDGET_KEY), false);
 });
 
-test("falls back to the Pi thinking level when context has none", async () => {
-  let request!: ChildRequest;
+test("displays the Pi fallback thinking level at spawn without tracking later parent changes", async () => {
+  const requests: ChildRequest[] = [];
   const { mock, context } = await setup(
     {
-      runChild: async (candidate) => {
-        request = candidate;
-        return completed("done");
+      runChild: async (request) => {
+        requests.push(request);
+        return waitForCancellation(request);
       },
     },
     { thinkingLevel: "xhigh" },
+    { mode: "tui" },
   );
   const spawned = await tool(mock, "subagent_spawn").execute(
     "spawn",
@@ -442,9 +450,20 @@ test("falls back to the Pi thinking level when context has none", async () => {
     undefined,
     context.ctx,
   );
-  await waitFor(mock, context, String(spawned.details.jobId));
-  assert.equal(request.thinkingLevel, "xhigh");
-  assert.deepEqual(request.tools, []);
+  mock.rawPi.setThinkingLevel("max");
+  const next = await spawnJob(mock, context, "New parent level");
+  const factory = context.widgets.get(SUBAGENT_WIDGET_KEY) as ((_tui: unknown, theme: Theme) => Component) | undefined;
+  assert.ok(factory);
+  const lines = factory({}, identityTheme()).render(200);
+  assert.match(lines[2] ?? "", /Reason carefully · running · thinking: xhigh/u);
+  assert.match(lines[3] ?? "", /New parent level · running · thinking: max/u);
+  assert.deepEqual(
+    requests.map(({ thinkingLevel }) => thinkingLevel),
+    ["xhigh", "max"],
+  );
+  assert.deepEqual(requests[0]?.tools, []);
+  await cancelJob(mock, context, String(spawned.details.jobId));
+  await cancelJob(mock, context, String(next.details.jobId));
 });
 
 test("rejects invalid spawn arguments and nesting before child launch", async () => {
