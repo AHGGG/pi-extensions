@@ -21,8 +21,13 @@ export function rewriteCheckpointForWork(
   marker: string,
   replacementHistory: readonly unknown[],
 ): JsonObject {
-  return rewriteCheckpointMarker(payload, marker, [
-    ...replacementHistory,
-    { role: "developer", content: [{ type: "input_text", text: COMPACTION_WORK_REPLAY_MESSAGE }] },
-  ]);
+  return rewriteCheckpointMarker(
+    payload,
+    marker,
+    [
+      ...replacementHistory,
+      { role: "developer", content: [{ type: "input_text", text: COMPACTION_WORK_REPLAY_MESSAGE }] },
+    ],
+    { replayToolDeclarations: true },
+  );
 }

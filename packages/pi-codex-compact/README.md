@@ -154,6 +154,8 @@ Continuation follows the successful checkpoint protocol, so it also applies when
 
 For other authentication routes, select `auto` or another protocol to stop new Context Management attempts while leaving the extension enabled for replay. Verified official ChatGPT OAuth still resolves to Context Management for every preference. Existing checkpoints are not rewritten and can contain older maintenance instructions or `OK` output. Older package versions do not understand Context Management checkpoints; retain a supporting version for these sessions.
 
+Compatible replay reasserts provider-native `additional_tools` declarations after the opaque checkpoint without changing schemas; later tool changes retain their original ordering. This starts a new request prefix on first replay after upgrading, then remains stable across ordinary turns. Existing compatible checkpoints need no migration. Top-level declarations and Pi active-tool controls are unchanged. Deterministic tests verify request layout; hosted tool availability after this repair still requires validation.
+
 ### ChatGPT OAuth rejection
 
 Before dispatch, this fork matches Pi's fresh public provider-auth result (`source: "OAuth"`) to the actual resolved request credential. The adaptation requires provider `openai`, API `openai-responses`, and the official `https://api.openai.com/v1` base URL (an optional trailing slash is accepted). Proxy base URLs and `Authorization` or `cf-aig-authorization` overrides are excluded. Missing provenance does not establish OAuth: the configured route is retained. Token contents and credential files are not inspected, and credentials or saved preferences are not rewritten.

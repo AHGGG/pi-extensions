@@ -301,6 +301,7 @@ export function rewriteCheckpointMarker(
   payload: unknown,
   marker: string,
   replacementHistory: readonly unknown[],
+  options: { replayToolDeclarations?: boolean } = {},
 ): JsonObject {
   if (!isObject(payload) || !Array.isArray(payload.input)) {
     throw new CodexCompactionProtocolError("Codex Responses payload is missing an input array");
@@ -314,11 +315,19 @@ export function rewriteCheckpointMarker(
     );
   }
   const index = matches[0];
+  const prefix = payload.input.slice(0, index);
+  // Reassert declarations after the opaque checkpoint boundary. Restore the
+  // provider's checkpoint-era snapshot, not the latest active tool set: later
+  // additions, redefinitions, and removal notices must stay in the untouched tail.
+  const declarations = options.replayToolDeclarations
+    ? prefix.filter((item) => isObject(item) && item.type === "additional_tools" && Array.isArray(item.tools))
+    : [];
   return {
     ...payload,
     input: [
-      ...payload.input.slice(0, index),
+      ...prefix,
       ...structuredClone(replacementHistory),
+      ...structuredClone(declarations),
       ...payload.input.slice(index + 1),
     ],
   };
