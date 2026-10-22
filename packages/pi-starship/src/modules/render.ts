@@ -1,7 +1,7 @@
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { sanitizeTerminalText } from "@narumitw/pi-tui-kit/terminal-text";
 import { activePalette, type ModuleConfig, type StarshipConfig } from "../config.js";
-import { type FormatValue, formatVariables, renderFormat } from "../format/formatter.js";
+import { type FormatValue, formatVariables, parseFormat, renderFormat } from "../format/formatter.js";
 import {
   type ColorPalette,
   isFillChunk,
@@ -12,8 +12,15 @@ import {
 import { sanitizeFormatText } from "../format/terminal-safety.js";
 import type { ThemeColors } from "../format/theme-colors.js";
 import { MODULE_DEFINITIONS, MODULE_NAMES, type ModuleName } from "./catalog.js";
+import { directoryAlternateFormat } from "./directory.js";
 import { resolveStyleRule } from "./style-rules.js";
-import type { ModuleStyleContext, ModuleValueContext, RenderedStatusline, StarshipRuntimeSnapshot } from "./types.js";
+import type {
+  ModuleOptionValue,
+  ModuleStyleContext,
+  ModuleValueContext,
+  RenderedStatusline,
+  StarshipRuntimeSnapshot,
+} from "./types.js";
 
 export function renderStatusline(
   config: StarshipConfig,
@@ -32,13 +39,15 @@ export function renderStatusline(
   for (const definition of MODULE_DEFINITIONS) {
     const name = definition.name;
     const module = config.modules[name];
-    const values = definition.values(valueContext(config, name, runtime, palette));
+    const context = valueContext(config, name, runtime, palette);
+    const values = definition.values(context);
     if (!values) continue;
     const styleContext: ModuleStyleContext = {
       runtime,
       style: module.style,
       styles: module.styles,
       display: module.display,
+      options: context.options,
     };
     const baseStyleVariables = definition.resolveStyleVariables
       ? definition.resolveStyleVariables(styleContext)
@@ -50,10 +59,16 @@ export function renderStatusline(
     const styleVariables = ruleStyle === undefined ? baseStyleVariables : { ...baseStyleVariables, style: ruleStyle };
     const contentValues: Record<string, FormatValue> = Object.fromEntries(
       definition.variables.flatMap((variable) =>
-        variable !== "symbol" && Object.hasOwn(values, variable) ? [[variable, values[variable]]] : [],
+        Object.hasOwn(values, variable) ? [[variable, values[variable]]] : [],
       ),
     );
-    const rendered = renderModule(module, contentValues, styleVariables, palette);
+    const alternate = definition.resolveFormat?.(context, values);
+    const rendered = renderModule(
+      alternate === undefined ? module : { ...module, formatAst: parseFormat(alternate) },
+      contentValues,
+      styleVariables,
+      palette,
+    );
     modules[name] = rendered;
     layoutModules[name] =
       definition.layout === "fill" && !module.disabled ? [{ type: "fill", pattern: rendered }] : rendered;
@@ -84,17 +99,10 @@ function valueContext(
     runtime: runtimeForDisplay(name, runtime),
     palette,
     symbol: sanitizeFormatText(config.modules[name].symbol),
+    styles: config.modules[name].styles,
+    requestedVariables: formatVariables(config.modules[name].formatAst),
     options: Object.fromEntries(
-      Object.entries(config.modules[name].options).map(([key, value]) => [
-        key,
-        typeof value === "string"
-          ? sanitizeTerminalText(value)
-          : Array.isArray(value)
-            ? value.map(sanitizeTerminalText)
-            : value && typeof value === "object"
-              ? sanitizeFields(value)
-              : value,
-      ]),
+      Object.entries(config.modules[name].options).map(([key, value]) => [key, sanitizeOption(value)]),
     ),
     extensionStatus: {
       ...config.extensionStatus,
@@ -104,6 +112,17 @@ function valueContext(
       ),
     },
   };
+}
+
+function sanitizeOption(value: ModuleOptionValue): ModuleOptionValue {
+  if (typeof value === "string") return sanitizeTerminalText(value);
+  if (Array.isArray(value)) return value.map((item) => sanitizeOption(item as ModuleOptionValue)) as ModuleOptionValue;
+  if (value && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value).map(([key, item]) => [key, sanitizeOption(item)]),
+    ) as ModuleOptionValue;
+  }
+  return value;
 }
 
 // Shallow presentation copies retain keys used for aliases and status policies.
@@ -176,7 +195,14 @@ export function reachableModuleRequirements(config: StarshipConfig): ReadonlyMap
   for (const definition of MODULE_DEFINITIONS) {
     if (config.modules[definition.name].disabled) continue;
     if (!includeAll && !rootVariables.has(definition.name)) continue;
-    requirements.set(definition.name, formatVariables(config.modules[definition.name].formatAst));
+    const variables = formatVariables(config.modules[definition.name].formatAst);
+    if (definition.name === "directory") {
+      const alternate = directoryAlternateFormat(config.modules.directory.options, config.modules.directory.styles);
+      if (alternate) {
+        for (const variable of formatVariables(parseFormat(alternate))) variables.add(variable);
+      }
+    }
+    requirements.set(definition.name, variables);
   }
   return requirements;
 }

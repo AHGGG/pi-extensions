@@ -14,6 +14,7 @@ import {
 } from "node:fs";
 import { dirname, join } from "node:path";
 import { parse as parseToml, type TomlTable } from "smol-toml";
+import { normalizeModuleOption } from "./config/module-options.js";
 import { type FormatNode, formatVariables, parseFormat, styleVariables } from "./format/formatter.js";
 import { type ColorPalette, isValidStyle, parseColor } from "./format/style.js";
 import { MODULE_DEFINITIONS, MODULE_NAMES, type ModuleName } from "./modules/catalog.js";
@@ -393,7 +394,22 @@ function normalizeModule(
   }
   for (const [key, schema] of Object.entries(optionSchemas)) {
     if (value[key] === undefined) continue;
-    const normalized = normalizeModuleOption(value[key], schema);
+    const normalized = normalizeModuleOption(value[key], schema, activePalette(config));
+    if (normalized.ok && name === "directory" && key === "repo_root_format" && typeof normalized.value === "string") {
+      try {
+        const ast = parseFormat(normalized.value);
+        if (
+          normalized.value.length > 4_096 ||
+          [...formatVariables(ast)].some((variable) => !definition.variables.includes(variable)) ||
+          [...styleVariables(ast)].some((variable) => !definition.styleVariables?.includes(variable))
+        )
+          throw new Error("Unknown format variable");
+        validateLiteralStyles(ast, activePalette(config), `${name}.${key}`, diagnostics);
+      } catch {
+        diagnostics.push(diagnostic("warning", `${name}.${key}`, "Invalid repository-root format; using the default"));
+        continue;
+      }
+    }
     if (normalized.ok) module.options[key] = normalized.value;
     else diagnostics.push(diagnostic("warning", `${name}.${key}`, normalized.message));
   }
@@ -773,58 +789,6 @@ function validateLiteralStyles(
     }
     if (node.type === "group" || node.type === "conditional") {
       validateLiteralStyles(node.children, palette, path, diagnostics);
-    }
-  }
-}
-
-function normalizeModuleOption(
-  value: unknown,
-  schema: ModuleOptionSchema,
-): { ok: true; value: ModuleOptionValue } | { ok: false; message: string } {
-  switch (schema.kind) {
-    case "string":
-      return typeof value === "string" && (schema.allowEmpty !== false || value.length > 0)
-        ? { ok: true, value }
-        : { ok: false, message: "Expected a non-empty string; using the default value" };
-    case "string-enum":
-      return typeof value === "string" && schema.values.includes(value)
-        ? { ok: true, value }
-        : {
-            ok: false,
-            message: `Expected one of: ${schema.values.join(", ")}; using the default value`,
-          };
-    case "boolean":
-      return typeof value === "boolean"
-        ? { ok: true, value }
-        : { ok: false, message: "Expected boolean; using the default value" };
-    case "integer":
-      return typeof value === "number" && Number.isInteger(value) && value >= schema.minimum && value <= schema.maximum
-        ? { ok: true, value }
-        : {
-            ok: false,
-            message: `Expected an integer from ${schema.minimum} through ${schema.maximum}; using the default value`,
-          };
-    case "string-array": {
-      if (
-        !Array.isArray(value) ||
-        value.some(
-          (item) => typeof item !== "string" || item.length === 0 || (!schema.allowNegative && item.startsWith("!")),
-        )
-      ) {
-        return {
-          ok: false,
-          message: "Expected an array of valid strings; using the default value",
-        };
-      }
-      return { ok: true, value: [...value] as string[] };
-    }
-    case "string-map": {
-      if (!isRecord(value) || Object.values(value).some((item) => typeof item !== "string")) {
-        return { ok: false, message: "Expected a table of strings; using the default value" };
-      }
-      const result: Record<string, string> = {};
-      for (const [key, item] of Object.entries(value)) setOwn(result, key, item as string);
-      return { ok: true, value: result };
     }
   }
 }

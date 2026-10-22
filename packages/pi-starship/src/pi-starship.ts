@@ -76,6 +76,7 @@ interface GitRefreshInput {
 }
 
 interface PiStarshipOptions {
+  gitExec?: WorkspaceExec;
   githubPrExec?: WorkspaceExec;
 }
 
@@ -106,12 +107,23 @@ export default function piStarship(pi: ExtensionAPI, options: PiStarshipOptions 
       const requirements = reachableModuleRequirements(input.config);
       const gitReachable =
         [...requirements.keys()].some((name) => name.startsWith("git_")) ||
-        (requirements.has("directory") && input.config.modules.directory.options.truncate_to_repo === true);
+        (requirements.has("directory") &&
+          (input.config.modules.directory.options.truncate_to_repo === true ||
+            Boolean(input.config.modules.directory.options.repo_root_format) ||
+            Boolean(input.config.modules.directory.styles.repo_root_style)));
       if (!gitReachable) return undefined;
       try {
         return await readGitSnapshot(pi, input.cwd, {
           includeMetrics: requirements.has("git_metrics"),
-          includeTag: requirements.get("git_commit")?.has("tag") ?? false,
+          includeTag:
+            (requirements.get("git_commit")?.has("tag") ?? false) &&
+            input.config.modules.git_commit.options.tag_disabled !== true,
+          statusIgnoreSubmodules: input.config.modules.git_status.options.ignore_submodules === true,
+          metricsIgnoreSubmodules: input.config.modules.git_metrics.options.ignore_submodules === true,
+          tagMaxCandidates: input.config.modules.git_commit.options.tag_max_candidates as number,
+          inspectBare:
+            requirements.has("git_branch") && input.config.modules.git_branch.options.ignore_bare_repo === false,
+          exec: options.gitExec ?? execWorkspaceCommand,
           signal,
         });
       } catch {
@@ -300,10 +312,20 @@ export default function piStarship(pi: ExtensionAPI, options: PiStarshipOptions 
         requestRefresh(target, "periodic");
         // Collectors publish only changed snapshots. The clock is the sole value
         // that changes without publication; reuse the last render's session data.
-        if (!lastRender || !reachableModuleRequirements(lastRender.config).get("time")?.has("time")) return;
+        if (!lastRender) return;
+        const clock = reachableModuleRequirements(lastRender.config).get("time");
+        const range = lastRender.config.modules.time.options.time_range;
+        if (!clock || (!clock.has("time") && (!range || range === "-"))) return;
         const now = new Date();
         const previous = lastRender.snapshot.now;
-        if (now.getHours() === previous.getHours() && now.getMinutes() === previous.getMinutes()) return;
+        if (
+          !lastRender.config.modules.time.options.time_format &&
+          lastRender.config.modules.time.options.utc_time_offset === "local" &&
+          (!range || range === "-") &&
+          now.getHours() === previous.getHours() &&
+          now.getMinutes() === previous.getMinutes()
+        )
+          return;
         const lines = wrapFormattedStatusline(
           renderStatusline(
             lastRender.config,
@@ -576,12 +598,24 @@ const ENVIRONMENT_ALLOWLIST = [
 
 function allowlistedEnvironment(config: StarshipConfig): Record<string, string | undefined> {
   const result: Record<string, string | undefined> = {};
-  const configured = config.modules.username.options.detect_env_vars;
-  const names = new Set([
-    ...ENVIRONMENT_ALLOWLIST,
-    ...(Array.isArray(configured) ? configured.filter((name): name is string => typeof name === "string") : []),
-  ]);
-  for (const name of names) result[name] = process.env[name];
+  const configured = Object.values(config.modules)
+    .flatMap((module) => {
+      const names = module.options.detect_env_vars;
+      return Array.isArray(names) ? names.filter((name): name is string => typeof name === "string") : [];
+    })
+    .map((name) => name.replace(/^!/u, ""))
+    .filter((name) => /^[A-Za-z_][A-Za-z0-9_]*$/u.test(name));
+  const names = new Set([...ENVIRONMENT_ALLOWLIST, ...configured]);
+  for (const name of names) {
+    const value =
+      Object.hasOwn(process.env, name) && typeof process.env[name] === "string" ? process.env[name] : undefined;
+    Object.defineProperty(result, name, {
+      value,
+      enumerable: true,
+      configurable: true,
+      writable: true,
+    });
+  }
   return result;
 }
 
