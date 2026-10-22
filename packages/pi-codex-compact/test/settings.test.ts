@@ -172,77 +172,19 @@ test("checkpoint recovery defaults, validation, queued persistence and failed wr
   assert.equal(await readFile(path, "utf8"), '{"checkpointRecovery":"unknown"}');
 });
 
-test("warm-ahead defaults off and accepts only boolean enablement and integer percentage bounds", () => {
-  assert.equal(normalizeCodexCompactSettings({})?.asyncEnabled, false);
-  assert.equal(normalizeCodexCompactSettings({})?.asyncThresholdPercent, 65);
-  assert.equal(normalizeCodexCompactSettings({ asyncEnabled: true })?.asyncEnabled, true);
-  for (const asyncEnabled of [null, 0, 1, "true", {}, []])
-    assert.equal(normalizeCodexCompactSettings({ asyncEnabled }), undefined);
-  for (const asyncThresholdPercent of [1, 65, 99])
-    assert.equal(
-      normalizeCodexCompactSettings({ asyncThresholdPercent })?.asyncThresholdPercent,
-      asyncThresholdPercent,
-    );
-  for (const asyncThresholdPercent of [0, 100, 65.5, NaN, Infinity, null, "65", true, {}, []])
-    assert.equal(normalizeCodexCompactSettings({ asyncThresholdPercent }), undefined);
-});
-
-test("warm-ahead settings persist in order with unknown fields and invalid writes preserve prior state", async () => {
+test("legacy companion settings remain unowned and survive core saves", async () => {
   const path = await tempSettingsPath();
-  await writeFile(path, '{"future":{"keep":true}}');
+  await writeFile(
+    path,
+    JSON.stringify({ asyncEnabled: true, asyncAutoApply: true, asyncThresholdPercent: 75, logCompaction: true }),
+  );
   const runtime = createCodexCompactSettingsRuntime(path);
   await runtime.reload();
-  await Promise.all([
-    runtime.update({ asyncEnabled: true }),
-    runtime.update({ asyncThresholdPercent: 99 }),
-    runtime.reload(),
-  ]);
-  assert.equal(runtime.get().settings.asyncEnabled, true);
-  assert.equal(runtime.get().settings.asyncThresholdPercent, 99);
-  const saved = await readFile(path, "utf8");
-  assert.deepEqual(JSON.parse(saved), { future: { keep: true }, asyncEnabled: true, asyncThresholdPercent: 99 });
-  await assert.rejects(runtime.update({ asyncThresholdPercent: 100 }), /Refusing to save invalid/);
-  assert.equal(runtime.get().settings.asyncThresholdPercent, 99);
-  assert.equal(await readFile(path, "utf8"), saved);
-  await runtime.update({ asyncEnabled: false, asyncThresholdPercent: 1 });
-  const reloaded = await runtime.reload();
-  assert.equal(reloaded.settings.asyncEnabled, false);
-  assert.equal(reloaded.settings.asyncThresholdPercent, 1);
-  await writeFile(path, '{"asyncEnabled":true,"asyncThresholdPercent":0}');
-  assert.equal((await runtime.reload()).kind, "invalid");
-  await assert.rejects(runtime.update({ asyncThresholdPercent: 65 }), /Cannot overwrite/);
-  assert.equal(await readFile(path, "utf8"), '{"asyncEnabled":true,"asyncThresholdPercent":0}');
-});
-
-test("compaction logging defaults off, validates booleans, and persists explicit changes", async () => {
-  assert.equal(DEFAULT_CODEX_COMPACT_SETTINGS.logCompaction, false);
-  for (const logCompaction of [true, false])
-    assert.equal(normalizeCodexCompactSettings({ logCompaction })?.logCompaction, logCompaction);
-  for (const logCompaction of ["true", 1, null])
-    assert.equal(normalizeCodexCompactSettings({ logCompaction }), undefined);
-  const path = await tempSettingsPath();
-  await writeFile(path, '{"futureField":"kept"}\n');
-  const runtime = createCodexCompactSettingsRuntime(path);
-  await runtime.reload();
-  await runtime.update({ logCompaction: true });
-  assert.equal((await runtime.reload()).settings.logCompaction, true);
-  assert.deepEqual(JSON.parse(await readFile(path, "utf8")), { futureField: "kept", logCompaction: true });
-  await runtime.update({ logCompaction: false });
-  assert.equal((await runtime.reload()).settings.logCompaction, false);
-});
-
-test("auto-apply is opt-in, strictly boolean, and persists without losing unknown fields", async () => {
-  assert.equal(DEFAULT_CODEX_COMPACT_SETTINGS.asyncAutoApply, false);
-  for (const asyncAutoApply of [true, false])
-    assert.equal(normalizeCodexCompactSettings({ asyncAutoApply })?.asyncAutoApply, asyncAutoApply);
-  for (const asyncAutoApply of [null, 0, "true", {}, []])
-    assert.equal(normalizeCodexCompactSettings({ asyncAutoApply }), undefined);
-  const path = await tempSettingsPath();
-  await writeFile(path, '{"future":"keep"}');
-  const runtime = createCodexCompactSettingsRuntime(path);
-  await runtime.update({ asyncAutoApply: true });
-  assert.equal((await runtime.reload()).settings.asyncAutoApply, true);
-  assert.deepEqual(JSON.parse(await readFile(path, "utf8")), { future: "keep", asyncAutoApply: true });
-  await runtime.update({ asyncAutoApply: false });
-  assert.equal((await runtime.reload()).settings.asyncAutoApply, false);
+  assert.equal("asyncEnabled" in runtime.get().settings, false);
+  await runtime.update({ enabled: false });
+  const saved = JSON.parse(await readFile(path, "utf8"));
+  assert.equal(saved.asyncEnabled, true);
+  assert.equal(saved.asyncAutoApply, true);
+  assert.equal(saved.asyncThresholdPercent, 75);
+  assert.equal(saved.logCompaction, true);
 });

@@ -13,7 +13,7 @@ import { projectedKeptMessages } from "../src/checkpoint-projection.js";
 import {
   captureCompactionBranch,
   captureExactCompactionBranch,
-  captureWarmCompactionBranch,
+  capturePrefixCompactionBranch,
 } from "../src/compaction-ownership.js";
 
 function history(legacy = false) {
@@ -38,7 +38,7 @@ function history(legacy = false) {
 }
 
 for (const [name, capture] of [
-  ["warm", captureWarmCompactionBranch],
+  ["prefix", capturePrefixCompactionBranch],
   ["foreground", captureCompactionBranch],
   ["exact", captureExactCompactionBranch],
 ] as const) {
@@ -165,7 +165,7 @@ test("warm projection includes empty sources and applies suffix edits before fil
   const hidden = manager.appendMessage({ role: "user", content: "hidden original", timestamp: 1 });
   manager.appendMessage({ role: "user", content: "visible tail", timestamp: 2 });
   manager.appendContextEdit(hidden, null);
-  const current = captureWarmCompactionBranch(manager.getBranch());
+  const current = capturePrefixCompactionBranch(manager.getBranch());
   const projected = buildSessionProjection(manager.getBranch());
   assert.deepEqual(projected.entries.find(({ sourceEntry }) => sourceEntry.id === hidden)?.messages, []);
   manager.appendMessage({ role: "user", content: "new turn", timestamp: 3 });

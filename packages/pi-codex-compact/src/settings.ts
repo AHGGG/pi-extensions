@@ -10,10 +10,6 @@ export const MAX_SETTINGS_BYTES = 64 * 1024;
 
 export interface CodexCompactSettings {
   enabled: boolean;
-  asyncEnabled: boolean;
-  asyncAutoApply: boolean;
-  logCompaction: boolean;
-  asyncThresholdPercent: number;
   protocol: RemoteCompactionProtocolSetting;
   apiProfiles: Record<string, "codex-responses-v1">;
   requestTimeoutMs: number;
@@ -23,18 +19,17 @@ export interface CodexCompactSettings {
   checkpointRecovery: "summarize" | "cancel";
 }
 
-/** Logging and application timing do not invalidate prepared work or pending continuation. */
+/** Stable key for provider-relevant compaction settings. */
 export function compactionSettingsKey(settings: CodexCompactSettings): string {
-  const { logCompaction: _logCompaction, asyncAutoApply: _asyncAutoApply, ...compactionSettings } = settings;
-  return JSON.stringify(compactionSettings);
+  return JSON.stringify(
+    Object.fromEntries(
+      Object.keys(DEFAULT_CODEX_COMPACT_SETTINGS).map((key) => [key, settings[key as keyof CodexCompactSettings]]),
+    ),
+  );
 }
 
 export const DEFAULT_CODEX_COMPACT_SETTINGS: Readonly<CodexCompactSettings> = Object.freeze({
   enabled: true,
-  asyncEnabled: false,
-  asyncAutoApply: false,
-  logCompaction: false,
-  asyncThresholdPercent: 65,
   protocol: "auto",
   apiProfiles: {},
   requestTimeoutMs: 300_000,
@@ -45,7 +40,6 @@ export const DEFAULT_CODEX_COMPACT_SETTINGS: Readonly<CodexCompactSettings> = Ob
 });
 
 const LIMITS = Object.freeze({
-  asyncThresholdPercent: { minimum: 1, maximum: 99 },
   requestTimeoutMs: { minimum: 30_000, maximum: 900_000 },
   maxRetries: { minimum: 0, maximum: 2 },
   replacementTokenBudget: { minimum: 8_000, maximum: 128_000 },
@@ -125,9 +119,6 @@ function normalizeApiProfiles(value: unknown): Record<string, "codex-responses-v
 export function normalizeCodexCompactSettings(value: unknown): CodexCompactSettings | undefined {
   if (!isRecord(value)) return undefined;
   if (Object.hasOwn(value, "enabled") && typeof value.enabled !== "boolean") return undefined;
-  if (Object.hasOwn(value, "logCompaction") && typeof value.logCompaction !== "boolean") return undefined;
-  if (Object.hasOwn(value, "asyncAutoApply") && typeof value.asyncAutoApply !== "boolean") return undefined;
-  if (Object.hasOwn(value, "asyncEnabled") && typeof value.asyncEnabled !== "boolean") return undefined;
   if (
     Object.hasOwn(value, "protocol") &&
     value.protocol !== "auto" &&
@@ -158,16 +149,6 @@ export function normalizeCodexCompactSettings(value: unknown): CodexCompactSetti
   return {
     checkpointRecovery: value.checkpointRecovery === "cancel" ? "cancel" : "summarize",
     enabled: typeof value.enabled === "boolean" ? value.enabled : DEFAULT_CODEX_COMPACT_SETTINGS.enabled,
-    asyncEnabled:
-      typeof value.asyncEnabled === "boolean" ? value.asyncEnabled : DEFAULT_CODEX_COMPACT_SETTINGS.asyncEnabled,
-    asyncAutoApply:
-      typeof value.asyncAutoApply === "boolean" ? value.asyncAutoApply : DEFAULT_CODEX_COMPACT_SETTINGS.asyncAutoApply,
-    logCompaction:
-      typeof value.logCompaction === "boolean" ? value.logCompaction : DEFAULT_CODEX_COMPACT_SETTINGS.logCompaction,
-    asyncThresholdPercent:
-      typeof value.asyncThresholdPercent === "number"
-        ? value.asyncThresholdPercent
-        : DEFAULT_CODEX_COMPACT_SETTINGS.asyncThresholdPercent,
     protocol:
       value.protocol === "remote-v2" ||
       value.protocol === "responses-compact" ||

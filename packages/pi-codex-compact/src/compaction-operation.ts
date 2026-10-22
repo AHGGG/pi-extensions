@@ -53,7 +53,7 @@ export interface CompactionAttempt {
 }
 
 export interface CompactionOperationOptions {
-  background?: {
+  preparation?: {
     attempt: CompactionAttempt;
     branchIsCurrent: (current: SessionBeforeCompactEvent["branchEntries"]) => boolean;
   };
@@ -167,7 +167,7 @@ export async function compactRemotely(
   const sessionId = ctx.sessionManager.getSessionId();
   const checkpoint = latestCheckpoint(event.branchEntries);
   const checkpointPresent = hasActiveCheckpointClaim(event.branchEntries);
-  const branchIsCurrent = options.background?.branchIsCurrent ?? captureCompactionBranch(event.branchEntries);
+  const branchIsCurrent = options.preparation?.branchIsCurrent ?? captureCompactionBranch(event.branchEntries);
   const systemPrompt = ctx.getSystemPrompt?.();
   const tools = JSON.stringify([pi.getActiveTools(), activeTools(pi)]);
   const stillCurrent = () =>
@@ -194,7 +194,7 @@ export async function compactRemotely(
     // unwinds to avoid reentrant stream teardown. This controller owns only this task.
     queueMicrotask(() => remoteController.abort());
   };
-  ctx.ui.setStatus(STATUS_KEY, "Preparing Responses compaction…");
+  if (ownsStatus()) ctx.ui.setStatus(STATUS_KEY, "Preparing Responses compaction…");
   try {
     if (checkpointPresent && !checkpoint)
       throw new Error("The active opaque checkpoint is invalid or unsupported; history preserved");
@@ -202,19 +202,20 @@ export async function compactRemotely(
     if (!stillCurrent()) return { cancel: true };
     const { auth, provider } = resolved;
     route = resolved.route;
-    if (options.background) options.background.attempt.binding = resolved.binding;
+    if (options.preparation) options.preparation.attempt.binding = resolved.binding;
     requestValues = [auth.apiKey, ...Object.values(auth.headers ?? {}), ...Object.values(auth.env ?? {})].filter(
       (value): value is string => typeof value === "string" && value.length > 0,
     );
     onRouteResolved(route.protocol);
-    ctx.ui.setStatus(
-      STATUS_KEY,
-      route.protocol === "context-management"
-        ? "Responses Context Management (experimental)…"
-        : route.protocol === "remote-v2"
-          ? "Responses Remote V2…"
-          : "Responses Compact API…",
-    );
+    if (ownsStatus())
+      ctx.ui.setStatus(
+        STATUS_KEY,
+        route.protocol === "context-management"
+          ? "Responses Context Management (experimental)…"
+          : route.protocol === "remote-v2"
+            ? "Responses Remote V2…"
+            : "Responses Compact API…",
+      );
     const failed = options.failedAttempt;
     if (failed?.failure && sameCompactionBinding(failed.binding, resolved.binding)) {
       ({ routeKey, endpointObserved, paused, remoteAttempted, rejectionError } = failed.failure);
@@ -228,7 +229,7 @@ export async function compactRemotely(
       // provider-owned input isolated from later live-entry mutations, but copy
       // only the projected messages, not historical payloads already compacted out.
       messages: convertToLlm(
-        options.background ? (JSON.parse(JSON.stringify(current.messages)) as AgentMessage[]) : current.messages,
+        options.preparation ? (JSON.parse(JSON.stringify(current.messages)) as AgentMessage[]) : current.messages,
       ),
       tools: activeTools(pi),
     };
@@ -336,8 +337,8 @@ export async function compactRemotely(
     if (!stillCurrent()) return { cancel: true };
     if (remoteAttempted && isOAuthOperationRejection(error))
       recordRejection(error instanceof Error ? error : new Error(String(error)));
-    if (options.background) {
-      options.background.attempt.failure = {
+    if (options.preparation) {
+      options.preparation.attempt.failure = {
         error,
         routeKey,
         endpointObserved,
@@ -371,7 +372,7 @@ export async function compactRemotely(
       ].filter((value): value is string => typeof value === "string" && value.length > 0);
       const provider = ctx.modelRegistry.getProvider(model.provider);
       if (!provider) throw new Error("The active Responses provider is unavailable");
-      ctx.ui.setStatus(STATUS_KEY, "Checkpoint recovery summary…");
+      if (ownsStatus()) ctx.ui.setStatus(STATUS_KEY, "Checkpoint recovery summary…");
       const compaction = await recoverCheckpoint(
         {
           provider,

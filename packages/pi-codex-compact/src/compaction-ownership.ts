@@ -56,7 +56,7 @@ function workingSet(entries: SessionEntry[], snapshotIds: Set<string>): string {
 
 function captureBranch(
   entries: SessionEntry[],
-  mode: "exact" | "bookkeeping" | "warm",
+  mode: "exact" | "bookkeeping" | "prefix",
   onInvalid?: (reason: string) => void,
 ): (current: SessionEntry[]) => boolean {
   const invalid = (reason: string) => {
@@ -75,7 +75,7 @@ function captureBranch(
     for (const entry of current.slice(length)) {
       if (
         !["custom", "usage", "label", "session_info", "context_edit"].includes(entry.type) &&
-        !(mode === "warm" && (entry.type === "message" || entry.type === "custom_message"))
+        !(mode === "prefix" && (entry.type === "message" || entry.type === "custom_message"))
       )
         return invalid("session transition invalidated the snapshot");
     }
@@ -97,9 +97,9 @@ export function captureCompactionBranch(entries: SessionEntry[]): (current: Sess
 }
 
 /** Preserve snapshot ancestry, effective input, and replay while allowing new turns. */
-export function captureWarmCompactionBranch(
+export function capturePrefixCompactionBranch(
   entries: SessionEntry[],
   onInvalid?: (reason: string) => void,
 ): (current: SessionEntry[]) => boolean {
-  return captureBranch(entries, "warm", onInvalid);
+  return captureBranch(entries, "prefix", onInvalid);
 }

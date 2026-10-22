@@ -11,7 +11,7 @@ The extension replays that checkpoint in later compatible requests. Pi still con
 - Offers Remote Compaction V2, unary `responses/compact`, and experimental streaming Context Management.
 - Adapts verified official OpenAI ChatGPT OAuth requests to Context Management before dispatch, including Auto and V2 preferences.
 - Handles manual, threshold, and overflow compaction through Pi's normal lifecycle.
-- Optionally prepares checkpoints in the background after completed turns for later automatic compaction.
+- Exposes an optional prepared-checkpoint engine without scheduling speculative work itself.
 - Preserves compatible checkpoints across repeated compaction, protocol changes, reloads, resumes, and forks.
 - Uses Pi-native fallback before the first checkpoint; afterward, tries checkpoint-aware recovery with lossy native fallback on recovery failure.
 - Pauses an operation rejected by OAuth without disabling compatible checkpoint replay.
@@ -32,7 +32,7 @@ To use this fork, replace the upstream compact entry in Pi's `settings.json` pac
 }
 ```
 
-Restart Pi after resolving the Git package. This filter loads only the compaction extension. Remove `npm:@narumitw/pi-codex-compact` from the same installation scope to avoid loading two copies. The upstream npm package does not contain this fork's OAuth routing, 15-minute timeout, or experimental warm-ahead changes.
+Restart Pi after resolving the Git package. This filter loads only the compaction extension. Remove `npm:@narumitw/pi-codex-compact` from the same installation scope to avoid loading two copies. The upstream npm package does not contain this fork's OAuth routing, 15-minute timeout, changes.
 
 The upstream npm package is available separately:
 
@@ -73,7 +73,7 @@ Signing in does not guarantee compaction permission; see [ChatGPT OAuth rejectio
 Run `/codex-compact` without arguments to inspect the effective route, change settings, or select **Compact now** in TUI mode.
 Closing the menu with Escape or Ctrl+C does not compact the session; settings changes already saved remain applied.
 The no-argument command reports the manual settings path in RPC and is rejected in print and JSON modes.
-Use `/codex-compact resume` in any mode, or **Resume warm-ahead** in the TUI menu, to clear a warm-ahead failure pause without changing settings or starting an immediate request. Other arguments are rejected.
+The compatibility route `/codex-compact resume` shows migration guidance in TUI/RPC; background controls now belong to `/background-compaction`. Other arguments are rejected.
 Pi's built-in `/compact` uses the same compaction routing.
 
 ## ⚙️ Settings
@@ -91,7 +91,7 @@ For example, select Remote V2 explicitly on a compatible backend:
 
 With `auto`, verified official OpenAI ChatGPT OAuth uses Context Management; API-key OpenAI and Azure use unary `responses/compact`, and legacy Codex uses Remote V2. The OAuth adaptation also applies to explicit V2 and Compact preferences. Other APIs remain Pi-native unless explicitly configured. The menu reports the last resolved protocol after a compaction attempt without refreshing OAuth merely to display it.
 
-**Experimental warm-ahead is off by default.** Enabling it can consume quota even when its result is never used, and does not guarantee lower compaction latency. Read [Experimental warm-ahead](#experimental-warm-ahead) before enabling it.
+**Background compaction is now a separate optional extension.** See [Background companion](#background-companion) before updating an existing installation that uses it.
 
 Menu changes apply immediately. Manual file edits take effect on `/reload` or the next session start. Invalid settings files remain unchanged and make the menu read-only until repaired and reloaded.
 
@@ -116,23 +116,17 @@ Changing providers can replay a checkpoint only when its API label, compatibilit
 An incompatible route exposes the fallback marker and recent messages, not the checkpoint's older history. An ordinary request cannot transparently recover after an incompatible backend has already received the checkpoint.
 The extension does not make capability probes or automatically retry a failed billable request through another protocol.
 
-### Experimental warm-ahead
+### Background companion
 
-Enable **Warm-ahead (experimental)** in `/codex-compact` → **Settings** to prepare a checkpoint after a completed turn while an agent run is continuing. Preparation begins only at a safe completed-turn boundary once context-window usage reaches the configured threshold (65% by default). This threshold starts preparation; Pi's own automatic compaction threshold is unchanged.
+Install [pi-background-compaction](https://github.com/AHGGG/pi-background-compaction) alongside this engine to retain background preparation and safe-boundary application:
 
-Preparation uses an immutable snapshot and does not change session history, the active checkpoint, or ordinary requests. TUI and RPC notify you once a checkpoint is ready, even with lifecycle logging disabled; run `/compact` or choose **Compact now** to apply it. Plain manual compaction and Pi-triggered automatic compaction can adopt a compatible ready result. Manual compaction while preparation is still running cancels it and uses the existing foreground path. Requests with custom instructions also bypass reuse and follow the existing foreground path; successful remote compaction does not currently apply those instructions (checkpoint recovery does). If preparation is still running when automatic compaction starts, the preparation wait uses only the remaining request timeout, measured from preparation start. Authentication revalidation and the existing recovery path run afterward; this deadline does not bound total adoption latency.
+```bash
+pi install git:github.com/AHGGG/pi-background-compaction@master
+```
 
-Adoption preserves conversation entries added after the snapshot exactly, after the prepared checkpoint and its retained history. A stale, failed, or incompatible candidate is discarded and the existing foreground compaction and recovery policy applies. Stopping a run with Escape cancels pending preparation but preserves a compatible ready checkpoint for a later manual `/compact`; automatic application of that candidate is disabled after the stop. Incomplete tool-call/result suffixes cannot be adopted. Session/navigation changes and incompatible model, thinking-level, or compaction settings changes discard background work. A prepared candidate can remain available while the session is idle; turning warm-ahead off or reloading discards it. The menu shows **Preparing** or **Ready** while a candidate is available.
+Restart Pi with both updated packages. The companion owns `/background-compaction`, its menu, pause/resume, threshold, automatic application, and diagnostic notices. This engine alone performs no speculative requests. Existing session checkpoints remain compatible.
 
-Enable **Apply when ready** in the same Settings screen (or set `"asyncAutoApply": true` alongside `"asyncEnabled": true` in the user settings file) to apply a ready checkpoint automatically. It defaults off. Application uses the next completed model/tool-batch boundary, so long-running tool loops need not finish first. If the run settles before preparation finishes, application waits until the next input, before that prompt runs. It never interrupts an active response or tool, adds a work turn, or starts another inference request if the prepared checkpoint is stale. Newer messages are retained exactly once. Failed application is not retried automatically for the same checkpoint. The toggle takes effect immediately in the menu without discarding prepared work; file edits require `/reload`. Pi commits boundary drafts after all boundary handlers finish: a stop arriving after a draft was returned can still commit that validated checkpoint, but never starts another work turn.
-
-A preparation failure or failed automatic application pauses further warm-ahead attempts for the current session. This includes timeouts, authentication/provider binding rejection, and an oversized retained tail. A warning and the menu show a safe reason even when compaction logs are off. Manual `/compact` and Pi-triggered compaction still use their existing routing and checkpoint-integrity guards. Escape, job cancellation, and explicit session/model/settings invalidation do not count as failures. Resume explicitly with `/codex-compact resume` or the menu action; preparation becomes eligible after the next completed turn. The pause is not saved to settings and resets on session start or `/reload`; resume does not clear a separate OAuth route-rejection block.
-
-To verify operation, enable **Compaction logs** in `/codex-compact` → **Settings**, or set `"logCompaction": true` in `pi-codex-compact.json` and run `/reload`. The logging toggle takes effect immediately without discarding prepared work or interrupting compaction. It defaults off and adds lifecycle notifications in TUI and RPC: async preparation started, actual compaction triggered, waiting/reusing a checkpoint or taking the foreground path, cancellation, and completion after Pi commits the checkpoint. Print and JSON modes stay silent. Notices contain no conversation, checkpoint, or credential contents; fallback warnings remain controlled separately by `notifyOnFallback`.
-
-Discard/rejection notices include a reason, such as a changed snapshot, tool definitions, request authentication, provider instance, unmatched tool call, or failed projection validation. Binding rejections list every changed category in a fixed order: model, route, request authentication, provider authentication, provider instance, stream function, and streamSimple function. They never reveal values or hashes. An authentication change can be a routine token refresh or an account switch; the notice does not distinguish them, and both still invalidate the candidate. Normal warm-ahead preparation can start again at a later completed turn. Token-budget rejections also show estimated total, replacement, suffix, prompt/tools, context-window, and reserved token counts. These are estimates, not provider usage. When reporting repeated discards, include the reason line and your Pi/extension versions; do not include credentials or private conversation content.
-
-Background requests use the active route's quota or API usage even if their results are discarded. They may overlap ordinary work and do not guarantee lower latency. Adoption intentionally begins a new request prefix; preserving the new conversation tail does not promise provider prompt-cache reuse, including native suffix-cache reuse after adoption. Turn warm-ahead off to stop speculative preparation while keeping normal compaction and compatible checkpoint replay enabled.
+The companion reads legacy `asyncEnabled`, `asyncAutoApply`, `asyncThresholdPercent`, and `logCompaction` values from `pi-codex-compact.json` only when its own settings file is absent. Core settings saves preserve those old fields; do not delete them before the companion has read them. New companion saves go to `pi-background-compaction.json`. See its README for opt-in defaults, quota costs, and migration details.
 
 ### Experimental Context Management
 
@@ -192,7 +186,7 @@ Keep the extension enabled while the active session needs its checkpoint; recove
 
 ## 🧭 How it works
 
-Pi chooses when to compact and which recent messages to keep. The extension requests a checkpoint for older context, saves it in the session, and replays it alongside the retained messages on compatible requests. With [experimental warm-ahead](#experimental-warm-ahead) enabled, automatic compaction may adopt a previously prepared checkpoint instead.
+Pi chooses when to compact and which recent messages to keep. The extension requests a checkpoint for older context, saves it in the session, and replays it alongside the retained messages on compatible requests. An optional companion may supply a previously prepared checkpoint through the [versioned engine protocol](./docs/prepared-compaction-protocol.md).
 
 ```mermaid
 flowchart LR
@@ -206,7 +200,7 @@ If a request fails, the extension uses native fallback before the first checkpoi
 ## 🔒 Security and privacy
 
 Remote compaction sends conversation context and the system prompt to the configured Responses backend. Remote V2 and Context Management also send active tool schemas; Codex-profile unary requests retain provider-supported tools.
-New checkpoints use format v4, including the snapshot cutoff for warm-ahead; v1–v3 checkpoints remain readable. Keep a v4-capable extension installed when resuming these sessions, because older versions cannot replay the new format.
+New checkpoints use format v4, including the snapshot cutoff for prepared checkpoints; v1–v3 checkpoints remain readable. Keep a v4-capable extension installed when resuming these sessions, because older versions cannot replay the new format.
 
 The session stores the provider ID, encrypted checkpoint, and bounded retained user items or Context Management output. It does not store credentials or authorization/request headers in checkpoint details.
 

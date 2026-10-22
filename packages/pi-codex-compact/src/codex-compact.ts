@@ -1,12 +1,6 @@
 import type { Api, Model } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import {
-  adoptWarmCompaction,
-  startWarmCompaction,
-  type WarmCompactionJob,
-  warmCompactionDraft,
-} from "./async-compaction.js";
-import {
   type CodexCheckpointDetails,
   checkpointMarker,
   hasActiveCheckpointClaim,
@@ -17,8 +11,15 @@ import { projectSessionCheckpointContext } from "./checkpoint-projection.js";
 import { rewriteCheckpointForWork } from "./checkpoint-replay.js";
 import { activeTools, type CompactionAttempt, compactRemotely } from "./compaction-operation.js";
 import { captureCompactionBranch, captureExactCompactionBranch } from "./compaction-ownership.js";
-import { CompactionTimings } from "./compaction-timing.js";
 import { type RemoteCompactionProtocol, resolveCompactionRoute } from "./model-api.js";
+import { captureCheckpointPreparation, preparedAttempts } from "./prepared-compaction.js";
+import {
+  COMPACTION_ENGINE_AVAILABLE,
+  COMPACTION_ENGINE_REQUEST,
+  type CompactionEngineRequest,
+  type CompactionEngineV1,
+  type PreparedCompactionSource,
+} from "./prepared-compaction-protocol.js";
 import { hasCheckpointMarker } from "./protocol.js";
 import { RejectedRoutes, rejectionRouteKey } from "./rejection-state.js";
 import {
@@ -75,17 +76,11 @@ export function createCodexCompactExtension(
       rejected: RejectedRoutes;
       sessionId: string;
       operation?: AbortController;
-      warm?: WarmCompactionJob;
-      warmPauseReason?: string;
-      warmGeneration: number;
-      compactionPending?: boolean;
-      boundaryCheckpoint?: { job: WarmCompactionJob; checkpointId: string; timing?: string };
-      autoApply?: { job: WarmCompactionJob; done: Promise<void>; cancelled?: boolean };
       run?: ContinuationRun;
       lastRoute?: { key: string; protocol: RemoteCompactionProtocol };
     };
     const owners = new WeakMap<object, Owner>();
-    const autoApplyAttempts = new WeakSet<WarmCompactionJob>();
+    const activeManagers = new Set<object>();
     const ownerFor = (ctx: ExtensionContext): Owner => {
       let owner = owners.get(ctx.sessionManager);
       const sessionId = ctx.sessionManager.getSessionId();
@@ -93,110 +88,15 @@ export function createCodexCompactExtension(
       if (!owner || owner.sessionId !== sessionId) {
         owner?.controller.abort();
         if (owner) ctx.ui.setStatus(STATUS_KEY, undefined);
-        owner = { controller: new AbortController(), rejected: new RejectedRoutes(), warmGeneration: 0, sessionId };
+        owner = { controller: new AbortController(), rejected: new RejectedRoutes(), sessionId };
         owners.set(ctx.sessionManager, owner);
+        activeManagers.add(ctx.sessionManager);
       }
       return owner;
     };
 
-    // Lifecycle-only notices: never include prompts, checkpoints, auth, or provider errors.
-    const logCompaction = (ctx: ExtensionContext, message: string) => {
-      const owner = owners.get(ctx.sessionManager);
-      if (
-        ctx.hasUI &&
-        settingsRuntime.get().settings.logCompaction &&
-        owner &&
-        !owner.controller.signal.aborted &&
-        owner.sessionId === ctx.sessionManager.getSessionId()
-      )
-        ctx.ui.notify(`[codex-compact] ${message}`, "info");
-    };
-
-    const cancelWarm = (ctx: ExtensionContext, reason?: string) => {
-      const owner = owners.get(ctx.sessionManager);
-      if (!owner?.warm) return;
-      if (owner.warm.state !== "Failed")
-        logCompaction(
-          ctx,
-          `${owner.warm.state === "Ready" ? "Async compaction checkpoint discarded." : "Async compaction cancelled."} Reason: ${reason ?? owner.warm.validationFailure ?? "checkpoint is no longer current"}.`,
-        );
-      if (owner.autoApply?.job === owner.warm) owner.autoApply.cancelled = true;
-      owner.warm.controller.abort();
-      owner.warm = undefined;
-      owner.boundaryCheckpoint = undefined;
-      if (!owner.operation) ctx.ui.setStatus(STATUS_KEY, undefined);
-    };
-
-    const pauseWarm = (ctx: ExtensionContext, owner: Owner, reason: string, generation = owner.warmGeneration) => {
-      if (
-        owners.get(ctx.sessionManager) !== owner ||
-        owner.controller.signal.aborted ||
-        owner.sessionId !== ctx.sessionManager.getSessionId() ||
-        owner.warmGeneration !== generation ||
-        owner.warmPauseReason
-      )
-        return;
-      owner.warmPauseReason = reason;
-      if (ctx.hasUI)
-        ctx.ui.notify(
-          `[codex-compact] Warm-ahead paused for this session. Reason: ${reason}. Manual /compact and Pi automatic compaction remain available. Use /codex-compact resume to retry.`,
-          "warning",
-        );
-    };
-
-    const resumeWarm = (ctx: ExtensionContext, owner: Owner) => {
-      if (
-        owners.get(ctx.sessionManager) !== owner ||
-        owner.controller.signal.aborted ||
-        owner.sessionId !== ctx.sessionManager.getSessionId()
-      )
-        return;
-      if (!owner.warmPauseReason) {
-        if (ctx.hasUI) ctx.ui.notify("Warm-ahead is not paused.", "info");
-        return;
-      }
-      owner.warmGeneration += 1;
-      owner.warmPauseReason = undefined;
-      cancelWarm(ctx, "warm-ahead explicitly resumed");
-      if (ctx.hasUI)
-        ctx.ui.notify(
-          "Warm-ahead resumed for this session; preparation can start after the next completed turn.",
-          "info",
-        );
-    };
-
-    // Returning a draft is not a commit. Confirm persisted identity at the next
-    // public hook; entry_appended is only exposed to AgentSession subscribers.
-    const confirmBoundaryCheckpoint = (ctx: ExtensionContext) => {
-      const owner = owners.get(ctx.sessionManager);
-      const pending = owner?.boundaryCheckpoint;
-      if (
-        !owner ||
-        !pending ||
-        owner.controller.signal.aborted ||
-        owner.sessionId !== ctx.sessionManager.getSessionId()
-      )
-        return;
-      owner.boundaryCheckpoint = undefined;
-      const checkpoint = activeCheckpoint(ctx);
-      if (checkpoint?.details.checkpointId !== pending.checkpointId) return;
-      if (owner.warm === pending.job) owner.warm = undefined;
-      pending.job.controller.abort();
-      ctx.ui.setStatus(STATUS_KEY, undefined);
-      logCompaction(ctx, "Actual compaction completed: checkpoint committed at the turn boundary.");
-      if (pending.timing) logCompaction(ctx, pending.timing);
-    };
-
-    const stopWarmPreparation = (ctx: ExtensionContext) => {
-      confirmBoundaryCheckpoint(ctx);
-      const job = owners.get(ctx.sessionManager)?.warm;
-      if (job?.state === "Ready" && job.isCurrent()) autoApplyAttempts.add(job);
-      else if (job) cancelWarm(ctx);
-    };
-
     const cancelOperation = (ctx: ExtensionContext) => {
       const owner = owners.get(ctx.sessionManager);
-      if (owner) owner.compactionPending = false;
       const operation = owner?.operation;
       if (!owner || !operation) return;
       operation.abort();
@@ -206,86 +106,83 @@ export function createCodexCompactExtension(
       }
     };
 
-    // Pi's compact() aborts active work. Only await it at idle lifecycle boundaries:
-    // agent_settled defers incoming prompts; input holds the next prompt before it runs.
-    // A ready promise alone is not a boundary (another input may be in preflight).
-    const applyReadyAtBoundary = async (ctx: ExtensionContext) => {
-      const owner = owners.get(ctx.sessionManager);
-      if (!owner) return;
-      if (owner.autoApply) {
-        await owner.autoApply.done;
-        return;
-      }
-      const job = owner.warm;
-      const settings = settingsRuntime.get().settings;
-      if (
-        !settings.enabled ||
-        !settings.asyncEnabled ||
-        !settings.asyncAutoApply ||
-        owner.warmPauseReason ||
-        !job ||
-        job.state !== "Ready" ||
-        !job.isCurrent() ||
-        owner.controller.signal.aborted ||
-        owner.sessionId !== ctx.sessionManager.getSessionId() ||
-        owner.operation ||
-        owner.compactionPending ||
-        !ctx.isIdle() ||
-        ctx.hasPendingMessages() ||
-        autoApplyAttempts.has(job)
-      )
-        return;
-      autoApplyAttempts.add(job);
-      let finish!: () => void;
-      const done = new Promise<void>((resolve) => {
-        finish = resolve;
-      });
-      const generation = owner.warmGeneration;
-      const runSignal = ctx.signal;
-      const claim: NonNullable<Owner["autoApply"]> = { job, done };
-      owner.autoApply = claim;
-      const release = () => {
-        if (owner.autoApply === claim) owner.autoApply = undefined;
-        finish();
-      };
-      try {
-        ctx.compact({
-          onComplete: release,
-          onError: (error) => {
-            // Pi reports both user and extension cancellation through onError.
-            if (
-              error.message !== "Compaction cancelled" &&
-              !claim.cancelled &&
-              !runSignal?.aborted &&
-              owner.autoApply === claim
-            )
-              pauseWarm(ctx, owner, "automatic checkpoint application failed", generation);
-            logCompaction(ctx, "Automatic checkpoint application did not complete; history preserved.");
-            release();
+    let source: PreparedCompactionSource | undefined;
+    const engine: CompactionEngineV1 = {
+      version: 1,
+      available(ctx) {
+        const owner = ownerFor(ctx);
+        const route = resolveCompactionRoute(ctx.model, settingsRuntime.get().settings);
+        return (
+          !owner.controller.signal.aborted &&
+          !owner.operation &&
+          settingsRuntime.get().settings.enabled &&
+          !!ctx.model &&
+          route.kind === "remote" &&
+          !owner.rejected.hasObserved(rejectionRouteKey(ctx.model, route))
+        );
+      },
+      capture(ctx) {
+        if (!engine.available(ctx)) return undefined;
+        const owner = ownerFor(ctx);
+        return captureCheckpointPreparation(
+          pi,
+          ctx,
+          settingsRuntime,
+          owner.controller.signal,
+          owner.rejected,
+          () => owners.get(ctx.sessionManager) === owner && owner.sessionId === ctx.sessionManager.getSessionId(),
+          (protocol) => {
+            const route = resolveCompactionRoute(ctx.model, settingsRuntime.get().settings);
+            if (!owner.controller.signal.aborted && ctx.model && route.kind === "remote")
+              owner.lastRoute = { key: rejectionRouteKey(ctx.model, route), protocol };
           },
-        });
-      } catch (error) {
-        if (
-          !(error instanceof Error && error.message === "Compaction cancelled") &&
-          !claim.cancelled &&
-          !runSignal?.aborted &&
-          owner.autoApply === claim
-        )
-          pauseWarm(ctx, owner, "automatic checkpoint application failed", generation);
-        release();
-      }
-      await done;
+          options.fetch,
+        );
+      },
+      checkpointId: (ctx) => activeCheckpoint(ctx)?.details.checkpointId,
+      captureBoundary(ctx) {
+        const owner = ownerFor(ctx);
+        const branchIsCurrent = captureExactCompactionBranch(ctx.sessionManager.getBranch());
+        return () =>
+          !owner.controller.signal.aborted &&
+          owners.get(ctx.sessionManager) === owner &&
+          owner.sessionId === ctx.sessionManager.getSessionId() &&
+          branchIsCurrent(ctx.sessionManager.getBranch());
+      },
+      attachSource(candidate) {
+        if (source) throw new Error("A prepared-compaction source is already registered");
+        source = candidate;
+        return () => {
+          if (source === candidate) source = undefined;
+        };
+      },
     };
+    let removeDiscovery: (() => void) | undefined;
+    const installDiscovery = () => {
+      if (!removeDiscovery)
+        removeDiscovery = pi.events?.on(COMPACTION_ENGINE_REQUEST, (request: unknown) => {
+          if (request && typeof (request as CompactionEngineRequest).accept === "function")
+            (request as CompactionEngineRequest).accept(engine);
+        });
+    };
+    installDiscovery();
+    pi.events?.emit(COMPACTION_ENGINE_AVAILABLE, engine);
 
     pi.registerCommand("codex-compact", {
       description: "Compact now or configure Responses compaction",
       getArgumentCompletions: (prefix) =>
-        "resume".startsWith(prefix) ? [{ value: "resume", label: "resume — resume warm-ahead for this session" }] : [],
+        "resume".startsWith(prefix)
+          ? [{ value: "resume", label: "resume — background-compaction migration guidance" }]
+          : [],
       handler: async (args, ctx) => {
         if (args.trim() && args.trim() !== "resume") throw new Error("Usage: /codex-compact [resume]");
         const owner = ownerFor(ctx);
         if (args.trim() === "resume") {
-          resumeWarm(ctx, owner);
+          if (ctx.hasUI)
+            ctx.ui.notify(
+              "Background compaction moved to /background-compaction resume. Install pi-background-compaction to use it.",
+              "info",
+            );
           return;
         }
         const controller = owner.controller;
@@ -309,12 +206,8 @@ export function createCodexCompactExtension(
               ? owner.lastRoute.protocol
               : undefined;
           },
-          warmPauseReason: () => owner.warmPauseReason,
-          onResumeWarm: () => resumeWarm(ctx, owner),
-          backgroundStatus: () => (owner.warm?.state === "Failed" ? undefined : owner.warm?.state),
           onSettingsChanged: () => {
             cancelOperation(ctx);
-            cancelWarm(ctx, "settings changed in the compaction menu");
           },
           hasCheckpoint: () => hasActiveCheckpointClaim(ctx.sessionManager.getBranch()),
           canReplayCheckpoint: () => {
@@ -328,14 +221,16 @@ export function createCodexCompactExtension(
     });
 
     pi.on("session_start", async (_event, ctx) => {
+      installDiscovery();
+      pi.events?.emit(COMPACTION_ENGINE_AVAILABLE, engine);
       owners.get(ctx.sessionManager)?.controller.abort();
       const owner: Owner = {
         controller: new AbortController(),
         rejected: new RejectedRoutes(),
-        warmGeneration: 0,
         sessionId: ctx.sessionManager.getSessionId(),
       };
       owners.set(ctx.sessionManager, owner);
+      activeManagers.add(ctx.sessionManager);
       ctx.ui.setStatus(STATUS_KEY, undefined);
       const sessionId = ctx.sessionManager.getSessionId();
       providerWarnings.clear();
@@ -379,159 +274,12 @@ export function createCodexCompactExtension(
       if (!owner.controller.signal.aborted) owner.run = { used: false };
     });
 
-    pi.on("turn_end", async (event, ctx) => {
-      confirmBoundaryCheckpoint(ctx);
-      const owner = ownerFor(ctx);
-      if (event.outcome !== "completed" || ctx.signal?.aborted) {
-        stopWarmPreparation(ctx);
-        return;
-      }
-      const previous = owner.warm;
-      const timings =
-        previous?.state === "Ready" && ctx.hasUI && settingsRuntime.get().settings.logCompaction
-          ? new CompactionTimings()
-          : undefined;
-      if (previous && !(timings ? timings.measure("validation", () => previous.isCurrent()) : previous.isCurrent()))
-        cancelWarm(ctx);
-      const job = owner.warm;
-      // This callback is deliberately cheap: adoption owns the full snapshot and
-      // exact-boundary checks. Do not nest heavy validation inside that validator.
-      const ownsApplication = () => {
-        const settings = settingsRuntime.get().settings;
-        return (
-          settings.enabled &&
-          settings.asyncEnabled &&
-          settings.asyncAutoApply &&
-          !owner.warmPauseReason &&
-          owners.get(ctx.sessionManager) === owner &&
-          owner.warm === job &&
-          !owner.controller.signal.aborted &&
-          !ctx.signal?.aborted &&
-          !owner.operation &&
-          !owner.compactionPending &&
-          !owner.autoApply
-        );
-      };
-      if (
-        job?.state === "Ready" &&
-        ownsApplication() &&
-        !autoApplyAttempts.has(job) &&
-        !(event.entries ?? []).some((entry) => entry.type === "compaction" || entry.type === "context_edit")
-      ) {
-        autoApplyAttempts.add(job);
-        let draftReturned = false;
-        try {
-          const captureBoundary = () => captureExactCompactionBranch(ctx.sessionManager.getBranch());
-          const exactBranchIsCurrent = timings ? timings.measure("boundary", captureBoundary) : captureBoundary();
-          const validate = () =>
-            ownsApplication() && job.isCurrent() && exactBranchIsCurrent(ctx.sessionManager.getBranch());
-          let draft: Awaited<ReturnType<typeof warmCompactionDraft>>;
-          let failed = false;
-          try {
-            draft = await warmCompactionDraft(
-              job,
-              ctx,
-              settingsRuntime,
-              AbortSignal.any([owner.controller.signal, ...(ctx.signal ? [ctx.signal] : [])]),
-              ownsApplication,
-              { exactBranchIsCurrent, timings },
-            );
-          } catch {
-            failed = true;
-          }
-          // Notify before the final guard: host UI/settings callbacks may reenter.
-          if (draft) logCompaction(ctx, "Actual compaction is reusing the async checkpoint at the turn boundary.");
-          // Fresh after the draft await, then reused only within this synchronous
-          // phase. Neither IDs, object identity nor a microtask cache is sufficient.
-          const applicable = timings ? timings.measure("validation", validate) : validate();
-          if (failed && applicable) job.applicationFailure = "automatic checkpoint validation failed";
-          if (draft && applicable) {
-            const details = parseCheckpointDetails(draft.details);
-            if (details) {
-              owner.boundaryCheckpoint = { job, checkpointId: details.checkpointId, timing: timings?.message() };
-              draftReturned = true;
-              return { entries: [...(event.entries ?? []), draft] };
-            }
-          }
-          if (job.applicationFailure && applicable) pauseWarm(ctx, owner, job.applicationFailure);
-          // A cancelled wait/toggle preserves valid prepared work. A completed
-          // validation failure discards the candidate without starting inference.
-          if (!ctx.signal?.aborted && owner.warm === job && settingsRuntime.get().settings.asyncAutoApply)
-            cancelWarm(ctx);
-          return;
-        } finally {
-          // A notification can invoke host callbacks. Report successful timing
-          // only after commit, never add such a callback after the final guard.
-          if (timings && !draftReturned) logCompaction(ctx, timings.message());
-        }
-      }
-      if (owner.warmPauseReason || owner.warm || owner.operation || owner.controller.signal.aborted) return;
-      let warm: WarmCompactionJob | undefined;
-      warm = startWarmCompaction(
-        pi,
-        ctx,
-        settingsRuntime,
-        owner.controller.signal,
-        owner.rejected,
-        () => owners.get(ctx.sessionManager) === owner && owner.sessionId === ctx.sessionManager.getSessionId(),
-        () => owners.get(ctx.sessionManager) === owner && owner.warm === warm && !owner.operation,
-        (protocol) => {
-          const route = resolveCompactionRoute(ctx.model, settingsRuntime.get().settings);
-          if (ctx.model && route.kind === "remote")
-            owner.lastRoute = { key: rejectionRouteKey(ctx.model, route), protocol };
-        },
-        options.fetch,
-      );
-      owner.warm = warm;
-      if (warm) {
-        logCompaction(ctx, "Async compaction triggered: preparing a checkpoint in the background.");
-        const job = warm;
-        const report = (message: string, ready = false) => {
-          if (owners.get(ctx.sessionManager) !== owner || owner.warm !== job || !job.isCurrent()) return;
-          // Readiness is actionable even with optional lifecycle logging disabled.
-          if (ready) {
-            if (ctx.hasUI) ctx.ui.notify(`[codex-compact] ${message}`, "info");
-          } else logCompaction(ctx, message);
-        };
-        void job.promise.then(
-          () => {
-            if (job.attempt.failure && owner.warm === job && job.isCurrent())
-              pauseWarm(ctx, owner, "background preparation failed");
-            report(
-              job.state === "Ready"
-                ? settingsRuntime.get().settings.asyncAutoApply
-                  ? "Async compaction ready: the prepared checkpoint will apply after the current model/tool batch, or at the next idle input boundary."
-                  : "Async compaction ready: run /compact to apply the prepared checkpoint. History is unchanged until compaction."
-                : "Async compaction failed: actual compaction will use the foreground recovery path.",
-              job.state === "Ready",
-            );
-          },
-          () => {
-            if (owner.warm === job && job.isCurrent()) pauseWarm(ctx, owner, "background preparation failed");
-          },
-        );
-      }
-    });
-
     pi.on("session_before_compact", (event, ctx) => {
       const owner = ownerFor(ctx);
       const run = owner.run;
-      const autoApply = owner.autoApply;
-      const reason = event.reason === "manual" ? "manual" : event.reason === "overflow" ? "overflow" : "threshold";
-      logCompaction(ctx, `Actual compaction triggered (${reason}).`);
+
       if (run) run.pending = undefined;
       cancelOperation(ctx);
-      owner.compactionPending = true;
-      // Only plain manual compaction can reuse a finished snapshot. Pending work
-      // and custom-instruction requests retain the existing foreground path.
-      if (event.customInstructions?.trim() || (event.reason === "manual" && owner.warm?.state !== "Ready"))
-        cancelWarm(
-          ctx,
-          event.customInstructions?.trim()
-            ? "foreground compaction has custom instructions"
-            : "manual compaction replaced unfinished preparation",
-        );
-      const warm = owner.warm;
       const operation = new AbortController();
       owner.operation = operation;
       const settings = settingsRuntime.get().settings;
@@ -544,13 +292,19 @@ export function createCodexCompactExtension(
       const toolsKey = JSON.stringify([pi.getActiveTools(), activeTools(pi)]);
       const thinkingLevel = pi.getThinkingLevel();
       let statusCleared = false;
+      let sourceIsCurrent: (() => boolean) | undefined;
       const isCurrent = () => {
-        if (owners.get(ctx.sessionManager) !== owner || owner.operation !== operation || operation.signal.aborted)
+        if (
+          owners.get(ctx.sessionManager) !== owner ||
+          owner.operation !== operation ||
+          operation.signal.aborted ||
+          owner.controller.signal.aborted ||
+          owner.sessionId !== ctx.sessionManager.getSessionId()
+        )
           return false;
         const currentSettings = settingsRuntime.get().settings;
         const currentRoute = resolveCompactionRoute(ctx.model, currentSettings);
         return (
-          (!autoApply || (currentSettings.asyncAutoApply && currentSettings.asyncEnabled && currentSettings.enabled)) &&
           compactionSettingsKey(currentSettings) === compactionSettingsKey(settings) &&
           (key === undefined ||
             (!!ctx.model && currentRoute.kind === "remote" && rejectionRouteKey(ctx.model, currentRoute) === key))
@@ -558,53 +312,41 @@ export function createCodexCompactExtension(
       };
       const execute = async () => {
         let failedAttempt: CompactionAttempt | undefined;
-        // An automatic application only adopts its exact prepared checkpoint. Never
-        // turn a stale/auth-changed checkpoint into an unsolicited inference request.
-        if (
-          autoApply &&
-          (warm !== autoApply.job ||
-            event.reason !== "manual" ||
-            event.customInstructions?.trim() ||
-            !settings.asyncAutoApply ||
-            !settings.asyncEnabled ||
-            !settings.enabled)
-        )
-          return { cancel: true };
-        if (warm) {
-          if (warm.state === "Preparing" && warm.isCurrent())
-            logCompaction(ctx, "Actual compaction is waiting for the in-flight async checkpoint.");
-          const adoption = await adoptWarmCompaction(
-            warm,
-            event,
-            ctx,
-            settingsRuntime,
-            AbortSignal.any([owner.controller.signal, operation.signal]),
-            isCurrent,
-          );
-          // Switching automatic application off cancels the claim, not valid
-          // prepared work: leave it available for a later manual compaction.
-          if (autoApply && !settingsRuntime.get().settings.asyncAutoApply && warm.isCurrent()) return { cancel: true };
-          if (
-            owners.get(ctx.sessionManager) === owner &&
-            owner.warm === warm &&
-            (adoption.kind === "stale" || adoption.kind === "failed")
-          )
-            logCompaction(
-              ctx,
-              `Async checkpoint application rejected. Reason: ${warm.validationFailure ?? (adoption.kind === "failed" ? "background preparation failed" : "checkpoint is no longer current")}.`,
-            );
-          if (autoApply && warm.applicationFailure && isCurrent() && !event.signal.aborted)
-            pauseWarm(ctx, owner, warm.applicationFailure);
-          if (owner.warm === warm) owner.warm = undefined;
-          warm.controller.abort();
-          if (adoption.kind === "cancel") return { cancel: true };
-          if (adoption.kind === "ready") {
-            if (isCurrent()) logCompaction(ctx, "Actual compaction is reusing the async checkpoint.");
-            return adoption.result;
+        const selectedSource = source;
+        if (selectedSource) {
+          let supplied: Awaited<ReturnType<PreparedCompactionSource["beforeCompact"]>>;
+          try {
+            supplied = await selectedSource.beforeCompact(event, ctx, {
+              signal: AbortSignal.any([owner.controller.signal, operation.signal]),
+              isCurrent,
+            });
+          } catch {
+            // Pi may continue after extension exceptions. Fail closed instead of
+            // letting a broken optional source permit unsafe native compaction.
+            return { cancel: true };
           }
-          if (autoApply) return { cancel: true };
-          if (isCurrent()) logCompaction(ctx, "Async checkpoint unavailable; using the foreground compaction path.");
-          if (adoption.kind === "failed") failedAttempt = adoption.attempt;
+          if (!supplied || !["absent", "cancel", "ready", "fallback"].includes(supplied.kind)) return { cancel: true };
+          if (source !== selectedSource || !isCurrent() || event.signal.aborted) return { cancel: true };
+          if (supplied.kind === "cancel") return { cancel: true };
+          if (supplied.kind === "ready") {
+            if (
+              !supplied.result ||
+              typeof supplied.result !== "object" ||
+              (!supplied.result.compaction && supplied.result.cancel !== true)
+            )
+              return { cancel: true };
+            sourceIsCurrent = () => {
+              try {
+                return source === selectedSource && (supplied.isCurrent?.() ?? true);
+              } catch {
+                return false;
+              }
+            };
+            if (!sourceIsCurrent()) return { cancel: true };
+            return supplied.result;
+          }
+          if (supplied.kind === "fallback" && supplied.prepared)
+            failedAttempt = preparedAttempts.get(supplied.prepared);
         }
         return compactRemotely(
           pi,
@@ -624,14 +366,6 @@ export function createCodexCompactExtension(
       };
       return execute()
         .then((result) => {
-          if (isCurrent() && !owner.controller.signal.aborted && !event.signal.aborted) {
-            if (result && "cancel" in result && result.cancel) {
-              logCompaction(ctx, "Actual compaction cancelled; history preserved.");
-              owner.compactionPending = false;
-            } else if (!result) {
-              logCompaction(ctx, "Actual compaction handed to Pi native compaction.");
-            }
-          }
           // Both reuse notices and status cleanup can reenter host code. Run
           // those callbacks before the final handoff check, not in finally after it.
           if (owners.get(ctx.sessionManager) === owner && owner.operation === operation) {
@@ -665,6 +399,7 @@ export function createCodexCompactExtension(
           }
           if (
             !isCurrent() ||
+            (sourceIsCurrent && !sourceIsCurrent()) ||
             owner.controller.signal.aborted ||
             event.signal.aborted ||
             owner.sessionId !== ctx.sessionManager.getSessionId() ||
@@ -674,7 +409,6 @@ export function createCodexCompactExtension(
             pi.getThinkingLevel() !== thinkingLevel ||
             !branchIsCurrent(ctx.sessionManager.getBranch())
           ) {
-            owner.compactionPending = false;
             if (run && owner.run === run) run.pending = undefined;
             return { cancel: true };
           }
@@ -696,12 +430,7 @@ export function createCodexCompactExtension(
     });
 
     pi.on("session_compact", (event, ctx) => {
-      cancelWarm(ctx, "another compaction committed");
       const owner = owners.get(ctx.sessionManager);
-      if (owner?.compactionPending) {
-        logCompaction(ctx, "Actual compaction completed: checkpoint committed.");
-        owner.compactionPending = false;
-      }
       const run = owner?.run;
       const pending = run?.pending;
       if (!owner || !run || !pending || pending.entryId) return;
@@ -716,7 +445,6 @@ export function createCodexCompactExtension(
         checkpoint.details.checkpointId === pending.checkpointId
       ) {
         pending.entryId = checkpoint.entry.id;
-        logCompaction(ctx, "Continuation: checkpoint committed; waiting for a work request or settlement.");
       } else {
         run.pending = undefined;
       }
@@ -753,11 +481,10 @@ export function createCodexCompactExtension(
         (ctx.hasPendingMessages() && event.context.canContinue) ||
         !projectSessionCheckpointContext(event.context.contextMessages, ctx.sessionManager.getBranch(), checkpoint)
       ) {
-        logCompaction(ctx, "Continuation: extra request suppressed by existing work or lifecycle guards.");
         return;
       }
       run.used = true;
-      logCompaction(ctx, "Continuation: requesting one extra work turn at settlement.");
+
       return {
         entries: [
           ...event.entries,
@@ -773,36 +500,18 @@ export function createCodexCompactExtension(
       };
     });
 
-    pi.on("session_compact_failed", (event, ctx) => {
+    pi.on("session_compact_failed", (_event, ctx) => {
       const owner = owners.get(ctx.sessionManager);
-      if (owner?.autoApply && event.aborted) owner.autoApply.cancelled = true;
-      if (owner?.compactionPending) {
-        logCompaction(ctx, "Actual compaction did not complete (failed or cancelled).");
-        owner.compactionPending = false;
-      }
       const run = owner?.run;
       if (run) run.pending = undefined;
     });
 
-    pi.on("input", async (_event, ctx) => {
-      confirmBoundaryCheckpoint(ctx);
-      await applyReadyAtBoundary(ctx);
-    });
-
-    pi.on("agent_settled", async (event, ctx) => {
-      confirmBoundaryCheckpoint(ctx);
-      if (event.aborted) stopWarmPreparation(ctx);
+    pi.on("agent_settled", (_event, ctx) => {
       const owner = owners.get(ctx.sessionManager);
       if (owner) owner.run = undefined;
-      if (!event.aborted) await applyReadyAtBoundary(ctx);
     });
 
-    pi.on("turn_start", (_event, ctx) => confirmBoundaryCheckpoint(ctx));
-
     pi.on("context", (event, ctx) => {
-      confirmBoundaryCheckpoint(ctx);
-      const warm = owners.get(ctx.sessionManager)?.warm;
-      if (warm && !warm.isCurrent()) cancelWarm(ctx);
       if (!settingsRuntime.get().settings.enabled) return undefined;
       const settings = settingsRuntime.get().settings;
       const checkpoint = activeCheckpoint(ctx);
@@ -818,7 +527,6 @@ export function createCodexCompactExtension(
       const run = owners.get(ctx.sessionManager)?.run;
       if (run?.pending?.entryId) {
         run.pending = undefined;
-        logCompaction(ctx, "Continuation: normal work request prepared; no extra request scheduled.");
       }
       if (!settingsRuntime.get().settings.enabled) return undefined;
       const settings = settingsRuntime.get().settings;
@@ -831,7 +539,6 @@ export function createCodexCompactExtension(
 
     const beforeNavigation = (_event: unknown, ctx: ExtensionContext) => {
       cancelOperation(ctx);
-      cancelWarm(ctx, "session navigation or thinking-level selection");
       const owner = owners.get(ctx.sessionManager);
       if (owner) owner.run = undefined;
     };
@@ -842,14 +549,12 @@ export function createCodexCompactExtension(
 
     pi.on("session_tree", (_event, ctx) => {
       cancelOperation(ctx);
-      cancelWarm(ctx, "session tree changed");
       const owner = owners.get(ctx.sessionManager);
       if (owner) owner.run = undefined;
     });
 
     pi.on("model_select", (event, ctx) => {
       cancelOperation(ctx);
-      cancelWarm(ctx, "model selected");
       const owner = owners.get(ctx.sessionManager);
       if (owner) owner.run = undefined;
       if (!settingsRuntime.get().settings.enabled) return;
@@ -868,11 +573,16 @@ export function createCodexCompactExtension(
     });
 
     pi.on("session_shutdown", async (_event, ctx) => {
+      activeManagers.delete(ctx.sessionManager);
+      if (activeManagers.size === 0) {
+        removeDiscovery?.();
+        removeDiscovery = undefined;
+        source = undefined;
+      }
       const owner = owners.get(ctx.sessionManager) ?? ownerFor(ctx);
       owner.controller.abort();
       owner.rejected = new RejectedRoutes();
       owner.operation = undefined;
-      owner.warm = undefined;
       owner.run = undefined;
       // Keep an aborted tombstone until session_start so queued old-context
       // events cannot recreate an active controller after shutdown.

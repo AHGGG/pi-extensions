@@ -1,5 +1,7 @@
 # Compaction rebuild verification
 
+Historical verification record from before background extraction. Current background controls and logging belong to the separate pi-background-compaction extension; the old settings examples below are not current core configuration.
+
 ## Scope
 
 The rebuild starts from upstream `c8fae75a81f08aecdb6000767b92dcb53634e298`. The original fork tip is `d3108382feee0874c8389f0bd785dd8a46698e89`. Four rebuilt commits end at `0ba6ca5e25b6e8fbc32148a1dd04851be6adb096`; reconciliation commit `c4c69250738093e10cf467539eec7d5a7ad65c8d` preserves the original fork history. Integration uses a normal merge, not a reset or force push.

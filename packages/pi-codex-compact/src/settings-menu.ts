@@ -7,13 +7,8 @@ import { terminalText as safeText } from "./terminal.js";
 
 type Screen = "main" | "settings" | "invalid";
 type Action =
-  | "resume-warm"
   | "compact-now"
   | "set-enabled"
-  | "set-log-compaction"
-  | "set-async-enabled"
-  | "set-async-auto-apply"
-  | "set-async-threshold"
   | "set-protocol"
   | "set-timeout"
   | "set-retries"
@@ -28,9 +23,6 @@ export interface SettingsMenuOwner {
   hasCheckpoint?(): boolean;
   canReplayCheckpoint?(): boolean;
   lastProtocol?(): RemoteCompactionProtocol | undefined;
-  backgroundStatus?(): "Preparing" | "Ready" | undefined;
-  warmPauseReason?(): string | undefined;
-  onResumeWarm?(): void;
   onSettingsChanged?(): void;
 }
 
@@ -64,10 +56,6 @@ function lastProtocolLines(protocol: RemoteCompactionProtocol | undefined): stri
   return protocol ? [`Last resolved protocol: ${protocolLabel(protocol)}`] : [];
 }
 
-function backgroundStatusLines(status: "Preparing" | "Ready" | undefined): string[] {
-  return status ? [`Warm-ahead checkpoint: ${status}`] : [];
-}
-
 async function update(
   runtime: CodexCompactSettingsRuntime,
   ctx: ExtensionCommandContext,
@@ -78,7 +66,7 @@ async function update(
   try {
     await runtime.update(patch, signal);
     if (signal.aborted) return { kind: "rejected" as const };
-    if (Object.keys(patch).some((key) => key !== "logCompaction" && key !== "asyncAutoApply")) onSettingsChanged?.();
+    onSettingsChanged?.();
     ctx.ui.notify("Responses compaction settings saved.", "info");
     return { kind: "stay" as const };
   } catch (error) {
@@ -100,9 +88,6 @@ export function createCodexCompactMenu(
     hasCheckpoint?: () => boolean;
     canReplayCheckpoint?: () => boolean;
     lastProtocol?: () => RemoteCompactionProtocol | undefined;
-    backgroundStatus?: () => "Preparing" | "Ready" | undefined;
-    warmPauseReason?: () => string | undefined;
-    onResumeWarm?: () => void;
     onSettingsChanged?: () => void;
   } = {},
 ): MenuDefinition<CodexCompactSettingsState, Screen, Action, ExtensionCommandContext> {
@@ -116,11 +101,6 @@ export function createCodexCompactMenu(
         title: "Responses Compaction",
         lines: [
           `Remote compaction: ${state.settings.enabled ? "On" : "Off"}`,
-          `Warm-ahead (experimental): ${state.settings.asyncEnabled ? `On · ${state.settings.asyncThresholdPercent}%` : "Off"}`,
-          `Apply when ready: ${state.settings.asyncAutoApply ? "On" : "Off"}`,
-          `Compaction logs: ${state.settings.logCompaction ? "On" : "Off"}`,
-          ...backgroundStatusLines(options.backgroundStatus?.()),
-          ...(options.warmPauseReason?.() ? [`Warm-ahead paused: ${safeText(options.warmPauseReason() ?? "")}`] : []),
           `Protocol setting: ${protocolLabel(state.settings.protocol)}`,
           `Active model: ${safeText(options.status?.model ?? "none")}`,
           `Preferred route: ${safeText(compactRoute(state, options.status))}`,
@@ -143,16 +123,6 @@ export function createCodexCompactMenu(
             : []),
         ],
         items: [
-          ...(options.warmPauseReason?.()
-            ? [
-                {
-                  id: "resume-warm",
-                  label: "Resume warm-ahead",
-                  action: "resume-warm" as const,
-                  description: "Clear the session-only failure pause; retry after the next completed turn.",
-                },
-              ]
-            : []),
           {
             id: "compact-now",
             label: "Compact now",
@@ -183,40 +153,6 @@ export function createCodexCompactMenu(
             currentValue: state.settings.enabled ? "On" : "Off",
             values: ["On", "Off"],
             action: "set-enabled",
-          },
-          {
-            id: "asyncEnabled",
-            label: "Warm-ahead (experimental)",
-            description:
-              "Prepare a checkpoint after a completed turn for Pi automatic compaction. May consume quota even if unused.",
-            currentValue: state.settings.asyncEnabled ? "On" : "Off",
-            values: ["On", "Off"],
-            action: "set-async-enabled",
-          },
-          {
-            id: "asyncAutoApply",
-            label: "Apply when ready",
-            description:
-              "Apply a ready warm-ahead checkpoint after the current model/tool batch or before the next idle input. Requires warm-ahead.",
-            currentValue: state.settings.asyncAutoApply ? "On" : "Off",
-            values: ["On", "Off"],
-            action: "set-async-auto-apply",
-          },
-          {
-            id: "asyncThresholdPercent",
-            label: "Warm-ahead threshold",
-            description: "Context-window usage that permits background preparation.",
-            currentValue: `${state.settings.asyncThresholdPercent}%`,
-            values: ["50%", "60%", "65%", "70%", "75%", "80%", "90%"],
-            action: "set-async-threshold",
-          },
-          {
-            id: "logCompaction",
-            label: "Compaction logs",
-            description: "Show async preparation and actual compaction lifecycle notices in TUI and RPC.",
-            currentValue: state.settings.logCompaction ? "On" : "Off",
-            values: ["On", "Off"],
-            action: "set-log-compaction",
           },
           {
             id: "protocol",
@@ -282,20 +218,11 @@ export function createCodexCompactMenu(
       }),
     },
     actions: {
-      "resume-warm": () => {
-        options.onResumeWarm?.();
-        return { kind: "stay" };
-      },
       "compact-now": async () => {
         options.onCompactRequested?.();
         return { kind: "close" };
       },
-      "set-log-compaction": ({ ctx, value, signal }) => save(ctx, { logCompaction: value === "On" }, signal),
       "set-enabled": ({ ctx, value, signal }) => save(ctx, { enabled: value === "On" }, signal),
-      "set-async-auto-apply": ({ ctx, value, signal }) => save(ctx, { asyncAutoApply: value === "On" }, signal),
-      "set-async-enabled": ({ ctx, value, signal }) => save(ctx, { asyncEnabled: value === "On" }, signal),
-      "set-async-threshold": ({ ctx, value, signal }) =>
-        save(ctx, { asyncThresholdPercent: Number.parseInt(value ?? "65", 10) }, signal),
       "set-protocol": ({ ctx, value, signal }) =>
         save(
           ctx,
@@ -355,11 +282,6 @@ export async function showCodexCompactMenu(
       hasCheckpoint: owner.hasCheckpoint,
       canReplayCheckpoint: owner.canReplayCheckpoint,
       lastProtocol: owner.lastProtocol,
-      backgroundStatus: owner.backgroundStatus,
-      warmPauseReason: owner.warmPauseReason,
-      onResumeWarm: () => {
-        if (!owner.signal.aborted && owner.isCurrent()) owner.onResumeWarm?.();
-      },
       onSettingsChanged: () => {
         if (!owner.signal.aborted && owner.isCurrent()) owner.onSettingsChanged?.();
       },
