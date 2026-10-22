@@ -107,6 +107,10 @@
   },
   "overrides": {
     "brace-expansion": "5.0.12",
+    "just-bash": {
+      "guarded-fetch": "0.1.6",
+      "sprintf-js": "npm:@lvcabral/sprintf@1.2.2"
+    },
     "node-domexception": "npm:@profoundlogic/node-domexception@1.0.2",
     "protobufjs": "7.6.5"
   },
