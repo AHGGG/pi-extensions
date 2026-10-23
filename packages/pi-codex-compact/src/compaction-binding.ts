@@ -5,6 +5,7 @@ import type { CompactionTimings } from "./compaction-timing.js";
 import {
   type CompactionRoute,
   isChatGPTCompactionCandidate,
+  isVerifiedChatGPTOAuth,
   resolveAuthenticatedCompactionRoute,
   resolveCompactionRoute,
 } from "./model-api.js";
@@ -26,6 +27,7 @@ const componentLabels = [
 // Request-scoped diagnostics only: never attach these digests to enumerable state,
 // checkpoint details, notifications, or debug output. Weak keys follow job lifetime.
 const componentDigests = new WeakMap<CompactionBinding, string[]>();
+const exactDigests = new WeakMap<CompactionBinding, string>();
 const digest = (serialized: string) => createHash("sha256").update(serialized).digest("hex");
 
 /** Resolve auth through the same public Pi APIs for preparation and adoption. */
@@ -43,7 +45,7 @@ export async function resolveCompactionBinding(
   if (!isCurrent()) throw new DOMException("Compaction ownership changed", "AbortError");
   if (!auth.ok) throw new Error(auth.error);
   let providerAuth: Awaited<ReturnType<typeof ctx.modelRegistry.getProviderAuth>> | undefined;
-  if (route.protocol !== "context-management" && isChatGPTCompactionCandidate(model, auth)) {
+  if (isChatGPTCompactionCandidate(model, auth)) {
     const pendingProviderAuth = () => Promise.resolve(ctx.modelRegistry.getProviderAuth?.(model.provider));
     providerAuth = await (timings ? timings.wait("authWait", pendingProviderAuth) : pendingProviderAuth());
     if (!isCurrent()) throw new DOMException("Compaction ownership changed", "AbortError");
@@ -52,16 +54,30 @@ export async function resolveCompactionBinding(
   }
   const provider = ctx.modelRegistry.getProvider(model.provider);
   if (!provider) throw new Error("The active Responses provider is unavailable");
-  const serialized = JSON.stringify([model, route, auth, providerAuth]);
+  const exact = JSON.stringify([model, route, auth, providerAuth]);
+  const components = JSON.parse(exact);
+  // Single-login policy: ordinary OAuth refresh must not discard prepared work.
+  // Preserve every non-token field and keep custom serialization/mismatched auth strict.
+  // Pi exposes no stable login identity, so cancel preparation before switching accounts.
+  if (
+    isVerifiedChatGPTOAuth(model, auth, providerAuth) &&
+    components[2]?.apiKey === auth.apiKey &&
+    components[3]?.auth?.apiKey === auth.apiKey
+  ) {
+    delete components[2].apiKey;
+    delete components[3].auth.apiKey;
+  }
+  const serialized = JSON.stringify(components);
   const binding: CompactionBinding = {
-    // Keep the original guard digest; never persist authentication material.
+    // Keep only the guard digest; never persist authentication material.
     key: digest(serialized),
     provider,
     stream: provider.stream,
     streamSimple: provider.streamSimple,
   };
-  // Split the exact serialization used by the existing guard, without resolving
-  // auth again or invoking provider/model serialization hooks a second time.
+  exactDigests.set(binding, digest(exact));
+  // Diagnose the same normalized components without another auth resolution or
+  // invocation of provider/model serialization hooks.
   componentDigests.set(
     binding,
     (JSON.parse(serialized) as unknown[]).map((value) => digest(JSON.stringify(value))),
@@ -76,6 +92,16 @@ export function sameCompactionBinding(left: CompactionBinding | undefined, right
     left.provider === right.provider &&
     left.stream === right.stream &&
     left.streamSimple === right.streamSimple
+  );
+}
+
+/** A failed request must not suppress a new attempt with refreshed credentials. */
+export function sameCompactionAttempt(left: CompactionBinding | undefined, right: CompactionBinding): boolean {
+  return (
+    sameCompactionBinding(left, right) &&
+    !!left &&
+    exactDigests.has(left) &&
+    exactDigests.get(left) === exactDigests.get(right)
   );
 }
 

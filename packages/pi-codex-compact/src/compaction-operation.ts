@@ -22,7 +22,7 @@ import {
 import { checkpointIssuerRequest } from "./checkpoint-portability.js";
 import { projectedKeptMessages, projectSessionCheckpointContext } from "./checkpoint-projection.js";
 import { recoverCheckpoint, summaryPrefix } from "./checkpoint-recovery.js";
-import { type CompactionBinding, resolveCompactionBinding, sameCompactionBinding } from "./compaction-binding.js";
+import { type CompactionBinding, resolveCompactionBinding, sameCompactionAttempt } from "./compaction-binding.js";
 import {
   compactionFailureDetail,
   compactionFailureMessage,
@@ -217,7 +217,7 @@ export async function compactRemotely(
             : "Responses Compact API…",
       );
     const failed = options.failedAttempt;
-    if (failed?.failure && sameCompactionBinding(failed.binding, resolved.binding)) {
+    if (failed?.failure && sameCompactionAttempt(failed.binding, resolved.binding)) {
       ({ routeKey, endpointObserved, paused, remoteAttempted, rejectionError } = failed.failure);
       requestValues.push(...failed.failure.requestValues);
       throw failed.failure.error;

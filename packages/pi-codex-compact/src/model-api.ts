@@ -88,6 +88,19 @@ export function isChatGPTCompactionCandidate(
   );
 }
 
+/** Public provenance only; this does not establish a stable account identity. */
+export function isVerifiedChatGPTOAuth(
+  model: Model<Api> | undefined,
+  requestAuth: CompactionRequestAuth,
+  providerAuth: AuthResult | undefined,
+): boolean {
+  return (
+    isChatGPTCompactionCandidate(model, requestAuth) &&
+    providerAuth?.source === "OAuth" &&
+    providerAuth.auth.apiKey === requestAuth.apiKey
+  );
+}
+
 export function resolveAuthenticatedCompactionRoute(
   model: Model<Api> | undefined,
   options: CompactionRouteOptions,
@@ -97,12 +110,7 @@ export function resolveAuthenticatedCompactionRoute(
   const route = resolveCompactionRoute(model, options);
   // Pi's request-auth facade omits provenance. Match a fresh public auth resolution
   // without interpreting token contents or relying on a cached OAuth status.
-  if (
-    route.kind === "remote" &&
-    isChatGPTCompactionCandidate(model, requestAuth) &&
-    providerAuth?.source === "OAuth" &&
-    providerAuth.auth.apiKey === requestAuth.apiKey
-  ) {
+  if (route.kind === "remote" && isVerifiedChatGPTOAuth(model, requestAuth, providerAuth)) {
     return { ...route, protocol: "context-management" };
   }
   return route;

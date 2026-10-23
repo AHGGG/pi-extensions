@@ -24,7 +24,7 @@ The upstream `.node-version` is 26.11.1, but the root, compaction, and Kit manif
 
 ## Limits and owner testing
 
-No live provider requests were made. Mocked payload tests prove serialization and safety contracts, not hosted acceptance, tool use, or model compliance. Windows, real-account OAuth refresh, long-running WebSocket disconnects, and the owner's resumed-session tool visibility remain unverified. Same-login OAuth token refresh can still invalidate a prepared result; this rebuild does not change that binding policy.
+No live provider requests were made. Mocked payload tests prove serialization and safety contracts, not hosted acceptance, tool use, or model compliance. Windows, real-account OAuth refresh, long-running WebSocket disconnects, and the owner's resumed-session tool visibility remain unverified. At the time of this rebuild, same-login OAuth token refresh could still invalidate a prepared result. The later token-rotation fix changes that policy for verified official ChatGPT OAuth only; see the [prepared-checkpoint contract](prepared-compaction-protocol.md) for its single-login assumption.
 
 Update the installed Git package while preserving existing resource filters, then restart Pi. Exercise a harmless read-only tool request after manual compaction, automatic compaction, and saved-session resume. Confirm actual tool execution, not merely an assistant's claim that tools exist. Consumers should be tested separately for their own scheduling controls.
 

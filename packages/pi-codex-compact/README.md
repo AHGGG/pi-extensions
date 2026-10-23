@@ -93,6 +93,8 @@ With `auto`, verified official OpenAI ChatGPT OAuth uses Context Management; API
 
 Preparation scheduling is not part of this engine. Compatible consumers can use the [versioned prepared-compaction interface](./docs/prepared-compaction-protocol.md).
 
+Prepared work assumes one ChatGPT login for its lifetime. For verified official ChatGPT OAuth, token refresh alone does not invalidate preparation; model, route, provider, headers, environment, and other authentication metadata still must match. API keys and custom routes retain exact credential checks. Pi does not expose a stable login identity here, so a real account switch that changes only the token cannot be distinguished from refresh: cancel prepared work and restart the session before switching accounts. No credentials are changed or stored in checkpoints.
+
 Menu changes apply immediately. Manual file edits take effect on `/reload` or the next session start. Invalid settings files remain unchanged and make the menu read-only until repaired and reloaded.
 
 See the [settings reference](./docs/settings.md) for all fields, defaults, accepted values, custom API configuration, and save/reload behavior. This extension does not read `~/.codex/config.toml`.

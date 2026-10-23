@@ -8,6 +8,7 @@ import {
   type CompactionBinding,
   compactionBindingChanges,
   resolveCompactionBinding,
+  sameCompactionAttempt,
   sameCompactionBinding,
 } from "../src/compaction-binding.js";
 import { type CodexCompactSettings, DEFAULT_CODEX_COMPACT_SETTINGS } from "../src/settings.js";
@@ -69,7 +70,9 @@ function fixture() {
   return {
     state,
     calls,
-    resolve: () => resolveCompactionBinding(ctx as ExtensionContext, state.model, state.settings, () => true),
+    ctx: ctx as ExtensionContext,
+    resolve: (isCurrent = () => true) =>
+      resolveCompactionBinding(ctx as ExtensionContext, state.model, state.settings, isCurrent),
   };
 }
 
@@ -94,12 +97,14 @@ describe("compaction binding diagnostics", () => {
     assert.notEqual(first.auth, second.auth);
     assert.notEqual(first.binding, second.binding);
     assert.equal(sameCompactionBinding(first.binding, second.binding), true);
+    assert.equal(sameCompactionAttempt(first.binding, second.binding), true);
     assert.deepEqual(compactionBindingChanges(first.binding, second.binding), []);
     assert.deepEqual(f.calls, { requestAuth: 2, providerAuth: 2 });
   });
 
-  test("the legacy key still hashes the exact model, route, request auth, and provider auth array", async () => {
+  test("API key binding still hashes the exact model, route, request auth, and provider auth array", async () => {
     const f = fixture();
+    f.state.providerAuth = { source: "API key", auth: { apiKey: "fixture-secret-request-key" } };
     const result = await f.resolve();
     const expected = createHash("sha256")
       .update(JSON.stringify([f.state.model, result.route, result.auth, f.state.providerAuth]))
@@ -107,20 +112,24 @@ describe("compaction binding diagnostics", () => {
     assert.equal(result.binding.key, expected);
   });
 
-  test("OAuth rotation reports both authentication changes without claiming the route changed", async () => {
-    const f = fixture();
-    const first = await f.resolve();
-    f.state.auth = { ok: true, apiKey: "fixture-secret-rotated-key" };
-    f.state.providerAuth = { source: "OAuth", auth: { apiKey: "fixture-secret-rotated-key" } };
-    const second = await f.resolve();
-    assert.equal(first.route.protocol, "context-management");
-    assert.deepEqual(second.route, first.route);
-    assert.equal(sameCompactionBinding(first.binding, second.binding), false);
-    assert.deepEqual(compactionBindingChanges(first.binding, second.binding), [
-      "request authentication changed",
-      "provider authentication changed",
-    ]);
-  });
+  for (const protocol of ["auto", "context-management"] as const) {
+    test(`verified OAuth rotation preserves the binding with ${protocol}`, async () => {
+      const f = fixture();
+      f.state.settings.protocol = protocol;
+      const first = await f.resolve();
+      for (const token of ["fixture-secret-rotated-key", "fixture-another-refresh"]) {
+        f.state.auth = { ok: true, apiKey: token };
+        f.state.providerAuth = { source: "OAuth", auth: { apiKey: token } };
+        const next = await f.resolve();
+        assert.equal(first.route.protocol, "context-management");
+        assert.deepEqual(next.route, first.route);
+        assert.equal(next.auth.apiKey, token);
+        assert.equal(sameCompactionBinding(first.binding, next.binding), true);
+        assert.equal(sameCompactionAttempt(first.binding, next.binding), false);
+        assert.deepEqual(compactionBindingChanges(first.binding, next.binding), []);
+      }
+    });
+  }
 
   test("switching the ChatGPT account header with the same token reports only request authentication", async () => {
     const f = fixture();
@@ -153,14 +162,131 @@ describe("compaction binding diagnostics", () => {
     test(`${name} changes are attributed to request authentication`, async () => {
       const f = fixture();
       f.state.settings.protocol = "context-management";
+      f.state.providerAuth = { source: "API key", auth: { apiKey: "fixture-secret-request-key" } };
       const first = await f.resolve();
       f.state.auth = auth;
       const second = await f.resolve();
       assert.deepEqual(second.route, first.route);
-      assert.deepEqual(compactionBindingChanges(first.binding, second.binding), ["request authentication changed"]);
-      assert.deepEqual(f.calls, { requestAuth: 2, providerAuth: 0 });
+      assert.deepEqual(
+        compactionBindingChanges(first.binding, second.binding),
+        name === "request endpoint"
+          ? ["request authentication changed", "provider authentication changed"]
+          : ["request authentication changed"],
+      );
+      assert.equal(f.calls.requestAuth, 2);
+      assert.equal(f.calls.providerAuth, name === "request endpoint" ? 1 : 2);
     });
   }
+
+  for (const mutation of [
+    "request env",
+    "provider env",
+    "provider metadata",
+    "model endpoint",
+    "model id",
+    "request authorization",
+    "model authorization",
+    "provider id",
+    "custom API",
+    "missing provenance",
+    "mismatched provenance",
+  ] as const) {
+    test(`OAuth refresh does not hide ${mutation}`, async () => {
+      const f = fixture();
+      f.state.settings.protocol = "context-management";
+      const first = await f.resolve();
+      f.state.auth = { ok: true, apiKey: "new-secret" };
+      f.state.providerAuth = { source: "OAuth", auth: { apiKey: "new-secret" } };
+      switch (mutation) {
+        case "request env":
+          Object.assign(f.state.auth, { env: { ROUTE: "changed" } });
+          break;
+        case "provider env":
+          Object.assign(f.state.providerAuth, { env: { ROUTE: "changed" } });
+          break;
+        case "provider metadata":
+          Object.assign(f.state.providerAuth.auth, { metadata: "changed" });
+          break;
+        case "model endpoint":
+          f.state.model.baseUrl = "https://proxy.example/v1";
+          break;
+        case "model id":
+          f.state.model.id = "other";
+          break;
+        case "request authorization":
+          f.state.auth.headers = { Authorization: "Bearer override" };
+          break;
+        case "model authorization":
+          f.state.model.headers = { Authorization: "Bearer override" };
+          break;
+        case "provider id":
+          f.state.model.provider = "custom";
+          break;
+        case "custom API":
+          f.state.model.api = "openai-codex-responses";
+          break;
+        case "missing provenance":
+          f.state.providerAuth = undefined;
+          break;
+        case "mismatched provenance":
+          f.state.providerAuth.auth.apiKey = "different-secret";
+          break;
+      }
+      const next = await f.resolve();
+      assert.equal(sameCompactionBinding(first.binding, next.binding), false);
+      assert.ok(compactionBindingChanges(first.binding, next.binding).length);
+      assert.doesNotMatch(
+        JSON.stringify(compactionBindingChanges(first.binding, next.binding)),
+        /secret|Bearer|override/,
+      );
+    });
+  }
+
+  for (const kind of ["API key", "custom provider", "proxy", "authorization override"] as const) {
+    test(`${kind} retains exact token guards`, async () => {
+      const f = fixture();
+      f.state.settings.protocol = "context-management";
+      if (kind === "API key")
+        f.state.providerAuth = { source: "API key", auth: { apiKey: "fixture-secret-request-key" } };
+      if (kind === "custom provider") f.state.model.provider = "custom";
+      if (kind === "proxy") f.state.model.baseUrl = "https://proxy.example/v1";
+      if (kind === "authorization override") f.state.model.headers = { Authorization: "Bearer override" };
+      const first = await f.resolve();
+      f.state.auth = { ok: true, apiKey: "new-secret" };
+      assert.ok(f.state.providerAuth);
+      f.state.providerAuth.auth.apiKey = "new-secret";
+      assert.equal(sameCompactionBinding(first.binding, (await f.resolve()).binding), false);
+    });
+  }
+
+  test("authentication failures and lost ownership still reject before binding", async () => {
+    const f = fixture();
+    f.state.auth = { ok: false, error: "fixture resolution failure" };
+    await assert.rejects(f.resolve(), /fixture resolution failure/);
+    f.state.auth = { ok: true, apiKey: "fixture-secret-request-key" };
+    await assert.rejects(
+      f.resolve(() => false),
+      { name: "AbortError" },
+    );
+    f.ctx.modelRegistry.getProviderAuth = async () => {
+      throw new Error("provider auth failed");
+    };
+    await assert.rejects(f.resolve(), /provider auth failed/);
+  });
+
+  test("explicit context-management checks ownership after provider authentication await", async () => {
+    const f = fixture();
+    f.state.settings.protocol = "context-management";
+    let current = true;
+    f.ctx.modelRegistry.getProviderAuth = async () => {
+      current = false;
+      return f.state.providerAuth;
+    };
+    await assert.rejects(
+      f.resolve(() => current),
+      { name: "AbortError" },
+    );
+  });
 
   test("model headers are attributed to the model rather than request authentication", async () => {
     const f = fixture();
@@ -285,6 +411,7 @@ describe("compaction binding diagnostics", () => {
     second.binding.key = first.binding.key;
     assert.equal(originalComparator(first.binding, second.binding), true);
     assert.equal(sameCompactionBinding(first.binding, second.binding), true);
+    assert.equal(sameCompactionAttempt(first.binding, second.binding), false);
     assert.deepEqual(compactionBindingChanges(first.binding, second.binding), []);
   });
 
