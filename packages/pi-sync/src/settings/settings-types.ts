@@ -81,6 +81,10 @@ export interface SyncPolicySettings {
   automatic: boolean;
   /** Explicit opt-in, separate from the legacy observe/shutdown policy. */
   automaticTransfer?: boolean;
+  /** Experimental autonomous merged-sync authorization. */
+  agentMode?: boolean;
+  /** Separate explicit authorization for recurring background work. */
+  continuous?: boolean;
   /** Version 4: settings.json root fields never uploaded. */
   localFields?: string[];
   mergeSettings?: boolean;
@@ -101,6 +105,7 @@ export interface PiSyncSettingsV3 {
   onSwitch: OnSwitchAction;
   skipSecretScan?: boolean;
   showStatus?: boolean;
+  debug?: boolean;
   storageConnections: Record<string, StorageConnectionSettings>;
   syncSetups: Record<string, SyncSetupSettings>;
   [key: string]: unknown;
@@ -115,6 +120,8 @@ export interface SyncConfig<Backend extends ResolvedSyncBackend = ResolvedS3Back
   include: string[];
   automatic: boolean;
   automaticTransfer?: boolean;
+  agentMode?: boolean;
+  continuous?: boolean;
   localFields?: string[];
   mergeSettings?: boolean;
   mergeContent?: boolean;
@@ -122,6 +129,7 @@ export interface SyncConfig<Backend extends ResolvedSyncBackend = ResolvedS3Back
   onSwitch: OnSwitchAction;
   skipSecretScan: boolean;
   showStatus: boolean;
+  debug?: boolean;
   backend: Backend;
 }
 
@@ -137,6 +145,8 @@ export interface PartialConfig {
   include: string[];
   automatic: boolean;
   automaticTransfer?: boolean;
+  agentMode?: boolean;
+  continuous?: boolean;
   onSwitch: OnSwitchAction;
   showStatus: boolean;
   bucket?: string;

@@ -1,5 +1,52 @@
 # @narumitw/pi-sync
 
+## 0.57.2
+
+### Patch Changes
+
+- 9f80b89: Use native fake-cursor markers for masked credential input and normalize unusable render widths without changing secret editing, validation, cancellation, or storage policy.
+- Updated dependencies [077137a]
+- Updated dependencies [9f80b89]
+- Updated dependencies [efc474c]
+  - @narumitw/pi-tui-kit@0.66.0
+
+## 0.57.1
+
+### Patch Changes
+
+- a87a2ba: Keep the higher local or remote explicit npm package version when Agent mode merges settings, without a registry lookup. Preserve matching resource filters and one-sided package order or membership changes. Keep changed non-npm sources and conflicting package lists under atomic conflict handling. Preserve existing package-array bytes and use ancestor rules when SemVer precedence is equal. Keep accepted settings documents unchanged unless a package override is required.
+
+## 0.57.0
+
+### Minor Changes
+
+- fa985f7: Add the manual-only `configure-pi-sync` skill for configuration questions and safe setup guidance without private settings reads, edits, or sync execution.
+  Bundle the authoritative settings reference with the skill and preserve existing settings documentation anchors.
+
+## 0.56.0
+
+### Minor Changes
+
+- 713eed4: Add default-off experimental Continuous sync with separate consent, local scheduler ownership, automatic detection and recovery, durable request limits, and safe blocked-state reporting. Bind each background cycle to its inspected settings and selected model before transfer, disclosure, publication, and local apply. Show the saved On or Off state in Continuous sync notifications.
+
+## 0.55.0
+
+### Minor Changes
+
+- 1e86ba9: Add default-off experimental Agent mode for autonomous text and atomic settings conflict resolution through an isolated, tool-free Pi SDK session. Revalidate candidates before conditional publication, retain journal recovery, and coordinate local resolver ownership across Pi processes. Require a Pi runtime that supplies the tested public SDK boundary.
+
+### Patch Changes
+
+- e0028ea: Simplify internal settings saves, initial-sync routing, cancellation checkpoints, and object-store snapshot metadata without changing sync behavior.
+
+## 0.54.3
+
+### Patch Changes
+
+- 2a9ad3a: Add opt-in startup timing notifications with the global `debug` boolean setting, including local initialization, background inspection, and automatic transfer stages.
+- d02ca5f: Skip remote snapshot downloads and baseline rewrites for verified unchanged automatic transfers while retaining recovery and conservative fallbacks. Add aggregated transfer-stage durations and call counts to startup debug reports.
+- 8ae9e62: Group Settings by task, retain cross-category search, and clarify setting scope, save results, and independent startup policies. Add manager status/difference actions and directional transfer counts with safe-default scrollable TUI Pull/Push reviews. Recheck reviewed local content and baselines, preserve protected sessions in preview counts, and clarify that remote removals do not erase retained history.
+
 ## 0.54.2
 
 ### Patch Changes

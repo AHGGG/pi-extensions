@@ -24,4 +24,6 @@ Request deadline/run signals are not retained as ready-checkpoint validity: cons
 
 ## Compatibility
 
-This protocol does not change serialized checkpoints. Existing v1–v4 checkpoints and ordinary tool-replay restoration remain engine-owned. Installing only this package does not proactively prepare checkpoints. The separate `pi-background-compaction` package is one consumer, not a hard-coded protocol participant.
+This protocol does not change serialized checkpoints. Existing v1–v4 checkpoints and ordinary tool-replay restoration remain engine-owned. Installing only this package does not proactively prepare checkpoints. Consumers are interchangeable participants; the engine does not identify or depend on any consumer package.
+
+Preparation requires the selected provider to match the active opaque checkpoint issuer. Cross-provider transfer remains an ordinary context/foreground operation, not speculative preparation. A cached plaintext transfer does not replace the persisted opaque checkpoint, so preparation stays unavailable on the other provider until foreground compaction replaces that checkpoint or the user switches back to its issuer. In-flight preparations retain exact model and authentication guards even though persisted checkpoints can replay on another compatible model.

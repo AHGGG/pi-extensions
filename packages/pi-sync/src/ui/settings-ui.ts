@@ -1,5 +1,5 @@
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
-import { defineMenu, runMenu } from "@narumitw/pi-tui-kit";
+import { defineMenu, type MenuSettingItem, runMenu } from "@narumitw/pi-tui-kit";
 import { loadConfig } from "../settings/config.js";
 import { localConfigPath } from "../settings/config-file.js";
 import { updateSyncSetup } from "../settings/settings-management.js";
@@ -12,11 +12,18 @@ import {
   setupSwitchActionLabel,
 } from "../sync/setup-switch.js";
 import { captureMutationOwner } from "../sync/sync-local.js";
+import {
+  AGENT_MODE_DESCRIPTION,
+  CONTINUOUS_DESCRIPTION,
+  saveAgentMode,
+  saveContinuousMode,
+} from "./agent-mode-setting.js";
 import type { RunRoute } from "./cancellable-operation.js";
 import { dispatchManagerResult } from "./manager-result-dispatcher.js";
+import { boundedSettingsUI } from "./settings-frame.js";
 import { showEditSyncSetupStorage, showSyncSetupManager } from "./setup/setup-actions.js";
-import { AUTOMATIC_SYNC_DESCRIPTION } from "./setup/setup-prompts.js";
 import { showStorageConnections } from "./storage-connections-ui.js";
+import { AUTOMATIC_SYNC_DESCRIPTION, STARTUP_TRANSFER_DESCRIPTION, startupTransferSummary } from "./sync-behavior.js";
 import { configureSyncStatus } from "./sync-status.js";
 import { safeTerminalText } from "./terminal-text.js";
 
@@ -70,55 +77,74 @@ export async function showSyncSettings(
   type Action =
     | "automatic"
     | "automatic-transfer"
+    | "agent-mode"
+    | "continuous"
     | "merge-settings"
     | "local-fields"
     | "content-policy"
     | "skip-secret-scan"
     | "show-status"
+    | "debug"
     | "on-switch"
     | "include"
     | "remote-include"
     | "storage-location"
     | "setups"
     | "connections";
-  const menu = defineMenu<Awaited<ReturnType<typeof loadConfig>>, "settings", Action, ExtensionCommandContext>({
-    start: "settings",
-    screens: {
-      settings: ({ state }) => ({
-        kind: "settings",
-        title: "Pi Sync Settings",
-        lines: [
-          `Sync setup: ${safeTerminalText(state.setupName)} · Storage connection: ${safeTerminalText(state.connectionName)}`,
-        ],
-        // Flat, searchable task ordering: Content, Destination, Automation, Merge, Other.
-        // Kit has no heading rows; avoid focusable fake headings or a new component.
-        items: [
+  type Group = "content" | "behavior" | "storage" | "advanced" | "all";
+  type Screen = "categories" | Group;
+  const groups: Record<Group, { label: string; ids: readonly string[] }> = {
+    content: { label: "Sync content", ids: ["include", "remoteInclude", "localFields"] },
+    behavior: {
+      label: "Sync behavior",
+      ids: ["automatic", "automaticTransfer", "agentMode", "continuous", "onSwitch"],
+    },
+    storage: { label: "Storage & setups", ids: ["storageLocation", "setups", "connections"] },
+    advanced: { label: "Advanced", ids: ["mergeSettings", "contentPolicy", "skipSecretScan", "showStatus", "debug"] },
+    all: { label: "All settings (search)", ids: [] },
+  };
+  let saveStatus = "Simple choices save immediately. Back does not undo saved changes.";
+  // Keep Kit's existing settings adapter: native SettingsList has no async save/rollback
+  // contract or injected keybindings. Kit preserves these safety and accessibility behaviors.
+  // Categories use public navigation; All settings retains cross-category search.
+  const settingsScreen = (state: Awaited<ReturnType<typeof loadConfig>>, group: Group) =>
+    ({
+      kind: "settings",
+      title: `Pi Sync Settings · ${groups[group].label}`,
+      lines: [
+        `Setup: ${safeTerminalText(state.setupName)} · Connection: ${safeTerminalText(state.connectionName)}`,
+        saveStatus,
+      ],
+      items: (
+        [
           {
             id: "include",
-            label: "Included content",
-            description: `${state.include.length} selected path${state.include.length === 1 ? "" : "s"}. Choose which paths this setup syncs.`,
-            currentValue: "Open editor",
+            label: "Included paths",
+            description:
+              "This setup: choose paths in a draft, then review and Save or Discard. No transfer is started.",
+            currentValue: `${state.include.length} paths · Edit`,
             action: "include",
           },
           {
             id: "remoteInclude",
-            label: "Compare synced content",
-            description: "Review this device and remote content lists before choosing either one.",
+            label: "Compare included paths",
+            description:
+              "This setup: compare included-path policies, not file contents. Review before saving either list; no files transfer unless you explicitly Continue.",
             currentValue: "Review",
             action: "remote-include",
           },
           {
             id: "localFields",
-            label: "Machine-local settings fields",
+            label: "Machine-local fields",
             description:
-              "Root field names omitted from future portable snapshots. Policy changes require directional migration; old history remains.",
+              "This setup: settings.json root fields excluded from future portable snapshots, not project overrides. Policy changes require reviewed directional migration; old history remains.",
             currentValue: `${state.localFields?.length ?? 0} fields · Edit`,
             action: "local-fields",
           },
           {
             id: "storageLocation",
             label: "Storage location",
-            description: "Destination: edit this setup's bucket, branch, or path; remote history is not moved.",
+            description: "This setup: review and save bucket, branch, or path changes. Remote history is not moved.",
             currentValue:
               state.backend.type === "s3"
                 ? `${safeTerminalText(state.backend.destination.bucket)} · ${safeTerminalText(state.backend.destination.prefix)}`
@@ -130,7 +156,8 @@ export async function showSyncSettings(
           {
             id: "setups",
             label: "Manage sync setups",
-            description: "Destination: add, switch, edit, or remove sync setups.",
+            description:
+              "This device: add, switch, edit, or remove sync setups. Each edit identifies its owner before saving.",
             currentValue: "Open",
             action: "setups",
           },
@@ -138,7 +165,7 @@ export async function showSyncSettings(
             id: "connections",
             label: "Manage storage connections",
             description:
-              "Destination: manage shared server addresses and credentials; edits may affect multiple setups.",
+              "Shared connections on this device: review affected setups before saving server or credential changes.",
             currentValue: "Open",
             action: "connections",
           },
@@ -152,63 +179,114 @@ export async function showSyncSettings(
           },
           {
             id: "automaticTransfer",
-            label: "Automatic transfer at startup",
-            description:
-              "May upload, replace, or delete selected files once at idle startup in TUI/RPC. Requires a baseline and conditional/lease publication; never reloads resources. Turning off cancels pending work.",
+            label: "Startup transfer",
+            description: `${STARTUP_TRANSFER_DESCRIPTION} Saved preference and requirements: ${startupTransferSummary(state)}.`,
             currentValue: state.automaticTransfer ? "On" : "Off",
             values: ["On", "Off"],
             action: "automatic-transfer",
           },
           {
+            id: "agentMode",
+            label: "Agent mode (experimental)",
+            description: AGENT_MODE_DESCRIPTION,
+            currentValue: state.agentMode ? "On" : "Off",
+            values: ["On", "Off"],
+            action: "agent-mode",
+          },
+          {
+            id: "continuous",
+            label: "Continuous sync (experimental)",
+            description: `${CONTINUOUS_DESCRIPTION}${state.continuous && !state.agentMode ? " Saved On, but paused until Agent mode is enabled." : ""}`,
+            currentValue: state.continuous ? "On" : "Off",
+            values: ["On", "Off"],
+            action: "continuous",
+          },
+          {
             id: "onSwitch",
-            label: "After switching setup (all setups)",
-            description: "All setups: ask before a pull review, open it automatically, or switch without pulling.",
+            label: "On setup switch",
+            description:
+              "All setups on this device: ask before a pull review, open it automatically, or switch without pulling. Applies to subsequent switches.",
             currentValue: setupSwitchActionLabel(state.onSwitch),
             values: SETUP_SWITCH_ACTION_OPTIONS.map(({ label }) => label),
             action: "on-switch",
           },
           {
             id: "mergeSettings",
-            label: "Settings field merge (experimental)",
+            label: "Merge settings fields",
             description:
-              "Combine independent global settings.json fields using a verified private ancestor; arrays and nested objects remain atomic. No reload.",
+              "This setup, experimental opt-in: merge independent global settings.json root fields with a verified private ancestor. Arrays and nested objects remain atomic. Applies to subsequent sync; no reload.",
             currentValue: state.mergeSettings ? "On" : "Off",
             values: ["On", "Off"],
             action: "merge-settings",
           },
           {
             id: "contentPolicy",
-            label: "Content / partial sync (experimental)",
+            label: "Content merge / partial progress",
             description:
-              "Version-5 opt-in: bounded text and prefix-only sessions; partial progress keeps full withheld versions and old baseline hashes.",
+              "This setup, experimental opt-in: review the version-5 upgrade before saving. Merge bounded text and prefix-only sessions; partial progress keeps withheld versions and baselines. Applies to subsequent sync; disabling does not clear recovery evidence.",
             currentValue: state.mergeContent
               ? state.partialSync
-                ? "Content & partial"
-                : "Content only"
+                ? "Merge + partial"
+                : "Merge only"
               : state.partialSync
                 ? "Partial only"
                 : "Off",
-            values: ["Off", "Content only", "Content & partial", "Partial only"],
+            values: ["Off", "Merge only", "Merge + partial", "Partial only"],
             action: "content-policy",
           },
           {
             id: "skipSecretScan",
-            label: "Skip secret scan (all setups)",
-            description: "All setups: allow pushes without checking managed local files for possible secrets.",
+            label: "Skip secret scan",
+            description:
+              "All setups on this device: skip possible-secret checks on subsequent pushes, including automatic pushes. Other safety checks remain. Diagnostics still scans.",
             currentValue: state.skipSecretScan ? "On" : "Off",
             values: ["On", "Off"],
             action: "skip-secret-scan",
           },
           {
             id: "showStatus",
-            label: "Show status (all setups)",
-            description: "All setups: show sync progress and attention in Pi status.",
+            label: "Show sync status",
+            description:
+              "All setups on this device: saved and applied immediately to Pi status. Review widgets and notifications remain available.",
             currentValue: state.showStatus ? "On" : "Off",
             values: ["On", "Off"],
             action: "show-status",
           },
+          {
+            id: "debug",
+            label: "Debug startup timings",
+            description:
+              "All setups on this device: show startup durations in TUI/RPC notifications. Applies next session start; no credentials or file contents.",
+            currentValue: state.debug ? "On" : "Off",
+            values: ["On", "Off"],
+            action: "debug",
+          },
+        ] satisfies MenuSettingItem<Action>[]
+      ).filter((item) => group === "all" || groups[group].ids.includes(item.id)),
+    }) as const;
+  const menu = defineMenu<Awaited<ReturnType<typeof loadConfig>>, Screen, Action, ExtensionCommandContext>({
+    start: "categories",
+    screens: {
+      categories: ({ state }) => ({
+        kind: "actions",
+        title: "Pi Sync Settings",
+        lines: [
+          `Setup: ${safeTerminalText(state.setupName)} · Connection: ${safeTerminalText(state.connectionName)}`,
+          "Choose a task, or search all settings. Scope is shown in each setting's description.",
+          saveStatus,
         ],
+        items: (Object.entries(groups) as [Group, (typeof groups)[Group]][]).map(([id, group]) => ({
+          id,
+          label: group.label,
+          to: id,
+        })),
+        hint: "back",
       }),
+      content: ({ state }) => settingsScreen(state, "content"),
+      behavior: ({ state }) => settingsScreen(state, "behavior"),
+      storage: ({ state }) => settingsScreen(state, "storage"),
+      advanced: ({ state }) => settingsScreen(state, "advanced"),
+      all: ({ state }) => settingsScreen(state, "all"),
     },
     actions: {
       "storage-location": async ({ signal: actionSignal }) => {
@@ -232,8 +310,8 @@ export async function showSyncSettings(
         try {
           const previous = await loadConfig(setupName);
           validate();
-          const mergeContent = value === "Content only" || value === "Content & partial";
-          const partialSync = value === "Partial only" || value === "Content & partial";
+          const mergeContent = value === "Merge only" || value === "Merge + partial";
+          const partialSync = value === "Partial only" || value === "Merge + partial";
           if (
             !(await ctx.ui.confirm(
               "Save experimental content policy?",
@@ -243,6 +321,7 @@ export async function showSyncSettings(
           )
             return { kind: "rejected" };
           validate();
+          ctx.ui.notify("Saving reviewed Pi Sync policy…", "info");
           await updateLocalConfig((current) => {
             validate();
             const setup = current.syncSetups[setupName];
@@ -262,6 +341,9 @@ export async function showSyncSettings(
             };
           }, mutationSignal);
           validate();
+          saveStatus =
+            "Saved reviewed policy for this setup. Applies to subsequent sync operations; recovery evidence is retained.";
+          ctx.ui.notify(saveStatus, "info");
           return { kind: "stay" };
         } catch (error) {
           if (!mutationSignal.aborted) notifySaveFailure(ctx, error);
@@ -312,6 +394,7 @@ export async function showSyncSettings(
           );
           validate();
           if (!confirmed) return { kind: "rejected" };
+          ctx.ui.notify("Saving reviewed Pi Sync policy…", "info");
           await updateLocalConfig((current) => {
             validate();
             const setup = current.syncSetups[setupName];
@@ -327,6 +410,9 @@ export async function showSyncSettings(
             };
           }, mutationSignal);
           validate();
+          saveStatus =
+            "Saved reviewed policy for this setup. Applies to subsequent sync operations; recovery evidence is retained.";
+          ctx.ui.notify(saveStatus, "info");
           return { kind: "stay" };
         } catch (error) {
           if (!mutationSignal.aborted) notifySaveFailure(ctx, error);
@@ -351,6 +437,61 @@ export async function showSyncSettings(
           return { kind: "stay" };
         } catch (error) {
           if (!mutationSignal.aborted) notifySaveFailure(ctx, error);
+          return { kind: "rejected" };
+        }
+      },
+      "agent-mode": async ({ value, signal: actionSignal }) => {
+        const mutationSignal = signal ? AbortSignal.any([signal, actionSignal]) : actionSignal;
+        const validate = captureMutationOwner(ctx, mutationSignal);
+        try {
+          const saved = await saveAgentMode(ctx, setupName, value === "On", mutationSignal);
+          if (!saved) return { kind: "rejected" };
+          try {
+            validate();
+            ctx.ui.notify(
+              "Agent mode saved. Applies to subsequent sync and the next session start; no transfer started.",
+              "info",
+            );
+          } catch {
+            // The save committed. A closed or replaced UI must not report a failed save.
+            // The next Settings read shows the persisted value.
+          }
+          return { kind: "stay" };
+        } catch (error) {
+          try {
+            validate();
+          } catch {
+            return { kind: "rejected" };
+          }
+          notifySaveFailure(ctx, error);
+          return { kind: "rejected" };
+        }
+      },
+      continuous: async ({ value, signal: actionSignal }) => {
+        const mutationSignal = signal ? AbortSignal.any([signal, actionSignal]) : actionSignal;
+        const validate = captureMutationOwner(ctx, mutationSignal);
+        try {
+          const saved = await saveContinuousMode(ctx, setupName, value === "On", mutationSignal);
+          if (!saved) return { kind: "rejected" };
+          try {
+            validate();
+            ctx.ui.notify(
+              value === "On"
+                ? "Continuous sync enabled. Monitoring starts after the /sync command or manager closes; completed work is not undone."
+                : "Continuous sync disabled. Completed work is not undone.",
+              "info",
+            );
+          } catch {
+            /* committed save; do not use stale UI */
+          }
+          return { kind: "stay" };
+        } catch (error) {
+          try {
+            validate();
+          } catch {
+            return { kind: "rejected" };
+          }
+          notifySaveFailure(ctx, error);
           return { kind: "rejected" };
         }
       },
@@ -405,6 +546,18 @@ export async function showSyncSettings(
           return { kind: "rejected" };
         }
       },
+      debug: async ({ value, signal: actionSignal }) => {
+        const debug = value === "On";
+        const mutationSignal = signal ? AbortSignal.any([signal, actionSignal]) : actionSignal;
+        try {
+          await updateLocalConfig((settings) => ({ ...settings, debug }), mutationSignal);
+          if (mutationSignal.aborted) return { kind: "rejected" };
+          return { kind: "stay" };
+        } catch (error) {
+          if (!mutationSignal.aborted) notifySaveFailure(ctx, error);
+          return { kind: "rejected" };
+        }
+      },
       "on-switch": async ({ value, signal: actionSignal }) => {
         const action = value ? setupSwitchActionFromLabel(value) : undefined;
         if (!action) return { kind: "rejected" };
@@ -444,6 +597,33 @@ export async function showSyncSettings(
       },
     },
   });
+  for (const id of [
+    "automatic",
+    "automatic-transfer",
+    "merge-settings",
+    "skip-secret-scan",
+    "show-status",
+    "debug",
+    "on-switch",
+  ] as const) {
+    const save = menu.actions[id];
+    menu.actions[id] = async (action) => {
+      const validate = captureMutationOwner(ctx, action.signal);
+      validate();
+      ctx.ui.notify("Saving Pi Sync setting…", "info");
+      const result = await save(action);
+      if (action.signal.aborted || signal?.aborted) return { kind: "rejected" };
+      validate();
+      saveStatus =
+        result?.kind === "rejected"
+          ? "Save failed or rejected. Previous value retained; retry is available."
+          : id === "automatic-transfer" || id === "automatic" || id === "debug"
+            ? "Saved. Enabling startup work applies next session start; completed transfers are not undone."
+            : "Saved. Applies to subsequent operations; status visibility applies immediately.";
+      ctx.ui.notify(saveStatus, result?.kind === "rejected" ? "warning" : "info");
+      return result;
+    };
+  }
   async function resumeSettings(editorSignal: AbortSignal) {
     if (editorSignal.aborted) return { kind: "close" as const };
     try {
@@ -455,7 +635,7 @@ export async function showSyncSettings(
       return { kind: "close" as const };
     }
   }
-  await runMenu(ctx, menu, {
+  await runMenu({ ...ctx, ui: boundedSettingsUI(ctx) }, menu, {
     getState: () => loadConfig(setupName),
     signal,
     isCurrent: () => !signal?.aborted,

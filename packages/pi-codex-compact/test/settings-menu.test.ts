@@ -449,7 +449,7 @@ test("route status revalidates model metadata after loading menu state", async (
   assert.doesNotMatch(output, /openai\/old/);
 });
 
-test("menu reports mandatory cancellation for incompatible checkpoint routes and does not promise summary recovery", () => {
+test("menu distinguishes direct replay from conditional issuer recovery and incompatible route cancellation", () => {
   const memory = memoryRuntime();
   const menu = createCodexCompactMenu(memory.runtime, {
     status: { model: "anthropic/model", api: "anthropic-messages" },
@@ -459,7 +459,7 @@ test("menu reports mandatory cancellation for incompatible checkpoint routes and
   const main = resolveMenuScreen(menu, "main", memory.runtime.get());
   assert.equal(main.kind, "actions");
   if (main.kind !== "actions") throw new Error("expected actions");
-  assert.match(main.lines?.join("\n") ?? "", /Compaction cancels:.*checkpoint cannot replay/);
+  assert.match(main.lines?.join("\n") ?? "", /Direct opaque replay is unavailable.*incompatible routes cancel/);
   const paused = createCodexCompactMenu(memory.runtime, {
     status: { model: "openai/model", api: "openai-responses" },
     isPaused: () => true,
@@ -469,7 +469,10 @@ test("menu reports mandatory cancellation for incompatible checkpoint routes and
   const pausedMain = resolveMenuScreen(paused, "main", memory.runtime.get());
   assert.equal(pausedMain.kind, "actions");
   if (pausedMain.kind !== "actions") throw new Error("expected actions");
-  assert.match(pausedMain.lines?.join("\n") ?? "", /Recovery: cancel compaction; preserve checkpoint history/);
+  assert.match(
+    pausedMain.lines?.join("\n") ?? "",
+    /Recovery: issuer summary for compatible provider changes; otherwise cancel and preserve history/,
+  );
   assert.doesNotMatch(pausedMain.lines?.join("\n") ?? "", /Recovery: checkpoint-aware summary/);
   assert.equal(
     memory.runtime.get().settings.checkpointRecovery,

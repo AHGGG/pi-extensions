@@ -26,16 +26,17 @@ export async function showProgressSettings(
   ctx: ExtensionCommandContext,
   options: ProgressSettingsUIOptions,
 ): Promise<"back" | "close" | "stale"> {
-  const { formatInteractionHints, HorizontalRule, renderBoundedFrame } = await import("@narumitw/pi-tui-kit");
-  if (options.signal.aborted || !options.isCurrent()) return "stale";
-  let queue = Promise.resolve();
-  let reason: "back" | "close" | "stale" = "stale";
-  try {
-    await ctx.ui.custom<void>((tui, theme, keybindings, done) => {
+  const { formatInteractionHints, HorizontalRule, renderBoundedFrame, runCustomInteraction } = await import(
+    "@narumitw/pi-tui-kit"
+  );
+  const result = await runCustomInteraction<"back" | "close" | "stale">(ctx, {
+    signal: options.signal,
+    isCurrent: options.isCurrent,
+    // The command owner reports interaction failures after pending saves drain.
+    onError: () => {},
+    create({ tui, theme, keybindings, signal, complete }) {
+      let queue = Promise.resolve();
       const rule = new HorizontalRule({ ruleStyle: (text) => theme.fg("border", text) });
-      const controller = new AbortController();
-      const signal = AbortSignal.any([options.signal, controller.signal]);
-      let closing = false;
       const revisions = new Map<string, number>();
       const mouseRows = new Map<number, number>();
       let renderedWidth = 0;
@@ -45,14 +46,6 @@ export async function showProgressSettings(
       let itemLimitPasting = false;
       let focused = false;
       const current = () => !signal.aborted && options.isCurrent();
-      const close = (nextReason: "back" | "close" | "stale") => {
-        if (closing) return;
-        closing = true;
-        reason = nextReason;
-        controller.abort();
-        done();
-      };
-      const cancelOwner = () => close("stale");
       const initial = options.get();
       const items: SettingItem[] = [
         {
@@ -122,7 +115,7 @@ export async function showProgressSettings(
             const handleInput = (data: string): void => {
               if (!current()) return;
               if (!itemLimitPasting && matchesKey(data, Key.ctrl("c"))) {
-                close("close");
+                complete("close");
                 return;
               }
               if (itemLimitInput !== input) {
@@ -185,7 +178,7 @@ export async function showProgressSettings(
         items.length,
         getSettingsListTheme(),
         (id, value) => {
-          if (!current() || closing) return;
+          if (!current()) return;
           const key = id as keyof ProgressSettings;
           const requested =
             key === "maxVisibleItems"
@@ -218,10 +211,8 @@ export async function showProgressSettings(
             tui.requestRender();
           });
         },
-        () => close("back"),
+        () => complete("back"),
       );
-      options.signal.addEventListener("abort", cancelOwner, { once: true });
-      if (!current()) cancelOwner();
       return {
         get focused() {
           return focused;
@@ -277,7 +268,7 @@ export async function showProgressSettings(
           list.invalidate();
         },
         handleMouse(event: TuiMouseEvent) {
-          if (closing || !current()) return;
+          if (!current()) return;
           const nativeRow = mouseRows.get(event.y);
           if (nativeRow === undefined || event.x < 0 || event.x >= renderedWidth) {
             if (event.button === "left" && (event.type === "press" || event.type === "click")) mousePressed = false;
@@ -295,12 +286,15 @@ export async function showProgressSettings(
           return result;
         },
         handleInput(data: string) {
-          if (closing || !current()) return;
+          if (!current()) return;
           mousePressed = false;
           mouseRows.clear();
-          if (!itemLimitPasting && matchesKey(data, Key.ctrl("c"))) close("close");
+          if (!itemLimitPasting && matchesKey(data, Key.ctrl("c"))) complete("close");
           else list.handleInput(data);
           tui.requestRender();
+        },
+        waitForPending() {
+          return queue;
         },
         dispose() {
           if (itemLimitInput) itemLimitInput.focused = false;
@@ -308,16 +302,12 @@ export async function showProgressSettings(
           itemLimitPasting = false;
           mouseRows.clear();
           mousePressed = false;
-          controller.abort();
-          options.signal.removeEventListener("abort", cancelOwner);
-          if (!closing) cancelOwner();
         },
       };
-    });
-  } finally {
-    await queue;
-  }
-  return options.signal.aborted || !options.isCurrent() ? "stale" : reason;
+    },
+  });
+  if (result.kind === "error") throw result.error;
+  return result.kind === "completed" ? result.value : result.kind === "unsupported" ? "back" : "stale";
 }
 
 function formatValue(value: ProgressSettings[keyof ProgressSettings]): string {

@@ -1,5 +1,28 @@
 # @narumitw/pi-subagents
 
+## 3.3.0
+
+### Minor Changes
+
+- 53730f9: Add the `/subagents` job manager and `/subagents settings` route. Support confirmed active-job cancellation and persistent widget, job ID, tool, and timing display preferences without changing model tools or job execution.
+
+### Patch Changes
+
+- 9f80b89: Reuse published Kit interaction ownership for native Progress and Subagents settings while preserving ordered saves, rollback, and durable-save recovery after the screen closes.
+  
+  Share passive widget framing in Subagents, Tool, Plan Mode, and Cache Hit Monitor. Keep domain rendering and lifecycle ownership local, bound narrow and invalid widths, and retain lazy loading of Kit menus and other interactive APIs.
+- 3dd82ec: Add transcript expansion and collapse for child requests and responses using Pi's configured tool-output expansion key.
+- Updated dependencies [077137a]
+- Updated dependencies [9f80b89]
+- Updated dependencies [efc474c]
+  - @narumitw/pi-tui-kit@0.66.0
+
+## 3.2.1
+
+### Patch Changes
+
+- dfc020b: Show a sanitized, shortened preview of each active subagent's existing task in the TUI widget without changing the spawn schema or inspection metadata.
+
 ## 3.2.0
 
 ### Minor Changes

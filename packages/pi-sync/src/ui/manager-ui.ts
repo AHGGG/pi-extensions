@@ -1,7 +1,9 @@
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
+import type { Component } from "@earendil-works/pi-tui";
 import { type ActionMenuItem, defineMenu, runMenu } from "@narumitw/pi-tui-kit";
-import { loadConfig } from "../settings/config.js";
+import { loadConfig, syncCheckConfigFingerprint } from "../settings/config.js";
 import { operationBlocksChanges } from "../state/operation-availability.js";
+import { captureMutationOwner } from "../sync/sync-local.js";
 import { type RunRoute, runCancellableOperation } from "./cancellable-operation.js";
 import {
   attentionMainMenuItems,
@@ -11,12 +13,13 @@ import {
 } from "./manager-attention.js";
 import { recoverSyncAccess } from "./manager-recovery.js";
 import { dispatchManagerResult } from "./manager-result-dispatcher.js";
-import { describeManagerState } from "./manager-state.js";
+import { backendStorageDescription, describeManagerState } from "./manager-state.js";
 import { showSyncSettings } from "./settings-ui.js";
 import { showSyncSetupManager } from "./setup/setup-actions.js";
 import { showSetupSwitcher } from "./setup/setup-switcher.js";
 import { showStorageConnections } from "./storage-connections-ui.js";
 import { observationMatchesConfig } from "./sync-attention.js";
+import { safeTerminalText } from "./terminal-text.js";
 
 export async function showSyncManager(
   ctx: ExtensionCommandContext,
@@ -31,11 +34,14 @@ export async function showSyncManager(
   type Screen = "main";
   type Action =
     | "review-attention"
+    | "retry-refusal"
     | "sync"
     | "switch"
     | "settings"
     | "pull"
     | "push"
+    | "diff"
+    | "status"
     | "setups"
     | "connections"
     | "history"
@@ -124,6 +130,27 @@ export async function showSyncManager(
         const disposition = await dispatchManagerResult(ctx, result, "sync", runRoute, sessionSignal);
         return disposition.kind === "close" ? { kind: "close" } : { kind: "stay" };
       },
+      "retry-refusal": async ({ signal: actionSignal }) => {
+        const signal = sessionSignal ? AbortSignal.any([sessionSignal, actionSignal]) : actionSignal;
+        const validate = captureMutationOwner(ctx, signal);
+        validate();
+        const retryRoute: RunRoute = (route, operationSignal, onCommit, target, onDialog) =>
+          runRoute(route, operationSignal, onCommit, target, onDialog, true);
+        const result = await runCancellableOperation(ctx, "Checking cached refusal…", "sync", retryRoute, {
+          commitAware: true,
+          cancelAcrossDialogs: true,
+          signal,
+          cancelledMessage: "Model retry cancelled. Submitted requests and committed writes cannot be undone.",
+        });
+        if (signal.aborted) return { kind: "close" };
+        validate();
+        if (result.kind === "decision-required" || result.kind === "remote-selection-required")
+          ctx.ui.notify(
+            "Model retry needs an established source and matching synced content. Use Sync now to review changed selection or recovery before retrying.",
+            "warning",
+          );
+        return { kind: result.kind === "closed" ? "close" : "stay" };
+      },
       switch: async () => {
         const result = await showSetupSwitcher(ctx, runRoute, undefined, sessionSignal);
         return result === "pull-attempted" || result === "closed" ? { kind: "close" } : { kind: "stay" };
@@ -167,9 +194,40 @@ export async function showSyncManager(
         });
         return { kind: result.kind === "closed" ? "close" : "stay" };
       },
-      doctor: async () => {
-        const result = await runCancellableOperation(ctx, "Checking setup access…", "doctor", runRoute, {
+      diff: async () => {
+        const result = await runCancellableOperation(ctx, "Comparing local and remote…", "diff", runRoute, {
           signal: sessionSignal,
+        });
+        return { kind: result.kind === "closed" ? "close" : "stay" };
+      },
+      status: async () => {
+        const result = await runCancellableOperation(ctx, "Checking remote status…", "status", runRoute, {
+          signal: sessionSignal,
+        });
+        return { kind: result.kind === "closed" ? "close" : "stay" };
+      },
+      doctor: async ({ signal: actionSignal }) => {
+        const signal = sessionSignal ? AbortSignal.any([sessionSignal, actionSignal]) : actionSignal;
+        const validate = captureMutationOwner(ctx, signal);
+        const config = await loadConfig();
+        validate();
+        const confirmed = await ctx.ui.confirm(
+          "Run diagnostics?",
+          `Setup: ${safeTerminalText(config.setupName)}\nStorage: ${backendStorageDescription(config)}\nS3/R2 reads the latest pointer without writing. Git reads remote snapshots and checks its cache. WebDAV probes conditional writes and cleanup, and can repair a missing history entry. Possible-secret checks still run. This is not the read-only Check remote status action.`,
+          { signal },
+        );
+        if (signal.aborted) return { kind: "close" };
+        validate();
+        if (!confirmed) return { kind: "stay" };
+        const latest = await loadConfig();
+        validate();
+        if (syncCheckConfigFingerprint(config) !== syncCheckConfigFingerprint(latest)) {
+          ctx.ui.notify("Setup changed during diagnostics review; reopen Diagnostics.", "warning");
+          return { kind: "stay" };
+        }
+        const result = await runCancellableOperation(ctx, "Checking setup access…", "doctor", runRoute, {
+          signal,
+          target: config.setupName,
         });
         return { kind: result.kind === "closed" ? "close" : "stay" };
       },
@@ -196,7 +254,25 @@ export async function showSyncManager(
       },
     },
   });
-  await runMenu(ctx, menu, {
+  const menuContext: ExtensionCommandContext = {
+    ...ctx,
+    ui: {
+      ...ctx.ui,
+      custom: (factory, customOptions) =>
+        ctx.ui.custom((...args) => {
+          const bound = (component: Component & { dispose?(): void }) => {
+            const render = component.render.bind(component);
+            // Kit menus use a one-cell layout floor; suppress it at a zero-column display boundary.
+            component.render = (width) => (width <= 0 ? [] : render(width));
+            return component;
+          };
+          const component = factory(...args);
+          // Keep synchronous factories synchronous, including adapters that inspect their returned component.
+          return component instanceof Promise ? component.then(bound) : bound(component);
+        }, customOptions),
+    },
+  };
+  await runMenu(menuContext, menu, {
     getState: async () => {
       const pendingAttention = options.getAttention?.();
       const observation = options.getObservation?.();
@@ -226,8 +302,11 @@ function syncMainMenuItem(
 ): ActionMenuItem<
   "main",
   | "sync"
+  | "retry-refusal"
   | "pull"
   | "push"
+  | "diff"
+  | "status"
   | "switch"
   | "settings"
   | "setups"
@@ -242,8 +321,11 @@ function syncMainMenuItem(
 > {
   const actions = {
     "Sync now": "sync",
+    "Retry refused model result…": "retry-refusal",
     "Pull from remote…": "pull",
     "Push to remote…": "push",
+    "View differences": "diff",
+    "Check remote status": "status",
     "Switch sync setup": "switch",
     Settings: "settings",
     History: "history",
@@ -263,8 +345,21 @@ function syncMainMenuItem(
     id: action,
     label,
     action,
-    ...(action === "doctor"
-      ? { description: "Check setup access; WebDAV also probes writes and repairs history." }
-      : {}),
+    description:
+      action === "retry-refusal"
+        ? "Transfer: confirm one fresh model request for a current cached refusal; may incur costs."
+        : action === "doctor"
+          ? "Manage: review backend checks before running."
+          : action === "settings" || action === "history" || action === "switch"
+            ? "Manage"
+            : action === "sync"
+              ? "Transfer: choose a safe direction or review conflicts."
+              : action === "pull"
+                ? "Transfer: remote → local; review writes and removals."
+                : action === "push"
+                  ? "Transfer: local → remote active snapshot; review publication."
+                  : action === "status" || action === "diff"
+                    ? "Inspect: read current local and remote state without transferring files."
+                    : undefined,
   };
 }

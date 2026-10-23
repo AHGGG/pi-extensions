@@ -68,6 +68,9 @@ export function validateSettingsDocument(value: Record<string, unknown>): PiSync
   if (value.showStatus !== undefined && typeof value.showStatus !== "boolean") {
     throw new Error("Invalid pi-sync settings: showStatus must be boolean.");
   }
+  if (value.debug !== undefined && typeof value.debug !== "boolean") {
+    throw new Error("Invalid pi-sync settings: debug must be boolean.");
+  }
   const storageConnections = requireNamedObjectMap(
     value.storageConnections,
     "storageConnections",
@@ -216,7 +219,7 @@ function validateSyncSetup(name: string, value: Record<string, unknown>, connect
   const localFields = normalizeLocalFields(sync.localFields);
   if (localFields.length > 0 && !include.includes("settings.json"))
     throw new Error("Nonempty localFields requires settings.json in sync.include.");
-  for (const key of ["mergeContent", "partialSync"])
+  for (const key of ["mergeContent", "partialSync", "agentMode", "continuous"])
     if (sync[key] !== undefined && typeof sync[key] !== "boolean") throw new Error(`${key} must be boolean.`);
   if (sync.mergeSettings !== undefined && typeof sync.mergeSettings !== "boolean")
     throw new Error("mergeSettings must be boolean.");

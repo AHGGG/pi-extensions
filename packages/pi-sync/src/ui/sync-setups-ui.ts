@@ -3,6 +3,7 @@ import { defineMenu, runMenu } from "@narumitw/pi-tui-kit";
 import { loadConfig } from "../settings/config.js";
 import { readLocalConfigObject } from "../settings/settings-store.js";
 import { ownRecord } from "../settings/settings-validation.js";
+import { throwIfAborted } from "../sync/signals.js";
 import { syncErrorGuidance } from "../sync/sync-error-guidance.js";
 import { syncIncludeSelection } from "../sync/sync-policy.js";
 import { safeTerminalText } from "./terminal-text.js";
@@ -22,11 +23,6 @@ export async function countValidSyncSetups(setups: Record<string, unknown> | und
     if (valid) count += 1;
   }
   return count;
-}
-
-function throwIfAborted(signal?: AbortSignal) {
-  if (!signal?.aborted) return;
-  throw signal.reason instanceof Error ? signal.reason : new DOMException("The operation was aborted", "AbortError");
 }
 
 type SyncSetupActions = {
@@ -197,6 +193,8 @@ async function loadSetupMenuState(selectedName: string | undefined, signal?: Abo
       `Sessions: ${selection.sessions ? "On — privacy-sensitive" : "Off"}`,
       `Automatic sync: ${config.automatic ? "On" : "Off"}`,
       `Automatic transfer at startup: ${config.automaticTransfer ? "On — may upload, replace, or delete selected files; no reload" : "Off"}`,
+      `Agent mode: ${config.agentMode ? "On (experimental; autonomous merged sync)" : "Off"}`,
+      `Continuous sync: ${config.continuous ? (config.agentMode ? "On (experimental; recurring requests and transfers)" : "Saved On; paused until Agent mode is enabled") : "Off"}`,
       isCurrent
         ? "Edit included content and automatic sync in /sync → Settings."
         : "To edit included content or automatic sync, make this setup current, then open /sync → Settings.",

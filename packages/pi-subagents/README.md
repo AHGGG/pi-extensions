@@ -16,6 +16,7 @@ Pi Subagents runs Pi jobs in separate child processes and supports authenticated
 - Gives every child `subagent_wait` for an answer to a child-originated request.
 - Lets the main agent question a queued or running job through Pi RPC steering without retaining the child after completion.
 - Publishes one asynchronous terminal completion and shows active-job progress above the editor.
+- Provides a job manager with confirmed cancellation and immediate widget display settings.
 - Exposes privacy-filtered metadata without task text, output, prompts, selected tools, or broker credentials.
 - Cancels session-owned work and closes the broker during replacement, reload, or shutdown.
 
@@ -62,16 +63,37 @@ Call `subagent_spawn` with a self-contained task and only the work tools that ta
 The call returns a `jobId` immediately, and the job continues in the background.
 Continue useful main-agent work until the result is required or a completion arrives.
 
+In TUI mode, each active-job row shows a preview of its existing `task` after the job ID by default; no new parameter is required.
+The preview removes terminal controls, collapses whitespace, and uses at most 40 terminal columns, including an ellipsis when shortened.
+It describes the assigned task, not live child activity; the full task sent to the child is unchanged.
+Task text is visible in this local widget, but `subagent_inspect` continues to omit it.
+Rows are clipped to the available terminal width, so trailing state, thinking level, timing, or tools can be hidden on narrow terminals.
+
 Use messaging only when needed:
 
 - Call `subagent_send` with `recipient: jobId` to ask an active child a question.
 - If `subagent_wait` returns `reason: "subagent_message"`, handle the visible request or response and wait for the job again only when needed.
 - Answer a child-originated request by calling `subagent_send` with its `requestId`.
 
-Completion messages follow Pi's global tool-output expansion state and the `app.tools.expand` binding (`Ctrl+O` by default).
+Completion messages and child requests and responses follow Pi's global tool-output expansion state and the `app.tools.expand` binding (`Ctrl+O` by default).
+Collapsed messages show a summary and the configured expansion key; expanded messages show the full content.
+This display state does not change the content sent to the model.
 
-In TUI mode, the above-editor widget shows each queued or running job's ID, state, elapsed time, timeout, and selected core and extension tool names.
+In TUI mode, the above-editor widget shows each queued or running job's ID, state, thinking level, elapsed time, timeout, and selected core and extension tool names.
+The `thinking: <level>` field shows the resolved configuration passed at spawn, including `off`, even when IDs, timing, and tools are hidden.
+Later main-agent changes do not change this field; it does not track child-side normalization or later setting changes.
 It omits fixed communication tools, attachment paths, and resource totals, disappears when no jobs remain active, and clears when the session ends.
+
+## 💬 Commands
+
+`/subagents` opens a manager for current-session job metadata, confirmed cancellation of active jobs, display settings, status, and help.
+`/subagents settings` opens the same settings screen directly.
+These are the only accepted routes; unknown arguments and trailing input are rejected.
+
+The manager supports TUI and RPC modes. RPC uses dialogs and reports the settings file path instead of opening a settings editor.
+Print and JSON modes reject these interactive commands with an error; the model tools remain available.
+Job lists and details always show job IDs, regardless of widget preferences, and omit task text and child output.
+Jobs do not survive reload or session replacement.
 
 ## 🛠️ Tools
 
@@ -112,6 +134,30 @@ The terminal states are `completed`, `partial`, `failed`, `timed_out`, and `canc
 `subagent_inspect` never returns complete task text, child output, prompts, selected tools, attachment paths or totals, context, credentials, environment variables, requests, responses, or secrets.
 
 See [`docs/tools.md`](./docs/tools.md) for the concise schema reference, [`docs/attachments.md`](./docs/attachments.md) for attachment validation, and [`docs/messaging.md`](./docs/messaging.md) for messaging behavior.
+
+## ⚙️ Settings
+
+Use `/subagents settings` or the manager's Settings action to edit user display preferences.
+All four fields accept JSON booleans and default to `true`:
+
+| Field | Effect |
+| --- | --- |
+| `showWidget` | Show the above-editor widget. |
+| `showJobId` | Show job IDs in widget rows. |
+| `showTools` | Show selected tool names in widget rows. |
+| `showTiming` | Show elapsed time and timeout in widget rows. |
+
+Successful UI saves apply immediately. Hiding the widget does not stop jobs, change model tools, or suppress completion messages.
+Showing it again displays currently active jobs with the other saved preferences. Job state and the task preview remain visible when the widget is enabled.
+Escape returns or closes without undoing completed saves; Ctrl+C closes the entire flow.
+Settings uses Pi's configured selection keys. Its footer shows only the hard-cancel key to avoid displaying fixed keys that do not match your bindings.
+
+Preferences are saved in `<getAgentDir()>/pi-subagents.json`, normally `~/.pi/agent/pi-subagents.json`.
+Only user settings are supported; project files and legacy settings are not read. User fields override code defaults.
+Manual file edits are re-read on `session_start`, including `/reload`, and before each UI save.
+Reading defaults creates no file. Invalid values produce diagnostics and use their defaults; malformed documents block saves until repaired.
+Saves preserve unknown fields, publish atomically, and keep reads and writes ordered within one Pi process. Separate Pi processes are not locked.
+A failed save keeps the previous effective preference and reports the error.
 
 ## ⚙️ Job configuration
 
@@ -188,7 +234,8 @@ Use these replacements where the new job model supports the previous intent:
 | Running main-to-child questions | Main and child `subagent_send` |
 
 The version 3 `subagent_send` contracts are not compatible with the legacy retained-agent follow-up tool of the same name.
-The `/subagents` command, extension settings, legacy retained follow-ups, `subagent_mailbox`, `subagent_consult`, custom agent catalogs, advanced orchestration, alternate transports, trust-aware cwd policy, and extension-owned worktrees have no direct replacement.
+The current `/subagents` manager provides job metadata, cancellation, and widget preferences; it does not restore the legacy management workflows or settings.
+Legacy retained follow-ups, `subagent_mailbox`, `subagent_consult`, custom agent catalogs, advanced orchestration, alternate transports, trust-aware cwd policy, and extension-owned worktrees have no direct replacement.
 Describe the child's specialization in `task` and grant only the required work tools through `tools`.
 
 ## 🔒 Security and privacy
@@ -236,7 +283,10 @@ Parallel writers require disjoint ownership or workspace isolation outside this 
 packages/pi-subagents/
 ├── src/                               # Authoritative implementation and helpers
 │   ├── index.ts                       # Thin Pi entrypoint
-│   └── subagents.ts                   # Job, broker, and child lifecycle
+│   ├── subagents.ts                   # Commands and session lifecycle
+│   ├── menu.ts                        # Job manager
+│   ├── settings.ts                    # User preferences and atomic storage
+│   └── settings-ui.ts                 # Native settings editor
 ├── dist/                              # Generated Jiti runtime, child bridge, and readiness probe
 ├── scripts/build-runtime.mjs          # Runtime builder
 ├── docs/                              # Published reference documentation

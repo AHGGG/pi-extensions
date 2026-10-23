@@ -79,7 +79,14 @@ export async function migrateLegacyStateDirectory(): Promise<StateDirectoryPrepa
       realpath: false,
       stale: LOCK_GUARD_STALE_MS,
     });
-    if (legacyGuardHeld || (await pathExists(legacyLock))) {
+    // Idle continuous owners do not retain the exclusive migration guard.
+    // A live renewable lease still prevents moving their private state root.
+    const schedulerHeld = await lockfile.check(path.join(legacyStateDir(), "continuous", "scheduler"), {
+      fs: LOCKFILE_FS_ADAPTER,
+      realpath: false,
+      stale: LOCK_GUARD_STALE_MS,
+    });
+    if (legacyGuardHeld || schedulerHeld || (await pathExists(legacyLock))) {
       return {
         status: "deferred",
         message:

@@ -51,4 +51,4 @@ This extension does **not** read `~/.codex/config.toml`.
 
 See the [README](../README.md#-settings) for first-use instructions and [implementation reference](./implementation.md) for protocol and replay details.
 
-Background settings moved to [pi-background-compaction](https://github.com/AHGGG/pi-background-compaction). Legacy fields are preserved as unknown fields, not applied by this engine.
+Scheduling and diagnostic preferences are consumer-owned. Legacy fields are preserved as unknown fields, not applied by this engine.

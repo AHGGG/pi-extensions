@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { createAssistantMessageEventStream } from "@earendil-works/pi-ai";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
-import { startWarmCompaction, warmCompactionDraft } from "../src/async-compaction.js";
+import { captureCheckpointPreparation } from "../src/prepared-compaction.js";
 import { RejectedRoutes } from "../src/rejection-state.js";
 import { DEFAULT_CODEX_COMPACT_SETTINGS } from "../src/settings.js";
 
@@ -117,7 +117,7 @@ let fetchStarted;
 let authGate;
 let authStarted;
 let requests = 0;
-const settings = { ...DEFAULT_CODEX_COMPACT_SETTINGS, asyncEnabled: true, maxRetries: 0 };
+const settings = { ...DEFAULT_CODEX_COMPACT_SETTINGS, maxRetries: 0 };
 const runtime = { get: () => ({ kind: "loaded", path: "/unused", settings, document: {} }) };
 const pi = { getActiveTools: () => [], getAllTools: () => [], getThinkingLevel: () => "off" };
 const ctx = {
@@ -127,7 +127,7 @@ const ctx = {
   hasUI: false,
   mode: "json",
   getSystemPrompt: () => "Memory fixture system prompt",
-  // Force the production threshold gate without allocating a large active context.
+  // Report representative usage without allocating a large active context.
   getContextUsage: () => ({ tokens: 65_000, contextWindow: 100_000, percent: 65 }),
   ui: { setStatus() {}, notify() {} },
   modelRegistry: {
@@ -158,22 +158,25 @@ for (let cycle = 0; cycle < options.cycles; cycle++) {
   fetchStarted = deferred();
   const owner = new AbortController();
   const started = performance.now();
-  let job = startWarmCompaction(
+  let preparation = captureCheckpointPreparation(
     pi,
     ctx,
     runtime,
     owner.signal,
     new RejectedRoutes(),
     () => true,
-    () => true,
     () => {},
     fetch,
   );
-  assert.ok(job);
+  assert.ok(preparation);
+  const guard = { signal: owner.signal, isCurrent: () => true, ownsStatus: () => true };
+  let pending = preparation.start(guard);
+  preparation = undefined;
+  let job;
   await Promise.race([
     fetchStarted.promise,
-    job.promise.then(() => {
-      throw new Error(`Warm preparation ended before transport: ${job.validationFailure ?? job.state}`);
+    pending.then(() => {
+      throw new Error("Preparation ended before transport");
     }),
   ]);
   timings.push({ cycle, preparingMs: performance.now() - started });
@@ -181,32 +184,34 @@ for (let cycle = 0; cycle < options.cycles; cycle++) {
   if (cycle % 2 === 1) {
     owner.abort();
     fetchGate.resolve();
-    await job.promise;
-    assert.notEqual(job.state, "Ready");
+    job = await pending;
+    assert.equal(job.usable, false);
   } else {
     fetchGate.resolve();
-    await job.promise;
-    assert.equal(job.state, "Ready");
+    job = await pending;
+    assert.equal(job.usable, true);
     await turn();
     measure("ready", cycle);
     authGate = deferred();
     authStarted = deferred();
-    let adoption = warmCompactionDraft(job, ctx, runtime, owner.signal, () => true);
+    let adoption = job.draft(ctx, guard);
     await Promise.race([
       authStarted.promise,
       adoption.then(() => {
-        throw new Error(`Draft ended before auth refresh: ${job.validationFailure}`);
+        throw new Error(`Draft ended before auth refresh: ${job.reason}`);
       }),
     ]);
     measure("adoption-auth-pending", cycle);
     authGate.resolve();
-    assert.ok(await adoption, job.validationFailure);
+    const result = await adoption;
+    assert.ok(result.draft, result.reason);
     adoption = undefined;
     authGate = undefined;
     authStarted = undefined;
     measure("adopted-draft", cycle);
   }
-  job.controller.abort();
+  owner.abort();
+  pending = undefined;
   job = undefined;
   fetchGate = undefined;
   fetchStarted = undefined;

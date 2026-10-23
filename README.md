@@ -56,6 +56,7 @@ These extensions are part of my daily Pi setup:
 | Package | Use it for | Install |
 | --- | --- | --- |
 | [`pi-codex-compact`](./packages/pi-codex-compact) | Use OpenAI Codex Remote Compaction V2 to persist and replay bounded opaque checkpoints, with `/codex-compact` manual controls and safe Pi-native fallback. | `pi install npm:@narumitw/pi-codex-compact` |
+| [`pi-codex-imagegen`](./packages/pi-codex-imagegen) | Experiment with Codex image generation through `/imagegen` and an opt-in tool, without starting a Codex agent. | [Install from source](./packages/pi-codex-imagegen#-install) |
 | [`pi-context-management`](./packages/pi-context-management) | Opt into experimental summary-free context rollover with bounded branch-history recall and branch-local notes. | `pi install npm:@narumitw/pi-context-management` |
 | [`pi-file-context`](./packages/pi-file-context) | Browse project files, preview text, select exact lines or Git diff hunks, and attach immutable snapshots with Git provenance to the next prompt. Open it with configurable `Ctrl+Shift+X` or `/file-context`. | `pi install npm:@narumitw/pi-file-context` |
 | [`pi-lsp`](./packages/pi-lsp) | Language-server diagnostics and code actions across JavaScript, TypeScript, Python, Rust, Go, Ruby, C/C++, JVM, .NET, Swift, shell, infrastructure formats, and more. | `pi install npm:@narumitw/pi-lsp` |
@@ -113,6 +114,7 @@ The deprecated combined `pi-workflow` package has no atomic Plan-to-Goal replace
 | [`pi-github-pr`](./packages/pi-github-pr) | Show current-branch pull request checks, reviews, and comment counts through the authenticated `gh` CLI. | `pi install npm:@narumitw/pi-github-pr` |
 | [`pi-inspect`](./packages/pi-inspect) | Inspect current session context and live tool calls in a private, read-only browser viewer with `/inspect`. | `pi install ./packages/pi-inspect` |
 | [`pi-langfuse`](./packages/pi-langfuse) | Send agent runs, generations, token usage, costs, and tool activity to Langfuse. | `pi install npm:@narumitw/pi-langfuse` |
+| [`pi-notify`](./packages/pi-notify) | Send Telegram reminders when Pi settles, with optional inactivity timing and computer/session/worktree details. | `pi install ./packages/pi-notify` |
 | [`pi-stamp`](./packages/pi-stamp) | Show configurable timestamps with opt-in assistant metadata, response timing, and tool timing in the TUI transcript. | `pi install npm:@narumitw/pi-stamp` |
 | [`pi-starship`](./packages/pi-starship) | Use a native Starship-style TOML footer with Pi-specific modules and no Starship binary dependency. | `pi install npm:@narumitw/pi-starship` |
 | [`pi-statusline`](./packages/pi-statusline) | Show model, tools, Git state, context usage, tokens, cost, and time in a preset or JSON-configured footer. | `pi install npm:@narumitw/pi-statusline` |
@@ -182,7 +184,9 @@ npm run check
 ```
 
 `npm test` typechecks the test sources and runs the root and workspace suites with Vitest.
-CI and release use `npm ci` with strict dependency script review and a seven-day minimum age for new resolution.
+See [test performance and isolation](./docs/test-performance.md) for package timing reports,
+cache behavior, and the reviewed shared-module test boundary.
+CI and release use `npm ci` with strict dependency script review and a three-day minimum age for new resolution.
 See [dependency installation policy](./docs/dependency-installation.md) for script approvals, lockfile-age limitations,
 failed-update recovery, urgent-patch review, and toolchain upgrades.
 

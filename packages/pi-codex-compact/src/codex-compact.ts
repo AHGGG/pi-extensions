@@ -1,5 +1,6 @@
 import type { Api, Model } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { abortable } from "./abortable.js";
 import {
   type CodexCheckpointDetails,
   checkpointMarker,
@@ -7,7 +8,14 @@ import {
   latestCheckpoint,
   parseCheckpointDetails,
 } from "./checkpoint.js";
+import {
+  checkpointIssuerRequest,
+  PLAINTEXT_CHECKPOINT_TYPE,
+  plaintextCheckpointMessages,
+  savedPlaintextCheckpoint,
+} from "./checkpoint-portability.js";
 import { projectSessionCheckpointContext } from "./checkpoint-projection.js";
+import { summarizeCheckpoint } from "./checkpoint-recovery.js";
 import { rewriteCheckpointForWork } from "./checkpoint-replay.js";
 import { activeTools, type CompactionAttempt, compactRemotely } from "./compaction-operation.js";
 import { captureCompactionBranch, captureExactCompactionBranch } from "./compaction-ownership.js";
@@ -50,9 +58,9 @@ function isCheckpointCompatible(
   return (
     route.kind === "remote" &&
     model !== undefined &&
+    model.provider === details.provider &&
     route.api === details.api &&
-    route.profile === details.profile &&
-    model.id === details.modelId
+    route.profile === details.profile
   );
 }
 
@@ -170,21 +178,9 @@ export function createCodexCompactExtension(
 
     pi.registerCommand("codex-compact", {
       description: "Compact now or configure Responses compaction",
-      getArgumentCompletions: (prefix) =>
-        "resume".startsWith(prefix)
-          ? [{ value: "resume", label: "resume — background-compaction migration guidance" }]
-          : [],
       handler: async (args, ctx) => {
-        if (args.trim() && args.trim() !== "resume") throw new Error("Usage: /codex-compact [resume]");
+        if (args.trim()) throw new Error("Usage: /codex-compact");
         const owner = ownerFor(ctx);
-        if (args.trim() === "resume") {
-          if (ctx.hasUI)
-            ctx.ui.notify(
-              "Background compaction moved to /background-compaction resume. Install pi-background-compaction to use it.",
-              "info",
-            );
-          return;
-        }
         const controller = owner.controller;
         const { showCodexCompactMenu } = await import("./settings-menu.js");
         if (owners.get(ctx.sessionManager) !== owner || controller.signal.aborted) return;
@@ -511,13 +507,109 @@ export function createCodexCompactExtension(
       if (owner) owner.run = undefined;
     });
 
-    pi.on("context", (event, ctx) => {
+    pi.on("context", async (event, ctx) => {
       if (!settingsRuntime.get().settings.enabled) return undefined;
       const settings = settingsRuntime.get().settings;
       const checkpoint = activeCheckpoint(ctx);
-      if (!checkpoint || !isCheckpointCompatible(checkpoint.details, ctx.model, settings)) return undefined;
+      if (!checkpoint) return undefined;
+      const route = resolveCompactionRoute(ctx.model, settings);
+      if (
+        route.kind !== "remote" ||
+        route.api !== checkpoint.details.api ||
+        route.profile !== checkpoint.details.profile
+      )
+        return undefined;
       const messages = projectSessionCheckpointContext(event.messages, ctx.sessionManager.getBranch(), checkpoint);
-      return messages ? { messages } : undefined;
+      if (!messages) return undefined;
+      if (isCheckpointCompatible(checkpoint.details, ctx.model, settings)) return { messages };
+      let summary = savedPlaintextCheckpoint(ctx.sessionManager.getBranch(), checkpoint);
+      if (summary) return { messages: plaintextCheckpointMessages(messages, checkpoint, summary) };
+      const owner = ownerFor(ctx);
+      if (owner.controller.signal.aborted || ctx.signal?.aborted) return undefined;
+      cancelOperation(ctx);
+      const operation = new AbortController();
+      owner.operation = operation;
+      const signal = AbortSignal.any([owner.controller.signal, operation.signal, ...(ctx.signal ? [ctx.signal] : [])]);
+      const model = ctx.model;
+      const modelKey = JSON.stringify(model);
+      const toolsKey = JSON.stringify([pi.getActiveTools(), activeTools(pi)]);
+      const branchIsCurrent = captureCompactionBranch(ctx.sessionManager.getBranch());
+      const systemPrompt = ctx.getSystemPrompt();
+      const stillCurrent = () =>
+        !signal.aborted &&
+        owners.get(ctx.sessionManager) === owner &&
+        owner.operation === operation &&
+        owner.sessionId === ctx.sessionManager.getSessionId() &&
+        ctx.model === model &&
+        JSON.stringify(ctx.model) === modelKey &&
+        JSON.stringify([pi.getActiveTools(), activeTools(pi)]) === toolsKey &&
+        JSON.stringify(settingsRuntime.get().settings) === JSON.stringify(settings) &&
+        ctx.getSystemPrompt() === systemPrompt &&
+        branchIsCurrent(ctx.sessionManager.getBranch());
+      let transferred = false;
+      let statusCleared = false;
+      ctx.ui.setStatus(STATUS_KEY, "Transferring checkpoint through its issuing provider…");
+      try {
+        if (settings.checkpointRecovery === "cancel") throw new Error("Checkpoint recovery is disabled");
+        const marker = messages.find(
+          (message) =>
+            message.role === "user" &&
+            Array.isArray(message.content) &&
+            message.content.some(
+              (part) => part.type === "text" && part.text === checkpointMarker(checkpoint.details.checkpointId),
+            ),
+        );
+        if (!marker) throw new Error("The checkpoint marker is unavailable");
+        const request = await abortable(
+          checkpointIssuerRequest(ctx, checkpoint, [marker], settings, signal, stillCurrent, options.fetch),
+          signal,
+        );
+        if (!stillCurrent()) return undefined;
+        const result = await summarizeCheckpoint(request, {
+          maxTokens: Math.min(request.model.maxTokens, settings.replacementTokenBudget),
+        });
+        if (!stillCurrent()) return undefined;
+        summary = result.summary;
+        pi.appendEntry(PLAINTEXT_CHECKPOINT_TYPE, {
+          entryId: checkpoint.entry.id,
+          checkpointId: checkpoint.details.checkpointId,
+          summary,
+        });
+        if (!stillCurrent()) return undefined;
+        if (ctx.hasUI)
+          ctx.ui.notify(
+            "Checkpoint transferred as a plaintext summary through its issuing provider. Encrypted state was not sent to the selected provider.",
+            "info",
+          );
+        if (!stillCurrent()) return undefined;
+        statusCleared = true;
+        ctx.ui.setStatus(STATUS_KEY, undefined);
+        if (!stillCurrent()) return undefined;
+        transferred = true;
+        return { messages: plaintextCheckpointMessages(messages, checkpoint, summary) };
+      } catch {
+        if (stillCurrent()) {
+          if (ctx.hasUI)
+            ctx.ui.notify(
+              "Checkpoint transfer could not complete; request stopped and history preserved. Switch back to the checkpoint's issuing provider and verify its authentication, or enable checkpoint summary recovery.",
+              "warning",
+            );
+        }
+        return undefined;
+      } finally {
+        if (
+          !transferred &&
+          owners.get(ctx.sessionManager) === owner &&
+          owner.sessionId === ctx.sessionManager.getSessionId() &&
+          (owner.operation === operation || owner.operation === undefined)
+        )
+          ctx.abort();
+        if (owner.operation === operation) {
+          owner.operation = undefined;
+          if (!statusCleared) ctx.ui.setStatus(STATUS_KEY, undefined);
+        }
+        operation.abort();
+      }
     });
 
     pi.on("before_provider_request", (event, ctx) => {
@@ -531,8 +623,12 @@ export function createCodexCompactExtension(
       if (!settingsRuntime.get().settings.enabled) return undefined;
       const settings = settingsRuntime.get().settings;
       const checkpoint = activeCheckpoint(ctx);
-      if (!checkpoint || !isCheckpointCompatible(checkpoint.details, ctx.model, settings)) return undefined;
+      if (!checkpoint) return undefined;
       const marker = checkpointMarker(checkpoint.details.checkpointId);
+      if (!isCheckpointCompatible(checkpoint.details, ctx.model, settings)) {
+        if (hasCheckpointMarker(event.payload, marker)) ctx.abort();
+        return undefined;
+      }
       if (!hasCheckpointMarker(event.payload, marker)) return undefined;
       return rewriteCheckpointForWork(event.payload, marker, checkpoint.details.replacementHistory);
     });
@@ -566,7 +662,7 @@ export function createCodexCompactExtension(
       providerWarnings.add(key);
       if (ctx.hasUI) {
         ctx.ui.notify(
-          "The active Responses checkpoint cannot replay on this model; Pi will expose only its fallback marker and retained recent messages.",
+          "The active Responses checkpoint cannot replay directly on this provider/API. For a compatible API/profile, the next request transfers it through its issuing provider as a plaintext summary; otherwise only the fallback marker and recent messages remain available.",
           "warning",
         );
       }

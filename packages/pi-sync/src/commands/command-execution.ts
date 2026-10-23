@@ -5,6 +5,7 @@ import { localConfigTemplate, readLocalConfigObject } from "../settings/settings
 import type { AnySyncConfig } from "../settings/settings-types.js";
 import { unlock, withLock } from "../state/lock.js";
 import { migrateLegacyStateDirectory, stateDirectoryMigrationNotice } from "../state/state-directory.js";
+import { withAgentSyncLock } from "../sync/agent-sync.js";
 import { throwIfAborted } from "../sync/signals.js";
 import { syncErrorGuidance } from "../sync/sync-error-guidance.js";
 import { isSyncDecisionRequiredError, SetupPullRequiresUiError } from "../sync/sync-errors.js";
@@ -13,6 +14,7 @@ import { RemoteSelectionMismatchError } from "../sync/sync-policy.js";
 import { automaticSyncSummary } from "../ui/automatic-sync-summary.js";
 import type { RunRouteResult } from "../ui/cancellable-operation.js";
 import { trackOperationDialogs } from "../ui/operation-dialogs.js";
+import { startupTransferSummary } from "../ui/sync-behavior.js";
 import { setSyncStatus } from "../ui/sync-status.js";
 import { safeTerminalText } from "../ui/terminal-text.js";
 import { parseOptions, resolveSyncCommand, splitArgs, usage, validateCommandOptions } from "./command.js";
@@ -48,7 +50,7 @@ export async function executeRecoveryCommand(
       const outcome = await withLock("pull", () => operations.pull(ctx, options));
       return { kind: "completed", ...(outcome ? { outcome } : {}) };
     }
-    await withLock("sync", () => operations.syncBoth(ctx, options));
+    await withAgentSyncLock(ctx, options, (current) => operations.syncBoth(ctx, current));
     return { kind: "completed" };
   } catch (error) {
     if (signal?.aborted) return { kind: "failed" };
@@ -72,6 +74,7 @@ export async function executeCommand(
   onCommit?: () => void,
   setup?: string,
   onDialog?: (active: boolean) => void,
+  retryRefusal = false,
 ): Promise<RunRouteResult> {
   ctx = trackOperationDialogs(ctx, onDialog);
   try {
@@ -83,6 +86,10 @@ export async function executeCommand(
     if (signal) options.signal = signal;
     if (onCommit) options.onCommit = onCommit;
     validateCommandOptions(subcommand, options);
+    if (retryRefusal) {
+      if (subcommand !== "sync") throw new Error("A refused-model retry is available only for merged sync.");
+      options.agentRetryRefusal = true;
+    }
 
     switch (subcommand) {
       case "help":
@@ -155,8 +162,8 @@ export async function executeCommand(
       case "sync": {
         const operations = await loaders.operations();
         throwIfAborted(options.signal);
-        await withLock("sync", () => operations.syncBoth(ctx, options));
-        return { kind: "completed" };
+        const outcome = await withAgentSyncLock(ctx, options, (current) => operations.syncBoth(ctx, current));
+        return { kind: "completed", ...(retryRefusal && outcome ? { outcome } : {}) };
       }
       case "history": {
         const operations = await loaders.operations();
@@ -256,7 +263,9 @@ async function showConfig(ctx: ExtensionCommandContext, options: CommandOptions)
       `automatic sync: ${automaticSyncSummary(config.automatic)}`,
       `settings field merge: ${config.mergeSettings ? "On (experimental)" : "Off"}`,
       `machine-local settings.json fields: ${(config.localFields ?? []).map(safeTerminalText).join(", ") || "none"}`,
-      `automatic transfer at startup: ${config.automaticTransfer ? "On — selected-file upload/replace/delete; no reload" : "Off"}`,
+      `startup transfer: ${startupTransferSummary(config)}`,
+      `agent mode: ${config.agentMode ? "On (experimental)" : "Off"}`,
+      `continuous sync: ${config.continuous ? (config.agentMode ? "On (experimental)" : "paused; Agent mode is Off") : "Off"}`,
       `included content: ${config.include.join(", ") || "none"}`,
       `sessions: ${config.include.includes("sessions") ? "included" : "not included"}`,
       `settings file: ${localConfigPath()}`,

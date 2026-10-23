@@ -21,6 +21,7 @@ import {
   type SyncAttentionState,
   syncAttentionMatchesConfig,
 } from "./sync-attention.js";
+import { startupTransferSummary } from "./sync-behavior.js";
 import { countValidSyncSetups } from "./sync-setups-ui.js";
 import { safeTerminalText } from "./terminal-text.js";
 
@@ -28,6 +29,8 @@ export const MAIN_MENU_ACTIONS = [
   "Sync now",
   "Pull from remote…",
   "Push to remote…",
+  "View differences",
+  "Check remote status",
   "Settings",
   "History",
   "Diagnostics",
@@ -121,12 +124,13 @@ export async function describeManagerState(
     const lastAppliedSnapshot = changesBlocked
       ? "Unavailable while operations are locked"
       : syncState?.lastAppliedSnapshot
-        ? safeTerminalText(syncState.lastAppliedSnapshot)
+        ? `${truncateToWidth(safeTerminalText(syncState.lastAppliedSnapshot), 20, "…")} (application time unavailable; full ID in History)`
         : syncState
           ? "Never synced"
           : "Unavailable";
     const canSwitch = (await countValidSyncSetups(configuredTargets, signal)) > 1;
     const mainActions: string[] = [...MAIN_MENU_ACTIONS];
+    if (config.agentMode && !noSyncedContent) mainActions.splice(1, 0, "Retry refused model result…");
     if (canSwitch) mainActions.push("Switch sync setup");
     if (syncState?.unresolved?.length) mainActions.unshift("Review unresolved conflicts");
     const ordinaryTitle = [
@@ -134,10 +138,7 @@ export async function describeManagerState(
       "",
       `Current sync setup: ${safeTerminalText(config.setupName)}`,
       `Storage: ${backendStorageDescription(config)}`,
-      `Included: ${selection.builtIns.length} built-in group${selection.builtIns.length === 1 ? "" : "s"} · ${selection.custom.length} extra path${selection.custom.length === 1 ? "" : "s"} · Sessions ${selection.sessions ? "on" : "off"}`,
-      `Automatic sync: ${automaticSyncSummary(config.automatic)}`,
-      `Automatic transfer at startup: ${config.automaticTransfer ? "On — upload/replace/delete at idle; no reload" : "Off"}`,
-      `Last applied: ${lastAppliedSnapshot}`,
+      "CURRENT STATE",
       ...(syncState?.unresolved?.length
         ? [
             `Unresolved: ${syncState.unresolved.length} dependency groups · choose Review unresolved conflicts`,
@@ -160,11 +161,17 @@ export async function describeManagerState(
               "Check-time observation only; synchronization rechecks current content.",
             ]
           : ["Remote status: Not checked"]),
+      `Included: ${selection.builtIns.length} built-in group${selection.builtIns.length === 1 ? "" : "s"} · ${selection.custom.length} extra path${selection.custom.length === 1 ? "" : "s"} · Sessions ${selection.sessions ? "on" : "off"}`,
+      `Automatic sync: ${automaticSyncSummary(config.automatic)}`,
+      `Startup transfer: ${startupTransferSummary(config)}`,
+      `Agent mode: ${config.agentMode ? "On (experimental; autonomous merged sync)" : "Off"}`,
+      ...(config.continuous ? await (await import("../sync/continuous-record.js")).continuousStatusLines(config) : []),
+      `Last applied: ${lastAppliedSnapshot}`,
       ...(noSyncedContent
         ? ["", "No included content is selected. Choose included content in Settings before syncing."]
         : []),
       "",
-      "What do you want to do?",
+      "ACTIONS · transfer, inspect, or manage",
     ];
     return {
       title: (changesBlocked ? ["Manage sync", ...operationStatusLines(operation)] : ordinaryTitle).join("\n"),

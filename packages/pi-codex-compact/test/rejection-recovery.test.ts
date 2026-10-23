@@ -15,6 +15,7 @@ import {
   fingerprintMessage,
   latestCheckpoint,
 } from "../src/checkpoint.js";
+import { COMPACTION_WORK_REPLAY_MESSAGE } from "../src/checkpoint-replay.js";
 import { createCodexCompactExtension } from "../src/codex-compact.js";
 import { resolveCompactionRoute } from "../src/model-api.js";
 import { RejectedRoutes, rejectionRouteKey } from "../src/rejection-state.js";
@@ -405,7 +406,12 @@ test("Cancel setting avoids summary quota and preserves replay across repeated r
     },
     h.ctx,
   );
-  assert.deepEqual(replay, { input: [{ type: "compaction", encrypted_content: "opaque-assistant-only-fact" }] });
+  assert.deepEqual(replay, {
+    input: [
+      { type: "compaction", encrypted_content: "opaque-assistant-only-fact" },
+      { role: "developer", content: [{ type: "input_text", text: COMPACTION_WORK_REPLAY_MESSAGE }] },
+    ],
+  });
 });
 
 test("summary recovery failure hands off to Pi native without prematurely changing opaque history", async () => {
@@ -645,10 +651,22 @@ test("rejection cache is bounded without evicting known routes or blocking unkno
   }
 });
 
-test("incompatible checkpoint cancels before any request", async () => {
+test("model switch preserves encrypted checkpoint recovery on the selected Responses model", async () => {
   const h = await harness({ checkpoint: true });
   const before = structuredClone(h.entries);
   h.setModel({ id: "other" });
+  const result = (await h.run()) as { compaction: { summary: string } };
+  assert.match(result.compaction.summary, /sapphire/);
+  assert.equal(h.payloads.length, 2);
+  assert.ok(h.payloads.every(({ payload }) => payload.model === "other"));
+  assert.ok(h.payloads.every(({ payload }) => JSON.stringify(payload).includes("opaque-assistant-only-fact")));
+  assert.deepEqual(h.entries, before);
+});
+
+test("incompatible checkpoint cancels before any request", async () => {
+  const h = await harness({ checkpoint: true });
+  const before = structuredClone(h.entries);
+  h.setModel({ api: "openai-codex-responses" });
   assert.deepEqual(await h.run(), { cancel: true });
   assert.equal(h.payloads.length, 0);
   assert.deepEqual(h.entries, before);

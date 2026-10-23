@@ -31,6 +31,7 @@ test.each([
   { exit: "meta+q" },
   { cycleThinkingLevel: "ctrl+f1" },
   { bringToMain: "\u001b" },
+  { switchPane: "meta+x" },
 ])("invalid keybindings protect the file from writes: %j", async (keybindings) => {
   assert.equal(normalizeBtwSettings({ keybindings }), undefined);
   await withSettings(async (path) => {
@@ -73,6 +74,34 @@ test("keybinding writes normalize reads, preserve nested unknowns and reset only
     assert.deepEqual(JSON.parse(await readFile(path, "utf8")).keybindings, {
       future: { keep: true },
     });
+  });
+});
+
+test("pane-transfer overrides use the existing atomic store and preserve nested unknown fields", async () => {
+  await withSettings(async (path) => {
+    const original = JSON.stringify({ future: true, keybindings: { switchPane: "f9", future: { keep: true } } });
+    await writeFile(path, original);
+    await assert.rejects(
+      updateBtwSettings(
+        { keybindings: { switchPane: "f10" } },
+        {
+          settingsPath: path,
+          beforeRename: async () => {
+            throw new Error("disk failed");
+          },
+        },
+      ),
+      /disk failed/u,
+    );
+    assert.equal(await readFile(path, "utf8"), original);
+    await updateBtwSettings({ keybindings: { switchPane: "F10" } }, { settingsPath: path });
+    assert.deepEqual(await readBtwSettings(path), { kind: "loaded", settings: { keybindings: { switchPane: "f10" } } });
+    await updateBtwSettings({ keybindings: { switchPane: undefined } }, { settingsPath: path });
+    assert.deepEqual(JSON.parse(await readFile(path, "utf8")), {
+      future: true,
+      keybindings: { future: { keep: true } },
+    });
+    assert.deepEqual(await readdir(join(path, "..")), ["pi-btw.json"]);
   });
 });
 

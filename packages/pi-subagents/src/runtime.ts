@@ -1,6 +1,6 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { COMPLETION_MESSAGE_TYPE } from "./completion-renderer.js";
 import { type BrokerSendAcknowledgement, type MessageBroker, sanitizeTerminalText } from "./message-broker.js";
+import { COMPLETION_MESSAGE_TYPE } from "./message-renderers.js";
 import { modelVisibleJson, requireBoundedModelText } from "./model-output.js";
 import { runChild as defaultRunChild } from "./process.js";
 import type { ExtensionAttachment } from "./resource-attachments.js";
@@ -28,6 +28,8 @@ interface InternalJob extends JobSummary {
   terminal: Promise<void>;
   resolveTerminal: () => void;
   task?: Promise<void>;
+  taskText: string;
+  thinkingLevel: SubagentThinkingLevel;
   stopRequest?: StopRequest;
   control?: ChildControl;
   controlReady: Promise<ChildControl>;
@@ -48,7 +50,9 @@ export interface RuntimeDependencies {
 
 export interface ActiveJobDisplay {
   jobId: string;
+  task: string;
   state: Extract<SubagentJobState, "queued" | "running">;
+  thinkingLevel: SubagentThinkingLevel;
   elapsedMs: number;
   timeout?: number;
   tools: string[];
@@ -113,7 +117,9 @@ export class SubagentRuntime {
       .sort((left, right) => left.createdAt - right.createdAt)
       .map((job) => ({
         jobId: job.jobId,
+        task: job.taskText,
         state: job.state,
+        thinkingLevel: job.thinkingLevel,
         elapsedMs: Math.max(0, now - (job.startedAt ?? job.createdAt)),
         ...(job.timeout !== undefined ? { timeout: job.timeout } : {}),
         tools: [...job.tools],
@@ -155,6 +161,8 @@ export class SubagentRuntime {
       ...(input.timeout !== undefined ? { timeout: input.timeout } : {}),
       controller,
       tools: effectiveTools,
+      taskText: input.task,
+      thinkingLevel: input.thinkingLevel,
       terminal,
       resolveTerminal,
       controlReady,

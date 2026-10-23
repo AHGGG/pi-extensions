@@ -378,7 +378,7 @@ for (const width of [1, 8, 20, 40]) {
         undefined,
         () => true,
         "update local files",
-        ["Local: " + "長".repeat(100)],
+        [`Local: ${"長".repeat(100)}`],
       ),
       false,
     );
@@ -397,8 +397,7 @@ test("long exact details can scroll to the last path without an approval action"
     20,
     16,
   );
-  const body =
-    Array.from({ length: 30 }, (_, index) => `Update ${index}-${"長".repeat(40)}.md`).join("\n") + "\nFINAL_PATH.md";
+  const body = `${Array.from({ length: 30 }, (_, index) => `Update ${index}-${"長".repeat(40)}.md`).join("\n")}\nFINAL_PATH.md`;
   assert.equal(
     await confirmMergeReview(driver.ctx, "Update?", body, undefined, () => true, "update local files", [
       "Local: 30 updates",

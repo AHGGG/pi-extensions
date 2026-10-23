@@ -11,6 +11,7 @@ import {
 import { SyncSetupReviewChangedError, updateSyncSetup } from "../settings/settings-management.js";
 import type { AnySyncConfig, PartialConfig } from "../settings/settings-types.js";
 import { readSnapshotForHead } from "../sync/remote-snapshot.js";
+import { throwIfAborted } from "../sync/signals.js";
 import { errorMessage } from "../sync/sync-errors.js";
 import {
   compareSyncInclude,
@@ -240,6 +241,8 @@ async function showSelectionDifference(
             include: [...state.decision.remoteInclude],
             automatic: review.config.automatic,
             automaticTransfer: review.config.automaticTransfer,
+            agentMode: review.config.agentMode,
+            continuous: review.config.continuous,
             onSwitch: review.config.onSwitch,
             showStatus: review.config.showStatus,
           };
@@ -592,6 +595,8 @@ function sameContinuationReview(left: PartialConfig, right: PartialConfig) {
     left.storagePath === right.storagePath &&
     left.bucket === right.bucket &&
     left.branch === right.branch &&
+    Boolean(left.agentMode) === Boolean(right.agentMode) &&
+    Boolean(left.continuous) === Boolean(right.continuous) &&
     sameSyncInclude(left.include, right.include)
   );
 }
@@ -638,9 +643,4 @@ function runWithOptionalStateAccess<T>(
 
 function combineSignals(sessionSignal: AbortSignal | undefined, actionSignal: AbortSignal) {
   return sessionSignal ? AbortSignal.any([sessionSignal, actionSignal]) : actionSignal;
-}
-
-function throwIfAborted(signal: AbortSignal) {
-  if (!signal.aborted) return;
-  throw signal.reason instanceof Error ? signal.reason : new DOMException("The operation was aborted", "AbortError");
 }

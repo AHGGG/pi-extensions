@@ -1,5 +1,21 @@
 # @narumitw/pi-usage
 
+## 0.68.0
+
+### Minor Changes
+
+- 74cc35f: Add the read-only `usage:query:v1`, `usage:capabilities:v1`, and `usage:changed:v1` event protocols for other Pi extensions. Refresh requests preserve authentication policy, cancellation, failure backoff, and session ownership without changing UI or model context. API refreshes wait for active status and menu reads instead of interrupting those presentation flows. Cache-only reads conservatively return `cache-miss` because Pi cannot prove effective auth identity without potentially doing network work. Document protocol timestamps in milliseconds and include a bounded consumer example.
+
+## 0.67.0
+
+### Minor Changes
+
+- 1cd8b94: Make native OpenAI companion usage default to Off. Enable **Use Codex login for OpenAI usage** in `/usage` Settings only when both logins use the same ChatGPT account and workspace. The extension cannot verify that identity match.
+  
+  The new `openaiUseCodexUsage` boolean defaults to `false`, including after upgrade. Historical `openaiCompanionUsage` values do not opt in. Native OpenAI shows authentication status and a usage-settings link until explicitly enabled; independent Codex usage, Fast mode, and reset redemption are unchanged.
+  
+  Disabling cancels pending companion queries and auth waits, invalidates native quota caches, and prevents late results from restoring old reports or status. A successful save restores the active session status refresh even if the Settings screen closes or becomes stale during publication. This does not add reverse fallback or change Pi-owned OAuth renewal. Companion endpoints remain experimental and undocumented.
+
 ## 0.66.0
 
 ### Minor Changes

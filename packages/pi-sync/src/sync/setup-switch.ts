@@ -5,6 +5,7 @@ import { configuredSyncSetupNames, updateLocalConfig } from "../settings/setting
 import type { OnSwitchAction } from "../settings/settings-types.js";
 import { normalizeOnSwitch } from "../settings/settings-validation.js";
 import { safeTerminalText } from "../ui/terminal-text.js";
+import { throwIfAborted } from "./signals.js";
 import { SetupPullRequiresUiError } from "./sync-errors.js";
 
 export { SetupPullRequiresUiError } from "./sync-errors.js";
@@ -127,9 +128,4 @@ export async function useSyncSetup(
     );
   }
   return { pullApplied: pullOutcome === "applied" };
-}
-
-function throwIfAborted(signal?: AbortSignal) {
-  if (!signal?.aborted) return;
-  throw signal.reason instanceof Error ? signal.reason : new DOMException("The operation was aborted", "AbortError");
 }

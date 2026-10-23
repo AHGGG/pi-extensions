@@ -149,9 +149,9 @@ describe("R27/R28/R30: bounded source and privacy/search", () => {
     },
   );
   it("sanitizes complete terminal sequences before the query cap and lowercases once", () => {
-    expect(boundedSearch("\x1b]" + "hidden".repeat(10000) + "\x07Visible")).toBe("Visible");
+    expect(boundedSearch(`\x1b]${"hidden".repeat(10000)}\x07Visible`)).toBe("Visible");
     expect(boundedSearch("\x1b[31mVisible\x1b[0m")).toBe("Visible");
-    expect(searchNeedle("UPPER" + "x".repeat(1000000))).toHaveLength(512);
+    expect(searchNeedle(`UPPER${"x".repeat(1000000)}`)).toHaveLength(512);
     expect(searchNeedle("UPPER")).toBe("upper");
   });
 });

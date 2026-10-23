@@ -5,6 +5,14 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { createRuntimeBuilder } from "../../../scripts/runtime-builder.mjs";
 
 const forbiddenEagerInputs = [
+  "src/sync/continuous-sync.ts",
+  "src/sync/continuous-record.ts",
+  "src/sync/continuous-lease.ts",
+  "src/sync/continuous-watch.ts",
+  "src/sync/agent-runner.ts",
+  "src/sync/agent-plan.ts",
+  "src/sync/agent-candidate.ts",
+  "src/sync/agent-store.ts",
   "src/sync/setup-switch.ts",
   "src/sync/sync-operations.ts",
   "src/sync/sync-queries.ts",

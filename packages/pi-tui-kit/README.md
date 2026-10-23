@@ -15,7 +15,9 @@ Consumers reuse its navigation, rendering, cancellation, and mode adaptation ins
 - Adapts shared menu and interaction flows across Pi TUI and RPC modes without using plaintext fallback for secrets.
 - Handles interaction navigation, cancellation, disposal, horizontal framing, and width-safe rendering.
 - Provides standalone document review, multi-select, task, confirmation, questionnaire, live-choice, secret-input, and custom-interaction helpers.
+- Adds opt-in full-source Copy to review and exact browse-detail views without closing or confirming them.
 - Provides focused Mermaid Markdown, terminal-document, terminal-text, interaction-hint, editor-status-widget, horizontal-rule, and testing helpers.
+- Exposes bounded-frame row mappings and configured-key canonicalization without taking over native input routing.
 - Publishes built ESM and TypeScript declarations for independently installable extensions.
 
 ## 📦 Install
@@ -73,9 +75,9 @@ Declare Kit in that consumer so local hoisting cannot hide an incompatible or mi
 
 The default-aware selectors use an explicit API-admission exception for two convergent selection flows requested by the maintainer. Consumer migrations remain deferred, and each consumer retains default-setting persistence.
 
-Searchable review and browse-detail screens use an explicit pre-adoption API-admission exception.
-Review behavior converges in `pi-starship` configuration documents and `pi-recall` saved-message previews, while browse-detail behavior converges in `pi-tool` exact tool documents and `pi-analytics` detail catalogs.
-Those consumers cannot adopt the fields until this Kit minor is published, so this release keeps their compatibility floors unchanged and defers consumer migration.
+Starship configuration reviews, Recall's non-destructive saved-message preview, and Tool's exact detail documents use the already-published document-search contract. Analytics migration remains separate.
+
+Optional full-source Copy has two convergent consumer contracts: Starship raw/effective TOML and Tool exact schemas. This change prepares the Kit API and repository-only demo without migrating independently installable consumers to the unpublished copy API. Publish Kit before a later consumer-copy adoption.
 
 Masked secret entry uses the same pre-adoption exception for Sync's required credentials and Langfuse's optional blank-to-keep key flow.
 The shared API owns only a masked TUI draft and typed lifecycle result; credential validation, storage, and setup policy remain consumer-owned.
@@ -88,8 +90,13 @@ This release exposes and verifies the Kit API without changing that extension; `
 Standalone document review and multi-select are maintainer-requested pre-adoption APIs over existing standard-screen behavior.
 They add lifecycle and mode adapters without exposing component factories; this release does not migrate consumers or move domain state and persistence into Kit.
 
+Frame row metadata and configured-key canonicalization are prepared for the convergent Progress/Subagents frame wrappers and BTW/Notes configured-key syntax.
+Consumers keep their current implementations until the new Kit APIs are published; protocol-overlap, global shortcut availability, and a second paste parser remain deferred.
+The [native alignment audit](./docs/core-alignment-audit.md#shared-helper-alignment) records the API decisions and publication-dependent follow-up.
+
 Kit screens follow Pi's fullscreen input ownership rather than replacing its transcript controls.
 See [Fullscreen input and custom UI limits](./docs/api.md#fullscreen-input-and-custom-ui-limits) for paging, overlay focus, and program-status constraints.
+The [selector and host-input audit](./docs/core-alignment-audit.md) records corrections, retained contracts, native-renderer tests, and unverified terminal paths.
 
 ## ⚡ Runtime performance
 
@@ -121,17 +128,41 @@ The [API reference](./docs/api.md) contains the complete examples and contracts:
 - [Menus and standalone interactions](./docs/api.md#-complete-menu-example) — typed actions, document reviews, multi-selects, tasks, confirmations, live previews, masked secrets, questionnaires, and custom components.
 - [Default-aware selectors](./docs/api.md#searchable-default-aware-selectors) — searchable choices with current/default state and save-default shortcuts.
 - [Standard screens](./docs/api.md#-standard-screens) — actions, detail, browse, choice, settings, input, review, and multi-select.
+- [Full-source document copy](./docs/api.md#full-source-document-copy) — explicit owner callbacks, raw-source safety, key priority, draining, and TUI-only behavior.
 - [Runtime and modes](./docs/api.md#-runtime-and-mode-behavior) — TUI/RPC adaptation, result types, cancellation, and session ownership.
 - [Ownership boundary](./docs/api.md#-ownership-boundary) — what Kit owns and what each extension must keep local.
 - [Testing](./docs/api.md#-supported-testing-entrypoint) — the public `/testing` subpath and TUI/RPC harnesses.
 - [Mermaid Markdown transformers](./docs/api.md#mermaid-markdown-transformers) — lazy preparation, final-message transformation, fallback behavior, and lifecycle ownership.
 - [Public exports and compatibility history](./docs/api.md#-public-api) — helpers, types, focused subpaths, and API-version changes.
 - [Horizontal rules](./docs/api.md#-horizontal-rules) and [editor status widgets](./docs/api.md#-editor-status-widgets) — passive, width-safe presentation components.
+- [Bounded frames](./docs/api.md#bounded-frames) and [configured keys](./docs/api.md#configured-keys) — row mappings and key syntax helpers with caller-owned input policy.
 
 The consuming extension owns domain state, persistence, confirmations, and session signals.
 Abort owned work on replacement or shutdown, honor each supplied signal, and revalidate mutable state after every `await`.
 Keep raw action payloads separate from sanitized terminal display text.
+Opt-in Copy sends the original full source, which can include sensitive text or controls hidden by the preview; the consumer must supply its sensitivity policy and transport. Kit has no clipboard backend, and non-TUI modes never invoke Copy.
 Kit's UI lifecycle handling does not replace those responsibilities.
+
+## 🧪 Local showcase
+
+From the repository root, build Kit and start Pi with the local demo extension:
+
+```bash
+npm run showcase:tui-kit
+```
+
+You can also run `node packages/pi-tui-kit/scripts/showcase.mjs` directly.
+Both commands build Kit before starting Pi with automatic extension and skill loading disabled and session persistence off.
+Pi must be available on `PATH`; the launcher loads only the trusted repository demo, which runs with Pi's permissions.
+
+In Pi TUI mode, run `/tui-kit-showcase` without arguments to preview action, detail, browse, choice, settings, input, review, and multi-select screens.
+The menu also includes masked synthetic input, editable prefill, model/thinking selectors, theme/style samples, bounded task success/failure/cancellation, native pointer/overlay routing, and in-memory copy capture. It reopens after each standalone interaction. Runtime information identifies the local built Kit version, API version, and sanitized resolved module origin.
+All demo state stays in memory and resets on each command or session replacement. Save-default selector intent changes only demo state; no Pi settings or real session model changes occur. Enter only synthetic values in secret examples.
+The copy demo deliberately fails its first attempt, then captures exact synthetic source in memory; it never writes the system clipboard. Native examples do not replace Pi's renderer or layout. See the [showcase verification and release handoff](./docs/showcase-verification.md) for evidence, physical terminal steps, and unverified paths.
+RPC reports that TUI mode is required, while print and JSON modes reject the command without ad hoc output.
+The demo loads Kit only when the command runs and is not registered in the repository's default extension set.
+
+The launcher and demo source are repository-only files, not part of the published library.
 
 ## 🗂️ Package layout
 
@@ -142,7 +173,7 @@ packages/pi-tui-kit/
 │   ├── components/                    # Internal TUI adapters
 │   └── testing/                       # Public test-only drivers
 ├── dist/                              # Published ESM and TypeScript declarations
-├── scripts/build.mjs                  # Library builder
+├── scripts/                           # Library builder and repository-only showcase
 ├── docs/                              # Published reference documentation
 └── test/                              # Behavior and lifecycle coverage
 ```

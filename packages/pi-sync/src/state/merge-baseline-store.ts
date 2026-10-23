@@ -66,7 +66,7 @@ export async function stageMergeBaseline(
     return (
       !collisions.has(file.path) &&
       accepted.lastFileHashes[file.path] === file.sha256 &&
-      (file.path === "settings.json" || config.mergeContent) &&
+      (file.path === "settings.json" || config.mergeContent || (config.agentMode && isMergeTextPath(file.path))) &&
       eligible(file)
     );
   });
@@ -145,6 +145,24 @@ export async function readMergeAncestors(config: AnySyncConfig, state: SyncState
   }
   return record.files;
 }
+/** A no-op must not skip seeding or repairing ancestors required by later merges. */
+export async function hasCurrentMergeBaseline(config: AnySyncConfig, snapshot: Snapshot, state: SyncState) {
+  try {
+    const ancestors = await readMergeAncestors(config, state);
+    if (!ancestors) return false;
+    const hashes = new Map(ancestors.map((file) => [file.path, file.sha256]));
+    return snapshot.files.every(
+      (file) =>
+        !(file.path === "settings.json" || config.mergeContent || (config.agentMode && isMergeTextPath(file.path))) ||
+        !eligible(file) ||
+        hashes.get(file.path) === file.sha256,
+    );
+  } catch {
+    // Preserve the existing full path's validation and repair behavior for unknown evidence.
+    return false;
+  }
+}
+
 export async function readMergeAncestor(config: AnySyncConfig, state: SyncState, filePath: string) {
   const file = (await readMergeAncestors(config, state))?.find((file) => file.path === filePath);
   return file ? Buffer.from(file.contentBase64, "base64") : undefined;

@@ -1,9 +1,17 @@
-import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
+import { type ExtensionCommandContext, withFileMutationQueue } from "@earendil-works/pi-coding-agent";
 import { sanitizeTerminalText } from "@narumitw/pi-tui-kit/terminal-text";
 import { type PreviewMenuResult, showPreviewActionMenu } from "./command-preview.js";
-import { BUILT_IN_EXAMPLE, type LoadedStarshipConfig, loadStarshipConfig } from "./config.js";
+import {
+  assertConfigDocumentUnchanged,
+  BUILT_IN_EXAMPLE,
+  type ConfigDocumentSnapshot,
+  type LoadedStarshipConfig,
+  loadStarshipConfig,
+  readConfigDocumentSnapshot,
+} from "./config.js";
 import { serializeEffectiveConfig } from "./effective-config.js";
 import { presetForDocument } from "./presets/catalog.js";
+import { archiveConfigDocument } from "./profile-store.js";
 
 const RELOAD_ACTIONS = {
   apply: "apply",
@@ -13,6 +21,8 @@ const RELOAD_ACTIONS = {
 export interface WorkflowOwner {
   signal: AbortSignal;
   isCurrent(): boolean;
+  /** Session ownership independent of command cancellation and candidate/revision guards. */
+  isSessionCurrent?(): boolean;
 }
 
 export interface ConfigurationCommandOptions {
@@ -22,6 +32,7 @@ export interface ConfigurationCommandOptions {
   settingsPath: string;
   renderPreview?(loaded: LoadedStarshipConfig, width: number, ctx: ExtensionCommandContext): string[];
   read?: (settingsPath: string) => LoadedStarshipConfig;
+  archive?: typeof archiveConfigDocument;
 }
 
 export interface ConfigurationPresentation {
@@ -111,6 +122,12 @@ export function configurationMenuScreen(loaded: LoadedStarshipConfig) {
         description: "Review and preview remote TOML before replacing settings · requires gh",
         action: "gist-import" as const,
       },
+      {
+        id: "history",
+        label: "History",
+        description: "Review and restore recovery copies; legacy skill backups are read-only",
+        action: "history" as const,
+      },
     ],
     hint: "back" as const,
   };
@@ -141,6 +158,7 @@ export function effectiveConfigurationScreen(loaded: LoadedStarshipConfig) {
       "Normalized public TOML; comments and unknown fields are intentionally excluded.",
     ],
     content: serializeEffectiveConfig(loaded.config),
+    enableSearch: true,
     format: { kind: "code" as const, language: "toml" },
     viewportSize: "adaptive" as const,
     hint: "back" as const,
@@ -155,6 +173,7 @@ export function settingsDocumentScreen(loaded: LoadedStarshipConfig, settingsPat
       title: "Settings document",
       lines: ["Exact loaded UTF-8 text · display controls sanitized · read-only", `Path: ${path}`],
       content: loaded.rawDocument,
+      enableSearch: true,
       format: { kind: "code" as const, language: "toml" },
       viewportSize: "adaptive" as const,
       hint: "back" as const,
@@ -182,6 +201,13 @@ export async function reloadConfiguration(
   const previous = options.getLoaded();
   const revision = options.getLoadedRevision?.();
   const candidate = readReloadCandidate(options);
+  let disk: ConfigDocumentSnapshot;
+  try {
+    disk = readConfigDocumentSnapshot(options.settingsPath);
+  } catch (error) {
+    ctx.ui.notify(`Footer reload was blocked: ${safeError(error)}`, "error");
+    return "stay";
+  }
   if (!candidate.ok) {
     ctx.ui.notify(`Footer reload was blocked: ${safeError(candidate.error)}`, "error");
     return "stay";
@@ -210,47 +236,67 @@ export async function reloadConfiguration(
     "Apply configuration from disk?",
     candidate.loaded.rawDocument === undefined
       ? "Use built-in defaults for this session? No settings file will be created."
-      : "Apply the validated settings document to this session without changing its bytes?",
+      : "Apply the validated settings document to this session without changing its bytes? The previous loaded document will be kept in History.",
+    { signal: owner.signal },
   );
   if (!isCurrentOwner(owner) || activeRevisionChanged(options, revision) || !confirmed) {
     return "stay";
   }
 
-  const fresh = readReloadCandidate(options);
-  if (!fresh.ok) {
-    ctx.ui.notify(
-      `Footer reload was blocked after confirmation: ${safeError(fresh.error)}. The previous footer remains active.`,
-      "error",
-    );
-    return "stay";
-  }
-  if (!sameLoadedDocument(candidate.loaded, fresh.loaded)) {
-    ctx.ui.notify(
-      "The settings document changed after preview. The previous footer remains active; reload again to review the latest version.",
-      "warning",
-    );
-    return "stay";
-  }
-
+  let warnings = 0;
   try {
-    options.apply(fresh.loaded, ctx);
+    const applied = await withFileMutationQueue(options.settingsPath, async () => {
+      if (
+        !isCurrentOwner(owner) ||
+        activeRevisionChanged(options, revision) ||
+        !sameLoadedDocument(previous, options.getLoaded())
+      )
+        return false;
+      assertConfigDocumentUnchanged(options.settingsPath, disk);
+      const fresh = readReloadCandidate(options);
+      if (!fresh.ok) throw new Error(fresh.error);
+      if (!sameLoadedDocument(candidate.loaded, fresh.loaded)) {
+        throw new Error(
+          "The settings document changed after preview. The previous footer remains active; reload again to review the latest version.",
+        );
+      }
+      let recoveryPath: string | undefined;
+      const previousBytes = previous.rawBytes ?? previous.rawDocument;
+      if (previousBytes !== undefined) {
+        recoveryPath = (options.archive ?? archiveConfigDocument)(options.settingsPath, previousBytes).path;
+      }
+      assertConfigDocumentUnchanged(options.settingsPath, disk);
+      if (!isCurrentOwner(owner) || activeRevisionChanged(options, revision)) return false;
+      try {
+        options.apply(fresh.loaded, ctx);
+      } catch (error) {
+        let rollbackError: unknown;
+        try {
+          if (!isCurrentOwner(owner)) throw new Error("The session owner changed; stale restoration was blocked");
+          const current = options.getLoaded();
+          if (!sameLoadedDocument(current, previous) && !sameLoadedDocument(current, fresh.loaded))
+            throw new Error("The active runtime changed; stale restoration was blocked");
+          options.apply(previous, ctx);
+        } catch (rollback) {
+          rollbackError = rollback;
+        }
+        throw new Error(
+          `Footer reload failed: ${formatError(error)}. ${
+            rollbackError
+              ? `Restoring the previous configuration also failed: ${formatError(rollbackError)}.`
+              : "The previous configuration was restored."
+          }${recoveryPath ? ` Recovery copy retained: ${recoveryPath}.` : ""}`,
+        );
+      }
+      warnings = fresh.loaded.diagnostics.length;
+      return true;
+    });
+    if (!isCurrentOwner(owner) || !applied) return "stay";
   } catch (error) {
-    let rollbackError: unknown;
-    try {
-      options.apply(previous, ctx);
-    } catch (rollback) {
-      rollbackError = rollback;
-    }
-    ctx.ui.notify(
-      rollbackError
-        ? `Footer reload failed: ${safeError(error)}. Restoring the previous configuration also failed: ${safeError(rollbackError)}.`
-        : `Footer reload failed: ${safeError(error)}. The previous configuration was restored.`,
-      "error",
-    );
+    if (isCurrentOwner(owner))
+      ctx.ui.notify(`Footer reload was blocked after confirmation: ${safeError(error)}`, "error");
     return "stay";
   }
-
-  const warnings = fresh.loaded.diagnostics.length;
   ctx.ui.notify(
     warnings === 0
       ? "Footer configuration reloaded and applied."

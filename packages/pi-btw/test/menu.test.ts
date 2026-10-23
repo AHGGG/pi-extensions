@@ -2,13 +2,13 @@ import assert from "node:assert/strict";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { stripVTControlCharacters } from "node:util";
 import type { Api, Model } from "@earendil-works/pi-ai";
 import { type ExtensionCommandContext, initTheme } from "@earendil-works/pi-coding-agent";
 import { KeybindingsManager, TUI_KEYBINDINGS, visibleWidth } from "@earendil-works/pi-tui";
 import { createTuiHarness } from "@narumitw/pi-tui-kit/testing";
 import { test, vi } from "vitest";
 import { createMockContext } from "../../../test/support.js";
+import { plainTuiText as stripVTControlCharacters } from "../../../test/tui-text.js";
 import { runBtwMenuPreservingEditor, showBtwCommandMenu } from "../src/menu.js";
 import { BTW_SETTINGS_FILE } from "../src/settings.js";
 

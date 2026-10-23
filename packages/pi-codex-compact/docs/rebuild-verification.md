@@ -1,58 +1,31 @@
-# Compaction rebuild verification
-
-Historical verification record from before background extraction. Current background controls and logging belong to the separate pi-background-compaction extension; the old settings examples below are not current core configuration.
+# Compaction engine rebuild verification
 
 ## Scope
 
-The rebuild starts from upstream `c8fae75a81f08aecdb6000767b92dcb53634e298`. The original fork tip is `d3108382feee0874c8389f0bd785dd8a46698e89`. Four rebuilt commits end at `0ba6ca5e25b6e8fbc32148a1dd04851be6adb096`; reconciliation commit `c4c69250738093e10cf467539eec7d5a7ad65c8d` preserves the original fork history. Integration uses a normal merge, not a reset or force push.
+The October 23, 2026 rebuild reconciles upstream `ecf221ec37952c882d23f2807be01d449bc7154f` with the published fork `45a170c8113cf9596f360b169a13504179d10649`. A normal merge preserves both histories; no force push or package publication is part of this change.
 
-The OAuth/timeout and warm-ahead changes reuse the existing package-scoped implementations on the newer upstream base. The targeted correction adds a stable ordinary-work replay boundary while preserving the existing bounded continuation scheduler. It does not delete maintenance output, decrypt checkpoints, create a second scheduler, or change the recovery policy.
+Retained fork behavior includes OAuth-aware routing, the 900,000 ms timeout option, ordinary-work checkpoint/tool replay, bounded continuation refinements, working-set validation and reduced historical copying, a generic prepared-compaction interface, and the fork release guard. Upstream same-provider model portability and issuing-provider plaintext transfer are preserved. Transfer cancellation, stale ownership, and reentrant publication callbacks receive focused regression coverage.
 
-The handoff prompt is present in the inspected source. The explanation that a resumed model request mistakes the handoff for the task remains a working hypothesis, not a reproduced hosted-model finding.
+The engine contains no scheduling settings, threshold policy, ready notifications, pause/resume controller, or named consumer dependency. The obsolete `/codex-compact resume` migration route is removed. Consumers own their commands and setup instructions. The [prepared-compaction interface](prepared-compaction-protocol.md) remains optional, extension-neutral, and versioned.
 
-## Final checks and owner testing decision
+## Verification
 
-On October 16, 2026, the owner requested that integration continue so they could test the final extension. Full repository checks and hosted-model behavior remain unverified; integration for owner testing must not be described as a fully validated release.
+The implementation was checked on Linux x64 / Node 24.19.0. Repository checks use the lockfile's Pi 1.3.0 peers; independent integration and package-loading checks use official Pi 1.4.0.
 
-Seven replay tests passed against the complete production `protocol.ts` and `checkpoint-replay.ts` modules. Their source bytes and the original test file were checked against Git blob hashes before execution. TypeScript 5.8.3 transpiled the files; only the test runner import was adapted from Vitest to `node:test`. No production function or assertion was substituted. The same two production modules also passed an isolated strict TypeScript check. These results are narrower than `npm run check`, the complete Vitest suite, or a Pi runtime smoke.
+- `npm run check`: passed, including builds, Biome, package boundaries, and workspace typechecks.
+- Core compaction tests: 694 passed across 34 files, no unhandled errors. Four old replay assertions were updated to require the already-intended exact work boundary after unchanged ciphertext, rather than weakening production behavior.
+- Independent compatible-consumer tests on Pi 1.4.0: 185 passed, including native settled/input application boundaries; 36 consumer unit tests and its check passed.
+- Production-only tarball checks: four Jiti lifecycle/reload/lazy-menu cases passed and four actual Pi RPC startup/get-state/get-commands cases passed, covering the engine alone, consumer alone, and both load orders.
+- Generic engine memory harness: three fresh processes, 64 MiB archived history, four cycles each, twelve synthetic requests total; all preparation, draft, cancellation, and cleanup assertions passed. Released heap was approximately 0.78 MiB above the fixture baseline after four cycles. This is a bounded synthetic result, not a leak-proof or Windows measurement.
 
-Verified source blobs:
+The full monorepo `npm test` passed its build and test TypeScript compilation, then was stopped at the 300-second limit (exit 124) with failures in unchanged upstream suites; the aggregate gate is **incomplete and not green**. Observed failures include local-socket tests in Fleet/Herdr (sandbox listen restrictions), dependency-installation policy tests (this container uses npm 11 rather than upstream's npm 12 development policy), and a Langfuse isolated-runtime test. Two Caffeinate tests failed with no `SHELL` environment variable; rerunning that package with `SHELL=/bin/bash` passed all 39 tests without source changes. These results do not justify changing unrelated upstream code or reporting a full pass.
 
-- `src/protocol.ts`: `460cd9e13a7bc1e4d6240a3162a50debd0da0cae`
-- `src/checkpoint-replay.ts`: `debfba1d576ccb8e1131cd7a0a3b355994057774`
-- `test/checkpoint-replay.test.ts`: `66abe125a0b7498a0948f7e6a8ad35a137250d05`
+The upstream `.node-version` is 26.11.1, but the root, compaction, and Kit manifests impose no Node engine restriction. The independent Node 24 / Pi 1.4 runtime smokes are separate evidence from upstream development-tool policy tests.
 
-The tests cover intact checkpoint history, newer-message order, stable prefixes, maintenance separation, tool-call pairing, legacy OK output, and fail-closed marker validation. Earlier preparation used protocol excerpts; the final rerun above used the full modules. Existing saved-session and custom-API test expectations were reviewed for the added boundary, but their Pi-dependent suites were not executed here.
+## Limits and owner testing
 
-Dependency installation, full builds, repository typechecks and lint, Pi/Vitest suites, package-load smoke, and hosted-model smoke could not run in this environment. Fresh attempts could not resolve `github.com` or `registry.npmjs.org`; repository Actions inspection returned no runs. An empty CI list is not a passing result.
+No live provider requests were made. Mocked payload tests prove serialization and safety contracts, not hosted acceptance, tool use, or model compliance. Windows, real-account OAuth refresh, long-running WebSocket disconnects, and the owner's resumed-session tool visibility remain unverified. Same-login OAuth token refresh can still invalidate a prepared result; this rebuild does not change that binding policy.
 
-The inherited main-push workflow could enter package versioning or publishing. A repository guard now permits the release-selection job only in `narumiruna/pi-extensions`; downstream version, pack, and publish jobs depend on it. The fork retains the CI job without enabling upstream package releases. No package publication, release tag, credential change, or user-machine settings change is part of this work.
+Update the installed Git package while preserving existing resource filters, then restart Pi. Exercise a harmless read-only tool request after manual compaction, automatic compaction, and saved-session resume. Confirm actual tool execution, not merely an assistant's claim that tools exist. Consumers should be tested separately for their own scheduling controls.
 
-## Remaining verification
-
-Read root `AGENTS.md`, `docs/extension-conventions.md`, and `docs/extension-settings.md`, then inspect the actual scripts with `npm run`. Use the repository's required Node version and dependency installation policy. Run `npm run check` and `npm test` separately; ensure the compaction package suite is included, not skipped by affected-test selection. Rebuild Pi TUI Kit before consumer tests and do not run its build concurrently with root checks.
-
-Verify actual Pi lifecycle paths for automatic threshold and overflow compaction, a tool turn, queued user or custom work, repeated compaction, manual compaction, cancellation, session replacement, and saved-checkpoint reload/resume/fork. Check both the ordinary-work boundary and exact request counts. Confirm that maintenance/recovery requests do not receive the work boundary and that new user instructions remain later in the payload. Do not weaken unrelated tests merely to get a passing gate.
-
-Use a controlled task confined to a temporary directory for a hosted-model test. Confirm that after automatic compaction the model performs the next task step rather than merely producing another handoff. Check completed, cancelled, and blocked tasks separately. Stop after one clear entitlement failure. Do not expose credentials, use an unrelated provider, or claim that a mock proves hosted-model behavior.
-
-Refresh both remotes before further integration and reconcile newer commits without resetting either history. Record any additional checks against the exact tested revision. Preserve the release guard and do not publish packages or create release tags without explicit approval.
-
-## Settings and diagnosis
-
-Update the installed Git package, preserving the existing resource filter, then restart Pi:
-
-```sh
-pi update git:github.com/AHGGG/pi-extensions@main
-```
-
-The extension reads `<getAgentDir()>/pi-codex-compact.json`, normally `~/.pi/agent/pi-codex-compact.json`. The timeout default remains five minutes, with fifteen minutes supported. Pi's separate `httpIdleTimeoutMs` does not set this extension field. To choose fifteen minutes and logs, merge these fields into the existing extension settings rather than replacing other preferences:
-
-```json
-{
-  "requestTimeoutMs": 900000,
-  "logCompaction": true
-}
-```
-
-Warm-ahead remains off by default, with a configurable preparation threshold of 65%. Test ordinary automatic compaction first, then enable warm-ahead for a separate test. Manual `/compact` does not exercise the automatic-continuation path. Saved logging choices use the existing persistence mechanism. Continuation notices report request preparation or scheduling decisions, not proof of completed coding work.
+The timeout default remains five minutes; `requestTimeoutMs: 900000` is supported in `pi-codex-compact.json`. Pi's separate `httpIdleTimeoutMs` does not set this extension field. Unknown settings are preserved rather than automatically deleted.

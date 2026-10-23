@@ -4,6 +4,7 @@ import type { SessionBeforeCompactEvent, SessionEntry } from "@earendil-works/pi
 import { test } from "vitest";
 import { createMockContext, createMockPi } from "../../../test/support.js";
 import { checkpointMarker, createCheckpointDetails, fallbackSummary } from "../src/checkpoint.js";
+import { COMPACTION_WORK_REPLAY_MESSAGE } from "../src/checkpoint-replay.js";
 import { createCodexCompactExtension } from "../src/codex-compact.js";
 import {
   type CodexCompactSettings,
@@ -214,7 +215,12 @@ for (const protocol of ["auto", "responses-compact", "remote-v2"] as const) {
       },
       h.ctx,
     );
-    assert.deepEqual(replay, { input: [{ type: "compaction", encrypted_content: "existing-opaque" }] });
+    assert.deepEqual(replay, {
+      input: [
+        { type: "compaction", encrypted_content: "existing-opaque" },
+        { role: "developer", content: [{ type: "input_text", text: COMPACTION_WORK_REPLAY_MESSAGE }] },
+      ],
+    });
   });
 }
 

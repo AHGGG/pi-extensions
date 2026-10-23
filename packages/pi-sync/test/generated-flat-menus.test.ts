@@ -16,7 +16,7 @@ import { v3S3Settings } from "./helpers.js";
 
 initTheme("dark", false);
 
-test("package-directory Jiti smoke exercises flat main, Settings, cancelled Pull/Push, and History", async () => {
+test("package-directory Jiti smoke exercises grouped Settings, manager, cancelled Pull/Push, and History", async () => {
   const root = await mkdtemp(join(tmpdir(), "pi-sync-flat-smoke-"));
   const agentDir = join(root, "agent");
   const previous = process.env.PI_CODING_AGENT_DIR;
@@ -71,12 +71,18 @@ test("package-directory Jiti smoke exercises flat main, Settings, cancelled Pull
             }
             tui.press("tui.select.confirm");
           }
-        } else if (frame.includes("Pi Sync Settings")) {
-          tui.send("\u001b[200~Show status\u001b[201~");
+        } else if (frame.split("\n").includes("Pi Sync Settings")) {
+          for (let index = 0; index < 4; index++) tui.press("tui.select.down");
+          tui.press("tui.select.confirm");
+        } else if (frame.includes("Pi Sync Settings ·")) {
+          tui.send("\u001b[200~Show sync status\u001b[201~");
           frames.push(tui.render().join("\n"));
           tui.press("ctrl+c");
+        } else if (frame.includes("Preparing push preview")) {
+          // Let the loader reach the generated directional-review boundary; its
+          // separate custom host below cancels before publication.
         } else {
-          // Cancel preparation before any apply/publication; all remote traffic is loopback.
+          // Cancel Pull preparation or the actual Push review; traffic is loopback.
           tui.press("ctrl+c");
         }
         return await result;
@@ -94,7 +100,8 @@ test("package-directory Jiti smoke exercises flat main, Settings, cancelled Pull
       frames.join("\n\n") + JSON.stringify(context.notifications),
     );
     assert.ok(frames.some((frame) => frame.includes("Preparing push preview")));
-    assert.ok(frames.some((frame) => frame.includes("Show status") && !frame.includes("Included content")));
+    assert.ok(frames.some((frame) => frame.includes("Push pi settings?") && frame.includes("No, cancel")));
+    assert.ok(frames.some((frame) => frame.includes("Show sync status") && !frame.includes("Included paths")));
     assert.equal(await readFile(join(agentDir, "pi-sync.json"), "utf8"), bytes);
 
     const rpcChoices = ["History", undefined];

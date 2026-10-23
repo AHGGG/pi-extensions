@@ -16,7 +16,7 @@ const currentOwner = {
   isCurrent: () => true,
 };
 
-test("Configuration exposes six focused actions under seven top-level goals", async () => {
+test("Configuration exposes recovery history alongside the retained actions", async () => {
   const root = mkdtempSync(join(tmpdir(), "pi-starship-configuration-menu-"));
   const path = join(root, "pi-starship.toml");
   const raw = "# retained comment\nformat = '$model'\nfuture = true\n";
@@ -54,6 +54,7 @@ test("Configuration exposes six focused actions under seven top-level goals", as
     assert.match(configuration, /Reload from disk…/u);
     assert.match(configuration, /Share settings as Gist…/u);
     assert.match(configuration, /Import settings from Gist…/u);
+    assert.match(configuration, /History/u);
 
     tui.press("tui.select.down");
     tui.press("tui.select.confirm");
@@ -484,7 +485,7 @@ test("Reload rejects disk and active-state changes after preview", async () => {
     tui.press("tui.select.confirm");
     assert.equal(await running, "stay");
     assert.equal(applied, 0);
-    assert.match(staleDisk.notifications.at(-1)?.message ?? "", /changed after preview/u);
+    assert.match(staleDisk.notifications.at(-1)?.message ?? "", /changed concurrently.*newer file was preserved/u);
 
     writeFileSync(path, "format = '$provider'\n");
     let revision = 1;

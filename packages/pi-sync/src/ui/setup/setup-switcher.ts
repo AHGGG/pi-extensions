@@ -129,6 +129,8 @@ export async function showSetupSwitcher(
       `Included content: ${config.include.length} paths`,
       `Automatic sync: ${automaticSyncSummary(config.automatic)} · Sessions: ${config.include.includes("sessions") ? "On" : "Off"}`,
       `Automatic transfer at startup: ${config.automaticTransfer ? "On — may upload, replace, or delete selected files; no reload" : "Off"}`,
+      `Agent mode: ${config.agentMode ? "On (experimental; autonomous merged sync)" : "Off"}`,
+      `Continuous sync: ${config.continuous ? (config.agentMode ? "On (experimental; recurring requests and transfers)" : "Saved On; paused until Agent mode is enabled") : "Off"}`,
       "",
       switchEffect,
     ].join("\n"),

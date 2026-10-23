@@ -26,7 +26,7 @@ const cases: Record<string, SnapshotApplyPlan> = {
     writes: [write(p("foo/a.md"), "first"), write(p("foo/a.md"), "second")],
   },
   "lexical-alias": {
-    deletes: [root + path.sep + "alias" + path.sep + ".." + path.sep + "foo"],
+    deletes: [`${root}${path.sep}alias${path.sep}..${path.sep}foo`],
     writes: [write(p("foo")), write(p("foo/a.md"))],
   },
   "case-and-unicode": { deletes: [p("Folder"), p("é")], writes: [write(p("folder/a.md")), write(p("e\u0301/b.md"))] },

@@ -99,7 +99,7 @@ Back returns to the main menu; Ctrl+C closes the flow.
 
 Direct routes remain available, with autocomplete:
 
-- `/progress clear` hides the widget and cancels its completion-summary timer in TUI or RPC mode. Saved progress remains unchanged; the next update, branch navigation, or session start can show it again.
+- `/progress clear` hides the widget and cancels its completion-summary timer in TUI or RPC mode. Saved progress remains unchanged; the next update or branch navigation can show it again, and session start can show incomplete progress again.
 - `/progress settings` opens the display settings screen in TUI mode. RPC mode reports the settings path for manual editing.
 
 Unknown subcommands and trailing arguments show usage without changing state.
@@ -169,6 +169,8 @@ In TUI mode, the widget appears above the editor and starts with a full-width th
 Adaptive mode uses up to one third of terminal height, bounded between four and twelve rows.
 It prioritizes the in-progress step, blocked steps, and pending steps before summarizing completed or hidden rows.
 Completing every non-empty step shows a three-second summary, then hides the widget without clearing session state.
+Session start keeps a fully completed snapshot hidden and does not replay that summary.
+Tree navigation still shows the completed branch, and a later update that is not already complete shows the widget again.
 Updates, clears, tree navigation, replacement, and shutdown cancel stale summaries.
 RPC mode publishes progress and completion summaries as string-line snapshots at 80 columns using the default 36-row budget because Pi does not expose client dimensions.
 Print and JSON modes retain structured tool behavior without creating a widget.

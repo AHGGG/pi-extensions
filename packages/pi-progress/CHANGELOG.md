@@ -2,6 +2,24 @@
 
 This changelog retains the published `@narumitw/pi-todo` predecessor history below the first `pi-progress` release.
 
+## 0.6.2
+
+### Patch Changes
+
+- 9f80b89: Reuse published Kit interaction ownership for native Progress and Subagents settings while preserving ordered saves, rollback, and durable-save recovery after the screen closes.
+  
+  Share passive widget framing in Subagents, Tool, Plan Mode, and Cache Hit Monitor. Keep domain rendering and lifecycle ownership local, bound narrow and invalid widths, and retain lazy loading of Kit menus and other interactive APIs.
+- Updated dependencies [077137a]
+- Updated dependencies [9f80b89]
+- Updated dependencies [efc474c]
+  - @narumitw/pi-tui-kit@0.66.0
+
+## 0.6.1
+
+### Patch Changes
+
+- e39afe6: Keep a fully completed progress widget hidden when a session starts again. Startup, resume, fork, and reload no longer replay the completion summary or reopen that snapshot; saved progress, tree navigation, and later incomplete updates are unchanged.
+
 ## 0.6.0
 
 ### Minor Changes

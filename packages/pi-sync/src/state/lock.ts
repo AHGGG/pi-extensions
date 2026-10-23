@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import lockfile from "proper-lockfile";
 import type { CommandOptions } from "../commands/command-types.js";
+import { throwIfAborted } from "../sync/signals.js";
 import { LOCK_GUARD_STALE_MS, LOCK_GUARD_UPDATE_MS } from "./lock-policy.js";
 import { LOCKFILE_FS_ADAPTER } from "./lockfile-fs.js";
 import type { LockFile } from "./state-types.js";
@@ -57,8 +58,11 @@ export async function withLock<T>(
       inspection = { status: "missing" };
     }
     if (inspection.status === "valid") {
-      throw new Error(
-        `pi-sync is already running (${inspection.lock.command}, pid ${inspection.lock.pid}, started ${inspection.lock.startedAt}).`,
+      throw Object.assign(
+        new Error(
+          `pi-sync is already running (${inspection.lock.command}, pid ${inspection.lock.pid}, started ${inspection.lock.startedAt}).`,
+        ),
+        { code: "ELOCKED" },
       );
     }
     if (inspection.status === "unreadable") {
@@ -220,11 +224,6 @@ async function unlockGuarded(ctx: ExtensionCommandContext, options: CommandOptio
   }
 }
 
-function throwIfAborted(signal?: AbortSignal) {
-  if (!signal?.aborted) return;
-  throw signal.reason instanceof Error ? signal.reason : new DOMException("The operation was aborted", "AbortError");
-}
-
 async function releaseGuard(guard: Guard) {
   try {
     await guard.release();
@@ -261,11 +260,15 @@ async function describeHeldLock() {
     return new Error("pi-sync lock owner exited; retry shortly while the lock guard expires.");
   }
   if (current) {
-    return new Error(
-      `Pi-sync is currently running (${current.command}, pid ${current.pid}, started ${current.startedAt}).`,
+    return Object.assign(
+      new Error(`Pi-sync is currently running (${current.command}, pid ${current.pid}, started ${current.startedAt}).`),
+      { code: "ELOCKED" },
     );
   }
-  return new Error("Pi-sync is currently running (lock metadata is unreadable or still being written).");
+  return Object.assign(
+    new Error("Pi-sync is currently running (lock metadata is unreadable or still being written)."),
+    { code: "ELOCKED" },
+  );
 }
 
 function isLockHeldError(error: unknown) {

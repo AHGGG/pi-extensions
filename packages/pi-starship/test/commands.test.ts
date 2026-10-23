@@ -684,10 +684,10 @@ test("Restore previews, confirms, and atomically applies the built-in footer", a
     assert.match(restorePreview, /Current: Custom configuration/u);
     assert.match(restorePreview, /entire settings document/iu);
     assert.match(restorePreview, /unknown fields/iu);
-    assert.match(restorePreview, /No backup/iu);
+    assert.match(restorePreview, /previous document.*History/isu);
     assert.match(restorePreview, /\$brand\$model/u);
-    assert.match(confirmation, /All custom settings, unknown fields, and comments will be removed/u);
-    assert.match(confirmation, /No backup is kept after success/u);
+    assert.match(confirmation, /All custom settings, unknown fields, and comments will be replaced/u);
+    assert.match(confirmation, /previous document will be kept in History/u);
     assert.doesNotMatch(restorePreview, /░▒▓|/u);
     assert.equal(applied, 1);
     assert.equal(readFileSync(path, "utf8"), BUILT_IN_EXAMPLE);

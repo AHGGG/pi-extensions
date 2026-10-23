@@ -7,6 +7,7 @@ import { snapshotOptionsForContext } from "../snapshot/session-paths.js";
 import { createSnapshot, scanSnapshot } from "../snapshot/snapshot.js";
 import type { SnapshotOptions } from "../snapshot/snapshot-types.js";
 import { inspectLock, isLockGuardHeld, isStaleLock, withLock } from "../state/lock.js";
+import { readStateForConfig } from "../state/sync-state-store.js";
 import { formatDiff, formatSnapshotOnlyDiff, publicationCapabilityDescription } from "../ui/sync-format.js";
 import { setSyncStatus } from "../ui/sync-status.js";
 import { safeTerminalText } from "../ui/terminal-text.js";
@@ -35,6 +36,10 @@ export async function status(
   );
   throwIfAborted(options.signal);
 
+  const continuous = config.continuous
+    ? await (await import("./continuous-record.js")).continuousStatusLines(config)
+    : [];
+  throwIfAborted(options.signal);
   const remoteText = head ? `remote: ${head.snapshotId} from ${head.machine} at ${head.createdAt}` : "remote: empty";
   const warnings = syncSessionsWarnings(config);
   setSyncStatus(ctx, undefined);
@@ -46,6 +51,7 @@ export async function status(
       `publication safety: ${publicationCapabilityDescription(capability)}`,
       `included content: ${config.include.join(", ") || "none"}`,
       `sessions: ${config.include.includes("sessions") ? "included" : "excluded"}`,
+      ...continuous,
       remoteText,
       formatRemoteSelectionStatus(selectionState),
       `local files: ${localFiles}`,
@@ -185,8 +191,15 @@ export async function history(
   const backend = await factory(config);
   const snapshots = (await backend.listHistory(options.signal)).slice(-20).reverse();
   throwIfAborted(options.signal);
+  const lastApplied = await readStateForConfig(config)
+    .then((state) => state.lastAppliedSnapshot)
+    .catch(() => undefined);
+  throwIfAborted(options.signal);
+  const appliedDetails = lastApplied
+    ? `Last applied snapshot ID: ${safeTerminalText(lastApplied)}\nApplication time: unavailable. Snapshot dates are creation times.`
+    : "Last applied snapshot ID: unavailable.";
   if (snapshots.length === 0) {
-    ctx.ui.notify("No remote pi-sync history found.", "info");
+    ctx.ui.notify(`No remote pi-sync history found.\n${appliedDetails}`, "info");
     return;
   }
 
@@ -197,7 +210,7 @@ export async function history(
         `${index + 1}. ${item.createdAt} · ${safeTerminalText(item.machine)} · ${item.snapshotId}${item.snapshotId === currentSnapshot ? " (current)" : ""}${item.syncSessions ? " · sessions" : ""}`,
     );
     const selected = await ctx.ui.select(
-      `History for sync setup “${safeTerminalText(config.setupName)}”\n\nChoose a snapshot to preview rollback.`,
+      `History for sync setup “${safeTerminalText(config.setupName)}”\n\n${appliedDetails}\n\nChoose a snapshot to preview rollback.`,
       [...labels, "Back"],
       { signal: options.signal },
     );
@@ -215,7 +228,10 @@ export async function history(
     return;
   }
   ctx.ui.notify(
-    snapshots.map((item) => `${item.snapshotRef} ${item.createdAt} ${safeTerminalText(item.machine)}`).join("\n"),
+    [
+      appliedDetails,
+      ...snapshots.map((item) => `${item.snapshotRef} ${item.createdAt} ${safeTerminalText(item.machine)}`),
+    ].join("\n"),
     "info",
   );
 }

@@ -1,5 +1,15 @@
 # @narumitw/pi-herdr
 
+## 0.3.2
+
+### Patch Changes
+
+- 419a94c: Refresh the agent widget from authoritative reads on pane and workspace updates, without replaying stale events or retaining cleared presentation fields. Validate reporting acknowledgements, recover safely from lost events, and drain session-owned reporting during shutdown while leaving native ownership and restore behavior unchanged.
+- Updated dependencies [077137a]
+- Updated dependencies [9f80b89]
+- Updated dependencies [efc474c]
+  - @narumitw/pi-tui-kit@0.66.0
+
 ## 0.3.1
 
 ### Patch Changes

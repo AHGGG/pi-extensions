@@ -5,8 +5,10 @@
 - [Horizontal rules](#-horizontal-rules)
 - [Editor status widgets](#-editor-status-widgets)
 - [Bounded frames](#bounded-frames)
+- [Configured keys](#configured-keys)
 - [Complete menu example](#-complete-menu-example)
 - [Standalone interactions](#standalone-tasks)
+- [Full-source document copy](#full-source-document-copy)
 - [Searchable default-aware selectors](#searchable-default-aware-selectors)
 - [Mermaid Markdown transformers](#mermaid-markdown-transformers)
 - [Standard screens](#-standard-screens)
@@ -97,6 +99,41 @@ A full frame contains the rule, title, context, a blank separator before nonempt
 Compact layout reserves a hint row when `compactHint` is nonempty and at least two body rows remain, then retains priority content, one title row, full hints when they fit, neighboring content, and context. `compactHints` can replace full hints during compact rendering, for example to include an overflow count. Rules remain when at least five total rows are available. Static frames prioritize context at one row. Output retains original row order.
 
 Width and row budgets are floored and clamped to zero; non-finite values normalize to zero. A zero row budget returns no rows. Every line is truncated by terminal cells, without an ellipsis. The helper preserves ANSI styling, does not sanitize or wrap rows, and holds no cached theme or dimension state. Sanitize raw values before wrapping or styling, and rebuild rows after resize or theme changes.
+
+### Frame row mapping
+
+Use `renderBoundedFrameLayout()` when a custom wrapper needs to route normalized mouse coordinates after height clipping. It uses the same layout as `renderBoundedFrame()` and returns `BoundedFrameLayout`: `lines` plus `contentRows`, an array of `BoundedFrameContentRow` mappings.
+
+```ts
+import { renderBoundedFrameLayout } from "@narumitw/pi-tui-kit";
+
+const frame = renderBoundedFrameLayout({
+  width: 40, maxRows: 5, rule: "─".repeat(40), title: ["Settings"],
+  content: ["First setting", "Focused setting", "Description"],
+  priorityRows: [1], focusedRow: 1,
+});
+const nativeRows = new Map(frame.contentRows.map(({ frameIndex, contentIndex }) => [frameIndex, contentIndex]));
+// In handleMouse(event), nativeRows.get(event.y) identifies the retained content row.
+```
+
+Both indexes are zero-based. `contentIndex` always refers to the original `content` array, not a setting or selection item. `frameIndex` refers to the returned `lines`. Titles, rules, context, hints, and inserted separator rows have no mapping. Blank content rows are mapped in full layouts but omitted when compacting; duplicate text never merges row identities. A zero-width layout can retain row mappings while its lines are empty. A zero-height layout has neither lines nor mappings.
+
+Rebuild the map after each render or resize and clear stale geometry on invalidation or input changes. The caller still validates bounds, translates coordinates, preserves native press/click/drag semantics, and owns focus and terminal reservations. This API does not sanitize content or create a mouse router.
+
+## Configured keys
+
+Use `canonicalizeConfiguredKey(value)` to validate a configured key identifier and obtain a canonical `KeyId`, or `undefined` for an invalid value. It normalizes case to native `KeyId` spelling (including `pageUp` and `pageDown`), normalizes `esc`/`return` aliases, and orders modifiers while retaining literal `+` keys such as `ctrl++`. It rejects invalid or repeated modifiers and unsupported base/modifier combinations; it does not trim or repair input.
+
+```ts
+import { canonicalizeConfiguredKey } from "@narumitw/pi-tui-kit";
+
+const key = canonicalizeConfiguredKey("ALT+CTRL++"); // "ctrl+alt++"
+const invalid = canonicalizeConfiguredKey("ctrl+ctrl+x"); // undefined
+```
+
+This is configured-key syntax, not raw terminal-event decoding. Use Pi's `matchesKey()` or the injected keybinding manager for dispatch. Canonical equality does not establish input equivalence, conflict freedom, availability, or reachability. Native legacy aliases, logical/physical shifted symbols, keyboard layouts, terminal modes, and earlier listeners can give different names the same input.
+
+Protocol-overlap and global availability helpers remain deferred: arbitrary byte strings accepted by the native matcher are not the same contract as keys a terminal can produce. Each caller retains its blockers, action priority, fallback selection, paste exclusions, and host integration policy. Kit's internal hint filtering is not a public dispatch contract.
 
 ## 🧭 Complete menu example
 
@@ -264,11 +301,47 @@ Before opening a TUI Markdown review with an enabled top-level Mermaid fence, it
 Mermaid preparation remains internal; callers receive no renderer or component factory.
 
 TUI Escape and Ctrl+C return typed `cancelled` results with Back and Close reasons.
-When `confirmation` is omitted, the document is read-only and can only be cancelled.
+When `confirmation` is omitted, no action can confirm the document; optional Copy stays in the same view.
 RPC uses the authoritative sanitized document pages, optional confirmation, and signal-aware `select()` dialogs; TUI-only search is ignored.
 Print and JSON return `unsupported`.
 Owner abort, stale ownership, external disposal, invalid options, and failures remain distinct `stale` or `error` results.
 The caller owns every confirmed side effect and must revalidate domain state before applying it.
+
+### Full-source document copy
+
+Set optional `copy: { label, onCopy }` on a `ReviewScreen`, exact `BrowseDetailDocument`, or `RunDocumentReviewOptions`. The same TUI implementation runs the action in place; Copy does not confirm, navigate, or add a completion result. Omit it to retain existing behavior. Legacy browse `details` arrays have no exact-source copy contract.
+
+```ts
+import type { DocumentCopyAction } from "@narumitw/pi-tui-kit/document-review";
+import { runDocumentReview } from "@narumitw/pi-tui-kit/document-review";
+
+// The owner decides what is safe to expose and supplies its clipboard transport.
+declare function copyApprovedSource(content: string, signal: AbortSignal): Promise<void>;
+const copy: DocumentCopyAction = {
+  label: "Copy raw TOML",
+  onCopy: ({ content, signal }) => copyApprovedSource(content, signal),
+};
+
+await runDocumentReview(ctx, {
+  title: "Raw settings",
+  content: rawToml,
+  format: { kind: "code", language: "toml" },
+  enableSearch: true,
+  copy,
+  signal: currentSessionSignal(),
+  isCurrent: () => generation === currentGeneration(),
+});
+```
+
+`DocumentCopyContext` supplies the original `content`, an optional raw browse `itemId`, and an `AbortSignal`. Kit snapshots source, identity, label, and callback before awaiting the action, and preserves the original action as a method callback's receiver. It sends the complete source, including offscreen text, CRLF, tabs, trailing spaces, final newlines, and source controls. It never copies sanitized rows, wrapped text, search highlights, or rendered Markdown. **Raw source can contain sensitive text or controls that the preview does not display.** The owner must opt in, choose a precise label, and apply its sensitivity policy before providing the action.
+
+Kit uses the injected `app.message.copy` binding, normally Ctrl+X. It filters hints against native host keys, standard navigation, Home/End, confirmation, cancellation, and Space search activation. Active search owns input; paste and key-release events never invoke Copy. No usable binding means no Copy hint. These filters are local to Kit, not a public global-reachability API.
+
+Only one copy callback can run per interaction. Repeated input while pending is ignored, not queued. Generic busy, completion, and retryable failure feedback stays in the document frame. Kit does not expose callback errors through notifications, owner error reporters, or result payloads because they can contain source text. Callback completion means only that the owner callback returned successfully, not that an OS or remote clipboard accepted the source.
+
+Back, Close, confirmation, disposal, and owner cancellation abort supported callback work and drain accepted work before the interaction returns. Changing the active document or copy action clears stale feedback. Owners must honor the signal or otherwise bound their work, supply current session ownership, and revalidate domain state around their own awaits. Native clipboard writes may not be cancellable; Kit cannot undo a completed write or restore the previous clipboard.
+
+Copy is TUI-only. RPC omits Copy controls and never invokes its callback; document pagination and confirmation are unchanged. Print and JSON retain their existing unsupported results. Kit contains no clipboard backend and never emits OSC 52. A consumer can explicitly use Pi's public `copyToClipboard()` helper inside its TUI callback; that transport and its local/remote limitations remain consumer-owned.
 
 ### Multi-selects
 
@@ -617,7 +690,7 @@ The renderer uses no browser, image, SVG, or network, and this API is independen
 - **`choice`** — one confirmed static value with separate current and initial items, details, disabled explanations, optional TUI search, and a bounded viewport.
 - **`settings`** — Pi-style searchable, aligned settings rows with immediate value changes, serialized saves, and rollback when an action rejects.
 - **`input`** — single-line text entry inside the menu stack with IME focus, serialized submission, rejected-draft retention, and TUI/RPC adaptation.
-- **`review`** — fixed or terminal-adaptive scrollable exact text, code, or diff content with an optional primary confirmation action and paginated RPC fallback.
+- **`review`** — fixed or terminal-adaptive scrollable exact text, code, or diff content with optional confirmation, opt-in full-source Copy, and paginated RPC fallback.
 - **`multiSelect`** — optimistic toggles with restored cursor, serialized saves, rollback, row descriptions, optional fuzzy search and bulk actions, and a bounded viewport.
 
 All standard TUI screens use Pi's injected keybindings, sanitize display text, rebuild themed content after invalidation, and bound rendered output to the supplied terminal width.
@@ -652,6 +725,8 @@ They remain separate so a custom or legacy current value can focus a safe fallba
 A confirmed row invokes the screen action with its raw `itemId`; moving the cursor only changes selected details.
 Rejected or thrown actions retain the selection.
 Disabled rows stay focusable for their explanation but never invoke the action.
+Action and choice screens wrap the selected description below the list when it does not fit inline.
+At constrained heights, the selected row takes priority; a filtered empty state keeps its recovery guidance ahead of the search field.
 RPC flattens choice rows to unique dialog labels while preserving raw identity.
 
 ```ts
@@ -689,7 +764,7 @@ RPC deliberately keeps one deterministic unfiltered selector and ignores interac
 Keep preview snapshots, rollback, persistence, and confirmation policy in the consuming extension.
 Use standalone `runLiveChoice()` when its list-and-shortcut contract fits; keep a fully specialized UI local only when cursor behavior needs more than that contract.
 
-Browse screens are read-only and invoke no action.
+Browse rows only reveal information and never invoke domain actions. An exact detail document can opt into the separate [full-source copy callback](#full-source-document-copy).
 TUI fuzzy-searches each sanitized label, textual `statusText`, description, and optional non-rendered `searchText`.
 Enter opens an adaptive scrolling detail view; Escape returns to the list without losing the query or selected raw id, then returns to the parent, while Ctrl+C closes the menu.
 Omitted or `"adaptive"` viewport size uses the live terminal row budget; a positive number caps item rows without disabling terminal bounds.
@@ -943,6 +1018,10 @@ Use arrows for Kit document navigation, or configure non-conflicting host viewpo
 Plain Home/End remain available to the focused component, including its search input.
 A focused Pi overlay can own viewport input until its owner explicitly transfers focus.
 Kit does not override these host decisions or expose overlay options through `runCustomInteraction()`.
+Built-in interaction hints omit configured keys intercepted by the native host, including modifier aliases and legacy key collisions; a usable configured fallback remains visible.
+Host-owned Space also suppresses the local document-search hint.
+Other extensions can install earlier input listeners that Pi does not expose through a public ownership API; Kit cannot predict those listeners.
+The [selector and host-input audit](./core-alignment-audit.md) records native dispatch evidence and retained cross-mode contracts.
 
 Custom Kit interactions do not currently receive the blocked program-status reporting provided by Pi's native dialogs.
 Kit does not emit terminal program-status codes on Pi's behalf.
@@ -1073,13 +1152,17 @@ Consumer fixtures continue to own domain state, persistence, generation checks, 
 - `EditorStatusWidget` — frames passive editor status rows with a muted top rule and terminal-width guard; `@narumitw/pi-tui-kit/editor-status-widget` exports it and its options.
 - `HorizontalRule` — renders a full-width or inset horizontal divider with an optional sanitized and aligned label plus render-time style callbacks.
 - `renderBoundedFrame()` and `BoundedFrameOptions` — frame preformatted rows within explicit width and height budgets, with caller-owned content priorities and no input or lifecycle ownership.
+- `renderBoundedFrameLayout()`, `BoundedFrameLayout`, and `BoundedFrameContentRow` — provide the same frame with original content indexes for caller-owned coordinate mapping.
+- `canonicalizeConfiguredKey()` — validates and canonicalizes configured key syntax without predicting runtime input ownership.
 - `runCustomInteraction()` — owns cancellation, stale checks, exactly-once disposal, optional pending-work draining, and typed results for one custom TUI component.
 - `resolveMenuScreen()` — resolves and validates a dynamic screen for tests or adapters.
 - `createMenuNavigator()` — lower-level stack and selection state helper.
-- exported screen, item, action, transition, runtime option, `BrowseDetailDocument`, `MenuCloseReason`, and result types.
+- exported screen, item, action, transition, runtime option, `BrowseDetailDocument`, `DocumentCopyAction`, `DocumentCopyContext`, `MenuCloseReason`, and result types; the `/document-review` subpath also exports the copy types.
 - Focused interaction subpaths — `confirmation`, `custom-interaction`, `document-review`, `live-choice`, `multi-select`, `questionnaire`, `selectors`, and `task` export the matching runtime functions and types without requiring the package root.
 - `@narumitw/pi-tui-kit/testing` — test-only subpath for `createTuiHarness()`, `createRpcHarness()`, strict scripts, and their types; the production root does not re-export it.
-- `PI_EXTENSION_MENU_API_VERSION` — current API version (`20`).
+- `PI_EXTENSION_MENU_API_VERSION` — current API version (`22`).
+Version 22 adds opt-in in-place full-source document copy while version-21 definitions and completion results remain valid.
+Version 21 adds frame row metadata and configured-key canonicalization while version-20 definitions remain valid.
 Version 20 adds focused interaction subpaths plus standalone document-review and multi-select APIs while version-19 definitions remain valid.
 Version 19 adds public lazy Mermaid Markdown transformer preparation and the focused `/markdown` subpath while version-18 definitions remain valid.
 Version 18 adds standard-screen mouse routing, intraline diff emphasis, searchable live choices, input prefill, and masked secret input while version-17 definitions remain valid.

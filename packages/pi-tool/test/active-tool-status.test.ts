@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import type { ExtensionAPI, ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
 import type { Component } from "@earendil-works/pi-tui";
-import { stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
+import { stripTerminalSequences, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import { afterEach, test, vi } from "vitest";
 import {
   ACTIVE_TOOL_REFRESH_INTERVAL_MS,
@@ -142,6 +142,51 @@ test("renders a muted divider and wraps every safe tool name within the availabl
   ]);
   assert.deepEqual(roles, ["borderMuted"]);
   assert.ok(lines.every((line) => visibleWidth(line) <= 40));
+});
+
+test.each([0, 1, 2, 12, 80, -1, Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY, 0.5, 12.9])(
+  "keeps wrapping and row bounds at width %s",
+  (width) => {
+    const normalized = Number.isFinite(width) ? Math.max(0, Math.floor(width)) : 0;
+    const body = ["Active tools (3)", "read · 界界 · e\u0301_tool"];
+    const wrapped = normalized === 0 ? body.map(() => "") : body.flatMap((line) => wrapTextWithAnsi(line, normalized));
+    const lines = renderActiveToolWidget(body, IDENTITY_THEME, width);
+    assert.deepEqual(lines, ["─".repeat(normalized), ...wrapped.map((line) => truncateToWidth(line, normalized, ""))]);
+    assert.ok(lines.every((line) => visibleWidth(line) <= normalized));
+    if (normalized === 0) assert.deepEqual(lines, ["", "", ""]);
+  },
+);
+
+test("uses the callback theme after resize and invalidation without republishing unchanged tools", async () => {
+  vi.useFakeTimers();
+  const harness = createHarness(["read", "bash"]);
+  const current = createContext();
+  harness.controller.start(current.ctx, true);
+  const factory = current.widgets.at(-1)?.[1];
+  assert.equal(typeof factory, "function");
+  if (typeof factory !== "function") return;
+  let color = "\u001b[31m";
+  const fg = vi.fn((_role: string, text: string) => `${color}${text}\u001b[0m`);
+  const component = factory(undefined as never, { fg } as unknown as Theme);
+  for (const width of [0, 1, 40, 80, 12]) {
+    const lines = component.render(width);
+    assert.equal(stripTerminalSequences(lines[0] ?? ""), "─".repeat(width));
+    assert.ok(lines.every((line) => visibleWidth(line) <= width));
+    if (width === 0) assert.deepEqual(lines, ["", "", ""]);
+    else assert.ok(fg.mock.calls.some(([role, text]) => role === "borderMuted" && text === "─".repeat(width)));
+  }
+  color = "\u001b[32m";
+  component.invalidate();
+  assert.equal(component.render(80)[0], `${color}${DIVIDER}\u001b[0m`);
+  await vi.advanceTimersByTimeAsync(ACTIVE_TOOL_REFRESH_INTERVAL_MS * 2);
+  harness.controller.refresh(current.ctx);
+  assert.equal(current.widgets.length, 1);
+  harness.controller.shutdown(current.ctx);
+  harness.controller.shutdown(current.ctx);
+  assert.equal(vi.getTimerCount(), 0);
+  const writes = current.widgets.length;
+  await vi.advanceTimersByTimeAsync(ACTIVE_TOOL_REFRESH_INTERVAL_MS * 2);
+  assert.equal(current.widgets.length, writes);
 });
 
 test("formats every tool as bounded safe display text", () => {

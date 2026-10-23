@@ -52,15 +52,18 @@ function configFromSettings(settings: PiSyncSettingsV3, setupName?: string): Any
       `Invalid pi-sync settings: sync setup “${selectedName}” references missing storage connection “${connectionName}”.`,
     );
   }
-  return resolveSyncConfig(
-    selectedName,
-    setup,
-    connectionName,
-    connection,
-    settings.onSwitch,
-    settings.skipSecretScan ?? false,
-    settings.showStatus ?? true,
-  );
+  return {
+    ...resolveSyncConfig(
+      selectedName,
+      setup,
+      connectionName,
+      connection,
+      settings.onSwitch,
+      settings.skipSecretScan ?? false,
+      settings.showStatus ?? true,
+    ),
+    debug: settings.debug ?? false,
+  };
 }
 
 export type SyncSetupStorageReview = Pick<
@@ -77,6 +80,8 @@ export async function loadPartialConfig(setupName?: string): Promise<PartialConf
     include: [...config.include],
     automatic: config.automatic,
     automaticTransfer: config.automaticTransfer ?? false,
+    agentMode: config.agentMode ?? false,
+    continuous: config.continuous ?? false,
     onSwitch: config.onSwitch,
     showStatus: config.showStatus,
   };
@@ -112,10 +117,13 @@ export function syncConfigReviewIdentity(config: AnySyncConfig) {
     config.include,
     config.automatic,
     config.automaticTransfer ?? false,
+    config.agentMode ?? false,
     config.localFields,
     config.mergeSettings ?? false,
     config.mergeContent ?? false,
     config.partialSync ?? false,
+    // Preserve existing Off identities and cached candidates across the upgrade.
+    ...(config.continuous ? ["continuous"] : []),
   ]);
 }
 
@@ -126,7 +134,7 @@ export function syncConfigReviewFingerprint(config: AnySyncConfig) {
 /** Internal freshness token, including credentials; never display or persist it. */
 export function syncCheckConfigFingerprint(config: AnySyncConfig) {
   return createHash("sha256")
-    .update(JSON.stringify({ ...config, showStatus: undefined }))
+    .update(JSON.stringify({ ...config, showStatus: undefined, debug: undefined }))
     .digest("hex");
 }
 
@@ -163,6 +171,8 @@ function resolveSyncConfig(
     include,
     automatic: setup.sync.automatic,
     automaticTransfer: setup.sync.automaticTransfer ?? false,
+    agentMode: setup.sync.agentMode ?? false,
+    continuous: setup.sync.continuous ?? false,
     localFields: setup.sync.localFields === undefined ? undefined : normalizeLocalFields(setup.sync.localFields),
     mergeSettings: setup.sync.mergeSettings ?? false,
     mergeContent: setup.sync.mergeContent ?? false,

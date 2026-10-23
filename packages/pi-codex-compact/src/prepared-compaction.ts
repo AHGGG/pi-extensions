@@ -69,6 +69,10 @@ export function captureCheckpointPreparation(
   // only the active provider input. Prepared results retain no copied raw history or
   // serialized history prefix (Pi still owns the original session entries).
   let snapshot: SessionEntry[] | undefined = ctx.sessionManager.getBranch();
+  // A provider transfer produces plaintext, not an adoptable opaque preparation.
+  // Let the ordinary context/foreground path perform that explicitly instead.
+  const checkpoint = latestCheckpoint(snapshot);
+  if (checkpoint && checkpoint.details.provider !== model.provider) return undefined;
   // Pi recreates label entries with new IDs when forking. Persist a stable
   // non-label cutoff; guard the full ancestry, including trailing labels.
   const snapshotLeafId = [...snapshot].reverse().find((entry) => entry.type !== "label")?.id;

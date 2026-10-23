@@ -24,6 +24,7 @@ import type {
   MenuScreenComponentOptions,
   MultiSelectOptions,
 } from "./contracts.js";
+import { componentKeyAvailable, componentKeybindings } from "./host-input.js";
 import { createInputComponent, type InputOptions } from "./input.js";
 import { createMultiSelectComponent } from "./multi-select.js";
 import {
@@ -56,6 +57,7 @@ const BRACKETED_PASTE_END = "\u001b[201~";
 export function createMenuScreenComponent<ScreenId extends string, ActionId extends string>(
   options: MenuScreenComponentOptions<ScreenId, ActionId>,
 ): MenuScreenComponent {
+  options = { ...options, keybindings: componentKeybindings(options.tui, options.keybindings) };
   let component: MenuScreenComponent;
   switch (options.screen.kind) {
     case "actions":
@@ -83,6 +85,8 @@ export function createMenuScreenComponent<ScreenId extends string, ActionId exte
       component = createMultiSelectComponent(options as MultiSelectOptions<ScreenId, ActionId>);
       break;
   }
+  const render = component.render.bind(component);
+  component.render = (width) => (Number.isFinite(width) && width > 0 ? render(Math.floor(width)) : []);
   Object.defineProperty(component, "__piTuiKitScreen", { value: true });
   return component;
 }
@@ -346,8 +350,15 @@ function createChoiceComponent<ScreenId extends string, ActionId extends string>
     render(width) {
       const safeWidth = Math.max(1, width);
       const selectedItem = selected();
+      const listRows = list.render(safeWidth);
+      const description = selectedItem?.description ? safeMenuText(selectedItem.description) : "";
       const details = [
-        ...(selectedItem?.disabledReason ? [`Unavailable: ${safeMenuText(selectedItem.disabledReason)}`] : []),
+        ...(selectedItem?.disabled && selectedItem.disabledReason
+          ? [`Unavailable: ${safeMenuText(selectedItem.disabledReason)}`]
+          : []),
+        ...(description && !listRows.some((line) => stripVTControlCharacters(line).includes(description))
+          ? [description]
+          : []),
         ...(selectedItem?.details ?? []).map(safeMenuText),
       ];
       const detailRows = details.flatMap((line) => wrapTextWithAnsi(options.theme.fg("muted", line), safeWidth));
@@ -355,8 +366,8 @@ function createChoiceComponent<ScreenId extends string, ActionId extends string>
         allItems.length === 0
           ? [options.theme.fg("dim", "  No choices available")]
           : filteredItems.length === 0
-            ? [options.theme.fg("dim", "  No matching choices")]
-            : [...list.render(safeWidth), ...(detailRows.length > 0 ? ["", ...detailRows] : [])];
+            ? [options.theme.fg("dim", "  No matching choices; edit search")]
+            : [...listRows, ...(detailRows.length > 0 ? ["", ...detailRows] : [])];
       const search = options.screen.enableSearch
         ? [
             ...renderChoiceSearchInput(searchInput, safeWidth),
@@ -377,7 +388,7 @@ function createChoiceComponent<ScreenId extends string, ActionId extends string>
             filteredItems.length > 1 ? `  (${selectedIndex + 1}/${filteredItems.length})` : undefined,
           confirmAction: "select",
           pinnedContentRows: options.screen.enableSearch ? 1 : 0,
-          priorityTailRows: detailRows.length + (options.screen.enableSearch ? 1 : 0),
+          priorityTailRows: filteredItems.length === 0 ? 1 : detailRows.length + (options.screen.enableSearch ? 1 : 0),
         },
       );
       const listContentStart = options.screen.enableSearch ? 2 : 0;
@@ -570,7 +581,7 @@ function createSettingsComponent<ScreenId extends string, ActionId extends strin
           compactOverflowText:
             filteredItems.length > 1 ? `  (${selectedIndex + 1}/${filteredItems.length})` : undefined,
           confirmAction: "change",
-          hint: settingsHint(options.keybindings),
+          hint: settingsHint(options.keybindings, componentKeyAvailable(options.tui, "space")),
           pinnedContentRows: 1,
           priorityTailRows: settingsRows.priorityTailRows,
         },
@@ -652,7 +663,7 @@ function renderSettingsRows<ScreenId extends string, ActionId extends string>(
   }
   if (filteredItems.length === 0) {
     return {
-      lines: [options.theme.fg("dim", "  No matching settings")],
+      lines: [options.theme.fg("dim", "  No matching settings; edit search")],
       priorityTailRows: 1,
       viewportStart: 0,
       visibleCount: 0,
@@ -705,8 +716,11 @@ function renderSettingsRows<ScreenId extends string, ActionId extends string>(
   return { lines, priorityTailRows, viewportStart: startIndex, visibleCount: endIndex - startIndex };
 }
 
-function settingsHint(keybindings: MenuKeybindings) {
-  const confirmKeys = uniqueHintKeys([...keybindings.getKeys("tui.select.confirm"), "space"]);
+function settingsHint(keybindings: MenuKeybindings, spaceAvailable: boolean) {
+  const confirmKeys = uniqueHintKeys([
+    ...keybindings.getKeys("tui.select.confirm"),
+    ...(spaceAvailable ? ["space"] : []),
+  ]);
   const cancelKeys = uniqueHintKeys(keybindings.getKeys("tui.select.cancel").filter((key) => key !== "ctrl+c"));
   return [
     "Type to search",
@@ -845,11 +859,18 @@ function commonListComponent<ScreenId extends string, ActionId extends string>(
     render(width) {
       const safeWidth = Math.max(1, width);
       const selectedId = items[selectedIndex]?.value;
-      const details = selectedId ? (selectedDetails?.(selectedId) ?? []) : [];
+      const listRows = list.render(safeWidth);
+      const description = items[selectedIndex]?.description;
+      const details = [
+        ...(selectedId ? (selectedDetails?.(selectedId) ?? []) : []),
+        ...(description && !listRows.some((line) => stripVTControlCharacters(line).includes(description))
+          ? [description]
+          : []),
+      ];
       const detailRows = details.flatMap((detail) =>
         wrapTextWithAnsi(options.theme.fg("muted", safeMenuText(detail)), safeWidth),
       );
-      const content = [...list.render(safeWidth), ...(detailRows.length > 0 ? ["", ...detailRows] : [])];
+      const content = [...listRows, ...(detailRows.length > 0 ? ["", ...detailRows] : [])];
       const frame = renderFrameLayout(options.screen.title, lines, content, destination, width, options, {
         compactOverflowText: items.length > 1 ? `  (${selectedIndex + 1}/${items.length})` : undefined,
         priorityTailRows: detailRows.length,

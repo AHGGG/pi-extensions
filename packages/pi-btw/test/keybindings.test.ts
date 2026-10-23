@@ -21,7 +21,7 @@ afterEach(() => {
   setKittyProtocolActive(initialKitty);
   vi.unstubAllEnvs();
 });
-function manager(bindings: Record<string, string | string[]> = {}) {
+function manager(bindings: Readonly<Record<string, string | readonly string[]>> = {}) {
   return new KeybindingsManager(
     {
       ...TUI_KEYBINDINGS,
@@ -75,11 +75,15 @@ test.each([
   ["alt+n", "alt+down"],
   ["ctrl+alt+h", "alt+backspace"],
   ["ctrl+alt+m", "alt+enter"],
-  ["ctrl+x", "unknown+ctrl+x"],
 ])("detects live legacy matcher overlap: %s / %s", (first, second) => {
   setKittyProtocolActive(false);
   vi.stubEnv("WT_SESSION", "");
   assert.equal(btwKeysOverlap(first, second), true);
+});
+
+test.each(["unknown+ctrl+x", "ctrl+ctrl+x"])("invalid Pi modifier tokens do not overlap: %s", (key) => {
+  assert.equal(matchesKey("\u0018", key as never), false);
+  assert.equal(btwKeysOverlap("ctrl+x", key), false);
 });
 
 test("mode-dependent and Windows Terminal collisions follow Pi rather than string identity", () => {
@@ -104,6 +108,7 @@ test("defaults, explicit overrides, first usable inherited fallback and release 
     exit: ["ctrl+c"],
     cycleThinkingLevel: ["shift+tab"],
     bringToMain: ["ctrl+r"],
+    switchPane: ["f6"],
   });
   assert.deepEqual(defaults.warnings, []);
   const custom = resolveBtwShortcuts({ exit: "ctrl+q", cycleThinkingLevel: "f6", bringToMain: "f7" }, manager());
@@ -178,7 +183,10 @@ test("non-default editor/viewport/copy bindings win; stale overrides warn and fa
 test.each(["\u001b[112;6u", "\u001b[80;6u", "\u001b[112;70u", "\u001b[27;6;80~", "\u001b[1095::112;6u"])(
   "matches normalized terminal encoding %j",
   (input) => {
-    const shortcuts = resolveBtwShortcuts({ cycleThinkingLevel: "ctrl+shift+p" }, manager());
+    const shortcuts = resolveBtwShortcuts(
+      { cycleThinkingLevel: "ctrl+shift+p" },
+      manager({ "tui.editor.jumpForward": [], "tui.editor.undo": [] }),
+    );
     assert.equal(matchesKey(input, "ctrl+shift+p"), true);
     assert.equal(shortcuts.matches(input, "cycleThinkingLevel"), true);
   },
@@ -196,10 +204,27 @@ test("hints and matching revalidate after asynchronous terminal negotiation chan
   assert.equal(shortcuts.label("exit"), "Alt+B");
 });
 
-test("keypad input follows the same conflict and activation identity", () => {
-  const shortcuts = resolveBtwShortcuts({ exit: "ctrl+1" }, manager());
-  assert.equal(shortcuts.matches("\u001b[57399;5u", "exit"), false);
-  assert.equal(shortcuts.matches("\u001b[57400;5u", "exit"), true);
+test("keypad input follows the same inherited conflict and activation identity", () => {
+  const shortcuts = resolveBtwShortcuts({}, manager({ "app.thinking.cycle": "1" }));
+  assert.equal(shortcuts.matches("\u001b[57399u", "cycleThinkingLevel"), false);
+  assert.equal(shortcuts.matches("\u001b[57400u", "cycleThinkingLevel"), true);
+});
+
+test.each([
+  ["shift+ctrl+1", "ctrl+!", "\u001b[49:33;6u"],
+  ["shift+ctrl+=", "ctrl++", "\u001b[61:43;6u"],
+  ["ctrl+1", "ctrl+s", "\u001b[49::115;5u"],
+  ["shift+!", "!", "\u001b[27;2;33~"],
+] as const)("enhanced physical/logical identities %s and %s share a reserved input", (first, second, input) => {
+  assert.equal(matchesKey(input, first as never), true);
+  assert.equal(matchesKey(input, second as never), true);
+  assert.equal(btwKeysOverlap(first, second), true);
+});
+
+test("enhanced shortcut conflicts preserve editing and hard cancellation", () => {
+  assert.ok(validateBtwShortcutEdit("exit", "shift+ctrl+1", {}, manager({ "tui.editor.undo": "ctrl+!" }), true));
+  assert.ok(validateBtwShortcutEdit("exit", "ctrl+1", {}, manager(), true));
+  assert.equal(btwKeysOverlap("ctrl+s", "ctrl+d"), false);
 });
 
 test.each([
@@ -210,8 +235,38 @@ test.each([
   [{ exit: "shift+tab", cycleThinkingLevel: "f6" }, ["shift+tab", "ctrl+c"], ["f6"], ["ctrl+r"]],
 ] as const)("resolves the complete shortcut proposal %j", (overrides, exit, cycle, bring) => {
   const resolved = resolveBtwShortcuts(overrides, manager());
-  assert.deepEqual(resolved.keys, { exit, cycleThinkingLevel: cycle, bringToMain: bring });
+  assert.deepEqual(
+    {
+      exit: resolved.keys.exit,
+      cycleThinkingLevel: resolved.keys.cycleThinkingLevel,
+      bringToMain: resolved.keys.bringToMain,
+    },
+    { exit, cycleThinkingLevel: cycle, bringToMain: bring },
+  );
   if (exit.length === 1) assert.ok(resolved.warnings.length);
+});
+
+test.each([
+  [{ "tui.altScreen.search": "f6" }, {}, ["f7"]],
+  [{ "tui.altScreen.search": ["f6", "f7", "f8"] }, {}, []],
+  [{ "app.thinking.cycle": ["f6", "f7"] }, {}, ["f8"]],
+  [{}, { exit: "f6" }, ["f7"]],
+  [{}, { cycleThinkingLevel: "f6", bringToMain: "f7" }, ["f8"]],
+] as const)("pane transfer selects only the first usable fallback %j %j", (bindings, overrides, expected) => {
+  const shortcuts = resolveBtwShortcuts(overrides, manager(bindings));
+  assert.deepEqual(shortcuts.keys.switchPane, expected);
+  assert.equal(shortcuts.matches("\u001b[17~", "switchPane"), expected.includes("f6" as never));
+});
+
+test("pane shortcut validation preserves existing overrides and rejects input collisions", () => {
+  assert.equal(validateBtwShortcutEdit("exit", "f6", {}, manager(), true), undefined);
+  assert.equal(validateBtwShortcutEdit("switchPane", "f9", {}, manager(), true), undefined);
+  assert.ok(validateBtwShortcutEdit("switchPane", "ctrl+shift+f", {}, manager(), true));
+  assert.ok(validateBtwShortcutEdit("switchPane", "ctrl+alt+x", { exit: "alt+ctrl+x" }, manager(), true));
+  const custom = resolveBtwShortcuts({ switchPane: "f9" }, manager());
+  assert.equal(custom.matches("\u001b[20~", "switchPane"), true);
+  assert.equal(custom.matches("\u001b[17~", "switchPane"), false);
+  assert.equal(custom.matches("\u001b[57372;1:3u", "switchPane"), false);
 });
 
 test("Pi stdin buffering delivers complete pastes across every delimiter split", () => {

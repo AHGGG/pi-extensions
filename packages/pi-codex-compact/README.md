@@ -73,7 +73,7 @@ Signing in does not guarantee compaction permission; see [ChatGPT OAuth rejectio
 Run `/codex-compact` without arguments to inspect the effective route, change settings, or select **Compact now** in TUI mode.
 Closing the menu with Escape or Ctrl+C does not compact the session; settings changes already saved remain applied.
 The no-argument command reports the manual settings path in RPC and is rejected in print and JSON modes.
-The compatibility route `/codex-compact resume` shows migration guidance in TUI/RPC; background controls now belong to `/background-compaction`. Other arguments are rejected.
+Arguments are rejected. The former `/codex-compact resume` migration route has been removed; this engine does not own scheduling controls.
 Pi's built-in `/compact` uses the same compaction routing.
 
 ## ⚙️ Settings
@@ -91,7 +91,7 @@ For example, select Remote V2 explicitly on a compatible backend:
 
 With `auto`, verified official OpenAI ChatGPT OAuth uses Context Management; API-key OpenAI and Azure use unary `responses/compact`, and legacy Codex uses Remote V2. The OAuth adaptation also applies to explicit V2 and Compact preferences. Other APIs remain Pi-native unless explicitly configured. The menu reports the last resolved protocol after a compaction attempt without refreshing OAuth merely to display it.
 
-**Background compaction is now a separate optional extension.** See [Background companion](#background-companion) before updating an existing installation that uses it.
+Preparation scheduling is not part of this engine. Compatible consumers can use the [versioned prepared-compaction interface](./docs/prepared-compaction-protocol.md).
 
 Menu changes apply immediately. Manual file edits take effect on `/reload` or the next session start. Invalid settings files remain unchanged and make the menu read-only until repaired and reloaded.
 
@@ -112,21 +112,13 @@ The provider adapter must honor Pi's public `onPayload` and injected `fetch` opt
 For a custom API, map its exact non-built-in label to `"codex-responses-v1"` in `apiProfiles`. This profile uses Remote V2 in `auto` mode and requires Codex-compatible request fields and replay; it declares compatibility rather than probing the backend. With unary compaction selected, it retains Codex-supported tools and reasoning.
 Built-in adapter tests cover request plumbing, not backend support or hosted entitlement. A custom provider or proxy remains responsible for its routing, authentication, and payload transforms. See the [implementation reference](./docs/implementation.md#protocol-and-replay) for the protocol contract.
 
-Changing providers can replay a checkpoint only when its API label, compatibility profile, and exact model ID still match. Custom checkpoints also require the matching `apiProfiles` entry.
-An incompatible route exposes the fallback marker and recent messages, not the checkpoint's older history. An ordinary request cannot transparently recover after an incompatible backend has already received the checkpoint.
+Within the same provider, checkpoints can replay across models when their Responses API label and compatibility profile match. Custom checkpoints also require the matching `apiProfiles` entry.
+Changing providers transfers the checkpoint through its issuing provider as a plaintext summary when summary recovery is enabled. The selected provider never receives the issuer's encrypted checkpoint. This transfer can consume quota and lose detail; missing issuer access or a failed transfer stops the request and preserves history.
 The extension does not make capability probes or automatically retry a failed billable request through another protocol.
 
-### Background companion
+### Prepared-compaction interface
 
-Install [pi-background-compaction](https://github.com/AHGGG/pi-background-compaction) alongside this engine to retain background preparation and safe-boundary application:
-
-```bash
-pi install git:github.com/AHGGG/pi-background-compaction@master
-```
-
-Restart Pi with both updated packages. The companion owns `/background-compaction`, its menu, pause/resume, threshold, automatic application, and diagnostic notices. This engine alone performs no speculative requests. Existing session checkpoints remain compatible.
-
-The companion reads legacy `asyncEnabled`, `asyncAutoApply`, `asyncThresholdPercent`, and `logCompaction` values from `pi-codex-compact.json` only when its own settings file is absent. Core settings saves preserve those old fields; do not delete them before the companion has read them. New companion saves go to `pi-background-compaction.json`. See its README for opt-in defaults, quota costs, and migration details.
+The engine exposes a documented, versioned [prepared-compaction protocol](./docs/prepared-compaction-protocol.md) over Pi's public event bus. Any compatible consumer can prepare a checkpoint and request safe application without private imports or package identity checks. No consumer is required for ordinary compaction, and this engine alone performs no speculative requests.
 
 ### Experimental Context Management
 

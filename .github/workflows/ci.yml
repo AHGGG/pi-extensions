@@ -36,9 +36,6 @@ jobs:
           node-version-file: .node-version
           cache: npm
 
-      - name: Validate installation policy
-        run: node scripts/check-install-policy.mjs
-
       - name: Install dependencies
         run: npm ci
 
@@ -47,5 +44,6 @@ jobs:
 
       - name: Run affected tests
         env:
+          PI_EXTENSIONS_BUILD_READY: "1"
           PI_EXTENSIONS_TEST_BASE: ${{ inputs.test-base || github.event.pull_request.base.sha || github.event.before }}
         run: npm test

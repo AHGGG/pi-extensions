@@ -109,15 +109,19 @@ export function createCodexCompactMenu(
             : []),
           ...lastProtocolLines(options.lastProtocol?.()),
           ...(state.settings.enabled && options.hasCheckpoint?.() && options.canReplayCheckpoint?.() === false
-            ? ["Compaction cancels: the active checkpoint cannot replay on this model/route."]
+            ? [
+                "Direct opaque replay is unavailable. Compatible provider changes require issuer summary recovery; incompatible routes cancel.",
+              ]
             : []),
           ...(options.isPaused?.()
             ? [
                 "Last observed remote operation paused after OAuth rejection; /reload retries it.",
                 options.hasCheckpoint?.()
-                  ? state.settings.checkpointRecovery === "cancel" || options.canReplayCheckpoint?.() === false
+                  ? state.settings.checkpointRecovery === "cancel"
                     ? "Recovery: cancel compaction; preserve checkpoint history."
-                    : "Recovery: checkpoint-aware summary; on failure, Pi native may lose older context. Integrity failures cancel."
+                    : options.canReplayCheckpoint?.() === false
+                      ? "Recovery: issuer summary for compatible provider changes; otherwise cancel and preserve history."
+                      : "Recovery: checkpoint-aware summary; on failure, Pi native may lose older context. Integrity failures cancel."
                   : "Recovery: Pi native compaction.",
               ]
             : []),

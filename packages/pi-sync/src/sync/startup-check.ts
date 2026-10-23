@@ -9,7 +9,10 @@ import { readStateForConfig, syncStateFingerprint } from "../state/sync-state-st
 import type { SyncAttentionController } from "../ui/sync-attention.js";
 import { setSyncStatus } from "../ui/sync-status.js";
 import { safeTerminalText } from "../ui/terminal-text.js";
+import { startupTransferEnabled } from "./agent-policy.js";
+import { withAgentSyncLock } from "./agent-sync.js";
 import { combineSignals, throwIfAborted } from "./signals.js";
+import { createStartupTimings } from "./startup-timings.js";
 import { errorMessage } from "./sync-errors.js";
 import type { SyncLoaders } from "./sync-loaders.js";
 
@@ -41,18 +44,19 @@ export function createStartupCheck(loaders: SyncLoaders, attention: SyncAttentio
     },
     start(ctx: ExtensionContext, sessionSignal: AbortSignal, initialConfig?: AnySyncConfig) {
       if (!ctx.hasUI || sessionSignal.aborted) return;
-      if (initialConfig?.automaticTransfer && !ctx.isIdle()) {
+      if (initialConfig && startupTransferEnabled(initialConfig) && !ctx.isIdle()) {
         pending = { ctx, signal: sessionSignal, config: initialConfig };
         return;
       }
       if (active) throw new Error("Previous startup check has not been drained.");
+      const timings = createStartupTimings();
       const controller = new AbortController();
       const signal = combineSignals(sessionSignal, controller.signal);
       const task = {
         controller,
         owner: ctx.sessionManager,
         promise: Promise.resolve(),
-        transfer: Boolean(initialConfig?.automaticTransfer),
+        transfer: Boolean(initialConfig && startupTransferEnabled(initialConfig)),
       };
       active = task;
       const isCurrent = () => !sessionSignal.aborted && active === task && task.owner === ctx.sessionManager;
@@ -62,33 +66,36 @@ export function createStartupCheck(loaders: SyncLoaders, attention: SyncAttentio
       );
       let config: AnySyncConfig | undefined;
       let checking = false;
+      let stopped = false;
       // Handle every detached rejection here; Pi's awaited event runner cannot catch it.
       task.promise = Promise.resolve()
         .then(async () => {
           try {
             throwIfAborted(signal);
             config = initialConfig ?? (await loadConfigForCheck());
-            task.transfer = Boolean(config.automaticTransfer);
+            task.transfer = startupTransferEnabled(config);
             throwIfAborted(signal);
-            if (!config.automatic && !config.automaticTransfer) return;
+            if (!config.automatic && !startupTransferEnabled(config)) return;
             const captured = config;
             const identity = syncCheckConfigFingerprint(captured);
             checking = true;
             setSyncStatus(ctx, "sync ...");
-            const { inspectSync } = await loaders.inspection();
+            const { inspectSync } = await timings.measure("inspection import", () => loaders.inspection());
             throwIfAborted(signal);
             const currentConfig = await loadConfigForCheck();
             throwIfAborted(signal);
             if (syncCheckConfigFingerprint(currentConfig) !== identity) return;
             // Lock order: state migration guard → sync operation → backend cache.
             // Read heads may write only private cache data. Never call doctor/syncBoth.
-            const inspection = await withStateDirectoryAccess(() => {
-              throwIfAborted(signal);
-              return withLock("startup-check", () => {
+            const inspection = await timings.measure("inspection and guards", () =>
+              withStateDirectoryAccess(() => {
                 throwIfAborted(signal);
-                return inspectSync(captured, snapshotOptionsForContext(ctx, captured), signal);
-              });
-            });
+                return withLock("startup-check", () => {
+                  throwIfAborted(signal);
+                  return inspectSync(captured, snapshotOptionsForContext(ctx, captured), signal, undefined, timings);
+                });
+              }),
+            );
             throwIfAborted(signal);
             const latest = await loadConfigForCheck();
             throwIfAborted(signal);
@@ -101,34 +108,39 @@ export function createStartupCheck(loaders: SyncLoaders, attention: SyncAttentio
               configIdentity: identity,
               checkedAt: new Date().toISOString(),
               inspection,
-              automaticTransfer: captured.automaticTransfer,
+              automaticTransfer: startupTransferEnabled(captured),
             });
             if (
-              captured.automaticTransfer &&
+              startupTransferEnabled(captured) &&
               !inspection.firstSync &&
               inspection.head &&
               inspection.selectionState?.kind === "same"
             ) {
-              const operations = await loaders.operations();
+              const operations = await timings.measure("operations import", () => loaders.operations());
               throwIfAborted(signal);
               if (!isCurrent()) return;
               if (!ctx.isIdle()) {
                 pending = { ctx, signal: sessionSignal, config: captured };
                 return;
               }
-              await withStateDirectoryAccess(() =>
-                withLock("startup-transfer", () =>
-                  operations.syncBoth(ctx, {
-                    args: [],
-                    yes: true,
-                    force: false,
-                    stale: false,
-                    silent: true,
-                    reload: false,
-                    auto: true,
-                    signal,
-                    onCommit: () => attention.clearObservation(),
-                  }),
+              await timings.measure("automatic transfer", () =>
+                withStateDirectoryAccess(() =>
+                  withAgentSyncLock(
+                    ctx,
+                    {
+                      args: [],
+                      yes: true,
+                      force: false,
+                      stale: false,
+                      silent: true,
+                      reload: false,
+                      auto: true,
+                      signal,
+                      startupTimings: timings,
+                      onCommit: () => attention.clearObservation(),
+                    },
+                    (options) => operations.syncBoth(ctx, options),
+                  ),
                 ),
               );
               throwIfAborted(signal);
@@ -141,10 +153,11 @@ export function createStartupCheck(loaders: SyncLoaders, attention: SyncAttentio
               configIdentity: identity,
               checkedAt: new Date().toISOString(),
               inspection,
-              automaticTransfer: captured.automaticTransfer,
+              automaticTransfer: startupTransferEnabled(captured),
             });
             if (ctx.mode === "rpc") attention.notifyObservation(ctx);
           } catch (error) {
+            stopped = true;
             if (!isCurrent() || sessionSignal.aborted || isMissingConfigError(error)) return;
             if (signal.aborted && controller.signal.reason?.name !== "TimeoutError") return;
             // A settings edit invalidates failures as well as successful observations.
@@ -154,7 +167,7 @@ export function createStartupCheck(loaders: SyncLoaders, attention: SyncAttentio
               if (!latest || syncCheckConfigFingerprint(latest) !== syncCheckConfigFingerprint(config)) return;
             }
             ctx.ui.notify(
-              config?.automaticTransfer
+              config && startupTransferEnabled(config)
                 ? `pi-sync automatic transfer stopped: ${safeTerminalText(errorMessage(error))}. Run /sync to review or reconcile retained recovery evidence. No resources were reloaded.`
                 : `pi-sync startup check skipped: ${safeTerminalText(errorMessage(error))}. Run /sync status to retry. No startup transfer was performed.`,
               "warning",
@@ -176,6 +189,15 @@ export function createStartupCheck(loaders: SyncLoaders, attention: SyncAttentio
                   else attention.reset(ctx);
                 }
               } else setSyncStatus(ctx, undefined);
+            }
+            if (isCurrent()) {
+              timings.publish(
+                ctx,
+                config?.debug ?? false,
+                sessionSignal,
+                "background startup",
+                signal.aborted || stopped ? "stopped" : "completed",
+              );
             }
             if (active === task) active = undefined;
           }

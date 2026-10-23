@@ -1,15 +1,19 @@
 import type { ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
-import { truncateToWidth } from "@earendil-works/pi-tui";
-import { sanitizeTerminalText } from "./message-broker.js";
+import { stripTerminalSequences, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+import { EditorStatusWidget } from "@narumitw/pi-tui-kit/editor-status-widget";
+import { sanitizeSubagentDisplayText as sanitizeLabel } from "./display-text.js";
 import type { ActiveJobDisplay, SubagentRuntime } from "./runtime.js";
+import { DEFAULT_SUBAGENT_SETTINGS, type SubagentSettings } from "./settings.js";
 
 export const SUBAGENT_WIDGET_KEY = "subagents";
 export const SUBAGENT_WIDGET_REFRESH_INTERVAL_MS = 1_000;
 
 const WIDGET_OPTIONS = { placement: "aboveEditor" } as const;
+const TASK_PREVIEW_WIDTH = 40;
 
 export interface SubagentWidgetController {
-  start(ctx: ExtensionContext): void;
+  start(ctx: ExtensionContext, settings?: SubagentSettings): void;
+  update(ctx: ExtensionContext, settings: SubagentSettings): void;
   shutdown(ctx: ExtensionContext): void;
 }
 
@@ -18,6 +22,8 @@ export function createSubagentWidgetController(runtime: SubagentRuntime): Subage
   let refreshTimer: ReturnType<typeof setInterval> | undefined;
   let unsubscribeJobs: (() => void) | undefined;
   let publishedValue: string | undefined;
+  let settings = { ...DEFAULT_SUBAGENT_SETTINGS };
+  let clearWidget: (() => void) | undefined;
 
   const ownsSession = (ctx: ExtensionContext): boolean => ctx.sessionManager === activeSession;
 
@@ -30,19 +36,17 @@ export function createSubagentWidgetController(runtime: SubagentRuntime): Subage
 
   const publish = (ctx: ExtensionContext): void => {
     if (ctx.mode !== "tui" || !ownsSession(ctx)) return;
-    const jobs = runtime.activeJobsForDisplay();
-    const value = widgetValue(jobs);
+    const jobs = settings.showWidget ? runtime.activeJobsForDisplay() : [];
+    const value = `${JSON.stringify(settings)}\n${widgetValue(jobs)}`;
     if (value === publishedValue) return;
     if (jobs.length === 0) {
       ctx.ui.setWidget(SUBAGENT_WIDGET_KEY, undefined);
     } else {
       const snapshot = jobs.map(cloneDisplayJob);
+      const preferences = { ...settings };
       ctx.ui.setWidget(
         SUBAGENT_WIDGET_KEY,
-        (_tui, theme) => ({
-          render: (width) => renderSubagentWidget(snapshot, theme, width),
-          invalidate: () => {},
-        }),
+        (_tui, theme) => createSubagentWidget(snapshot, theme, preferences),
         WIDGET_OPTIONS,
       );
     }
@@ -50,63 +54,96 @@ export function createSubagentWidgetController(runtime: SubagentRuntime): Subage
   };
 
   return {
-    start(ctx) {
+    start(ctx, preferences = DEFAULT_SUBAGENT_SETTINGS) {
       stop();
+      clearWidget?.();
+      clearWidget = undefined;
+      settings = { ...preferences };
       activeSession = ctx.sessionManager;
       publishedValue = undefined;
       if (ctx.mode !== "tui") return;
-      ctx.ui.setWidget(SUBAGENT_WIDGET_KEY, undefined);
+      clearWidget = () => ctx.ui.setWidget(SUBAGENT_WIDGET_KEY, undefined);
+      clearWidget();
       unsubscribeJobs = runtime.subscribeJobs(() => publish(ctx));
       refreshTimer = setInterval(() => publish(ctx), SUBAGENT_WIDGET_REFRESH_INTERVAL_MS);
       refreshTimer.unref();
       publish(ctx);
     },
+    update(ctx, preferences) {
+      if (!ownsSession(ctx)) return;
+      settings = { ...preferences };
+      publish(ctx);
+    },
     shutdown(ctx) {
       if (!ownsSession(ctx)) return;
       stop();
-      if (ctx.mode === "tui") ctx.ui.setWidget(SUBAGENT_WIDGET_KEY, undefined);
+      clearWidget?.();
+      clearWidget = undefined;
       publishedValue = undefined;
       activeSession = undefined;
     },
   };
 }
 
-export function renderSubagentWidget(jobs: readonly ActiveJobDisplay[], theme: Theme, width: number): string[] {
-  const renderWidth = Math.max(0, width);
-  const lines = [
-    theme.fg("borderMuted", "─".repeat(renderWidth)),
-    theme.fg("muted", `Subagents · ${jobs.length} active`),
-    ...jobs.map((job) => renderJob(job, theme)),
-  ];
-  return lines.map((line) => truncateToWidth(line, renderWidth, ""));
+export function renderSubagentWidget(
+  jobs: readonly ActiveJobDisplay[],
+  theme: Theme,
+  width: number,
+  settings: SubagentSettings = DEFAULT_SUBAGENT_SETTINGS,
+): string[] {
+  if (!settings.showWidget) return [];
+  return createSubagentWidget(jobs, theme, settings).render(width);
 }
 
-function renderJob(job: ActiveJobDisplay, theme: Theme): string {
+function createSubagentWidget(
+  jobs: readonly ActiveJobDisplay[],
+  theme: Theme,
+  settings: SubagentSettings,
+): EditorStatusWidget {
+  return new EditorStatusWidget({
+    theme,
+    renderBody: () => [
+      theme.fg("muted", `Subagents · ${jobs.length} active`),
+      ...jobs.map((job) => renderJob(job, theme, settings)),
+    ],
+  });
+}
+
+function renderJob(job: ActiveJobDisplay, theme: Theme, settings: SubagentSettings): string {
   const running = job.state === "running";
   const symbol = theme.fg(running ? "accent" : "dim", running ? "▶ " : "○ ");
   const state = theme.fg(running ? "accent" : "muted", job.state);
   const jobId = sanitizeLabel(job.jobId);
+  const taskText = sanitizeLabel(job.task);
+  // Pi's truncation adds ANSI resets; remove them before applying the callback theme.
+  const task = stripTerminalSequences(truncateToWidth(taskText, TASK_PREVIEW_WIDTH, "…"));
+  const labels = [
+    ...(settings.showJobId ? [theme.fg("text", jobId)] : []),
+    ...(visibleWidth(task) > 0 ? [theme.fg("text", task)] : []),
+    state,
+  ];
   const tools = job.tools.length > 0 ? job.tools.map(sanitizeLabel).join(", ") : "none";
   const timeout = job.timeout === undefined ? "no timeout" : formatSeconds(job.timeout);
-  const detail = ` · ${formatSeconds(Math.floor(job.elapsedMs / 1_000))} / ${timeout} · tools: ${tools}`;
-  return `${symbol}${theme.fg("text", jobId)} · ${state}${theme.fg("muted", detail)}`;
+  const details = [
+    `thinking: ${sanitizeLabel(job.thinkingLevel)}`,
+    ...(settings.showTiming ? [`${formatSeconds(Math.floor(job.elapsedMs / 1_000))} / ${timeout}`] : []),
+    ...(settings.showTools ? [`tools: ${tools}`] : []),
+  ];
+  const detail = details.length > 0 ? theme.fg("muted", ` · ${details.join(" · ")}`) : "";
+  return `${symbol}${labels.join(" · ")}${detail}`;
 }
 
 function widgetValue(jobs: readonly ActiveJobDisplay[]): string {
   return jobs
     .map(
       (job) =>
-        `${job.jobId}\0${job.state}\0${Math.floor(job.elapsedMs / 1_000)}\0${job.timeout ?? ""}\0${job.tools.join(",")}`,
+        `${job.jobId}\0${job.task}\0${job.state}\0${job.thinkingLevel}\0${Math.floor(job.elapsedMs / 1_000)}\0${job.timeout ?? ""}\0${job.tools.join(",")}`,
     )
     .join("\n");
 }
 
 function cloneDisplayJob(job: ActiveJobDisplay): ActiveJobDisplay {
   return { ...job, tools: [...job.tools] };
-}
-
-function sanitizeLabel(value: string): string {
-  return sanitizeTerminalText(value).replace(/\s+/gu, " ").trim();
 }
 
 function formatSeconds(value: number): string {

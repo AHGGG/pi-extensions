@@ -87,7 +87,7 @@ for (const answer of ["save", "escape", "abort", "remapped save", "hard cancel"]
     );
     try {
       await vi.waitFor(() => assert.ok(focused()?.handleInput));
-      assert.doesNotMatch(focused()?.render(100).join("\n") ?? "", /companion|Experimental/);
+      assert.match(focused()?.render(100).join("\n") ?? "", /Use Codex login for OpenAI usage/);
       if (accepted) {
         focused()?.handleInput?.(confirm);
         await vi.waitFor(() => assert.equal(runtime.get().settings.codexFastMode, true));

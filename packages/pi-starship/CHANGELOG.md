@@ -1,5 +1,37 @@
 # @narumitw/pi-starship
 
+## 0.60.1
+
+### Patch Changes
+
+- ee1b9ca: Fix the configuration skill path resolver for managed extension installs with a separate npm or Bun global Pi installation. Resolve the public Pi API beside the first Pi executable on PATH when the host peer is absent from the skill module tree, preserve the original working directory, and stop with actionable guidance instead of guessing a settings path.
+
+## 0.60.0
+
+### Minor Changes
+
+- 8e0942f: Add `pi:<role>` color references for exact public Pi theme roles in styles and palette values. Foreground and background colors follow Pi theme switches and hot reload without reloading TOML, while style modifiers, fixed colors, defaults, and palette-key precedence remain unchanged. Invalid Pi roles report settings diagnostics in either color position.
+- e7f5df0: Add named TOML profiles with live selection previews, editing, switching, renaming, duplication, and deletion. Preserve replaced settings in recovery history and expose existing skill backups without changing the active settings path or command routes.
+
+## 0.59.2
+
+### Patch Changes
+
+- 79aca63: Enable existing TUI document search in Starship effective/raw TOML reviews, Recall non-destructive message previews, and Tool exact detail documents.
+  
+  Use a verified published Kit search release without changing raw content, persistence, confirmation, navigation, or RPC pagination. New Kit copy APIs remain outside these consumer changes.
+- Updated dependencies [077137a]
+- Updated dependencies [9f80b89]
+- Updated dependencies [efc474c]
+  - @narumitw/pi-tui-kit@0.66.0
+
+## 0.59.1
+
+### Patch Changes
+
+- 2e333f1: Rename the bundled configuration skill to `configure-pi-starship`.
+  Use `/skill:configure-pi-starship` instead of `/skill:configuring-pi-starship`.
+
 ## 0.59.0
 
 ### Minor Changes

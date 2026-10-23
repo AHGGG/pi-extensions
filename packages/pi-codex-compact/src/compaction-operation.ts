@@ -1,5 +1,5 @@
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
-import type { Api, Context, Model, Tool } from "@earendil-works/pi-ai";
+import type { Context, Tool } from "@earendil-works/pi-ai";
 import {
   buildSessionContext,
   convertToLlm,
@@ -19,6 +19,7 @@ import {
   latestCheckpoint,
   REPLACEMENT_BYTE_BUDGET,
 } from "./checkpoint.js";
+import { checkpointIssuerRequest } from "./checkpoint-portability.js";
 import { projectedKeptMessages, projectSessionCheckpointContext } from "./checkpoint-projection.js";
 import { recoverCheckpoint, summaryPrefix } from "./checkpoint-recovery.js";
 import { type CompactionBinding, resolveCompactionBinding, sameCompactionBinding } from "./compaction-binding.js";
@@ -84,19 +85,14 @@ export function activeTools(pi: ExtensionAPI): Tool[] {
 
 export function projectedCurrentMessages(
   event: SessionBeforeCompactEvent,
-  model: Model<Api>,
   route: Extract<CompactionRoute, { kind: "remote" }>,
 ): { messages: AgentMessage[]; prior?: CodexCheckpointDetails } {
   const leafId = event.branchEntries.at(-1)?.id ?? null;
   const session = buildSessionContext(event.branchEntries, leafId);
   const prior = latestCheckpoint(event.branchEntries);
   if (!prior) return { messages: session.messages };
-  if (
-    prior.details.api !== route.api ||
-    prior.details.profile !== route.profile ||
-    prior.details.modelId !== model.id
-  ) {
-    throw new Error("The active opaque checkpoint belongs to a different Responses model");
+  if (prior.details.api !== route.api || prior.details.profile !== route.profile) {
+    throw new Error("The active opaque checkpoint belongs to an incompatible Responses API/profile");
   }
   const projected = projectSessionCheckpointContext(session.messages, event.branchEntries, prior);
   if (!projected) {
@@ -222,10 +218,27 @@ export async function compactRemotely(
       requestValues.push(...failed.failure.requestValues);
       throw failed.failure.error;
     }
-    const current = projectedCurrentMessages(event, model, route);
+    const current = projectedCurrentMessages(event, route);
+    if (checkpoint && current.prior && checkpoint.details.provider !== model.provider) {
+      // Prepared handles only carry opaque checkpoints. Plaintext transfer belongs
+      // to the foreground/context owner, never to an unusable speculative result.
+      if (options.preparation || settings.checkpointRecovery === "cancel") return { cancel: true };
+      if (ownsStatus()) ctx.ui.setStatus(STATUS_KEY, "Transferring checkpoint through its issuing provider…");
+      const messages = summaryPrefix(current.messages, keptMessages(event), fingerprintMessage);
+      const request = await abortable(
+        checkpointIssuerRequest(ctx, checkpoint, messages, settings, remoteSignal, stillCurrent, fetch),
+        remoteSignal,
+      );
+      if (!stillCurrent()) return { cancel: true };
+      const compaction = await abortable(recoverCheckpoint(request, event), remoteSignal).catch(() => {
+        throw new Error("Checkpoint transfer through its issuing provider failed; history preserved");
+      });
+      if (!stillCurrent()) return { cancel: true };
+      return { compaction };
+    }
     const context: Context = {
       systemPrompt: ctx.getSystemPrompt(),
-      // Background jobs borrow raw ancestry under persisted-value guards. Keep
+      // Prepared operations borrow raw ancestry under persisted-value guards. Keep
       // provider-owned input isolated from later live-entry mutations, but copy
       // only the projected messages, not historical payloads already compacted out.
       messages: convertToLlm(
@@ -353,10 +366,11 @@ export async function compactRemotely(
       notifyFailure(ctx, rejectionError ?? error, settings, requestValues, checkpointPresent, rejected.has(routeKey));
     if (!checkpointPresent) return undefined;
     if (!checkpoint) return { cancel: true };
+    if (checkpoint.details.provider !== model.provider) return { cancel: true };
     if (settings.checkpointRecovery === "cancel") return { cancel: true };
     let nativeFallbackAllowed = false;
     try {
-      const current = projectedCurrentMessages(event, model, route);
+      const current = projectedCurrentMessages(event, route);
       if (!current.prior) throw new Error("Checkpoint recovery lost its checkpoint");
       const messages = summaryPrefix(current.messages, keptMessages(event), fingerprintMessage);
       // Native fallback is intentionally lossy, but never bypass projection or ownership checks.
