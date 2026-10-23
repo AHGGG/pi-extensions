@@ -195,6 +195,24 @@ for (const api of ["openai-responses", "azure-openai-responses", "openai-codex-r
     });
   }
 
+  test(`${api}: actual adapter recovers complete streamed messages when terminal output is empty`, async () => {
+    const input = await request(api);
+    input.fetch = async () =>
+      sse(
+        [
+          textItem("one", ["sap", "phire"]),
+          { type: "reasoning", id: "thought", summary: [] },
+          textItem("two", ["next", " task"]),
+        ],
+        "completed",
+        api === "openai-codex-responses" ? "response.done" : "response.completed",
+        true,
+        [],
+      );
+    const result = await recoverCheckpoint(input, event);
+    assert.equal(result.summary.split("\n\n<read-files>")[0], "sapphire\nnext task");
+  });
+
   test(`${api}: multipart normalization still rejects terminal text conflicting with completed message`, async () => {
     const input = await request(api);
     input.fetch = async () =>
@@ -332,4 +350,32 @@ test("synchronous aborting provider failure does not leave unhandled rejection o
     },
   };
   await assert.rejects(recoverCheckpoint(input, event), /provider failed/);
+});
+
+test("recovery rejects multiple successful HTTP attempts even with matching empty-terminal text", async () => {
+  const input = await request();
+  input.fetch = async () => sse([messageItem], "completed", "response.completed", true, []);
+  const provider = input.provider;
+  let bridgeFailure: unknown;
+  input.provider = {
+    ...provider,
+    stream: (model, context, options) => {
+      const stream = createAssistantMessageEventStream();
+      void (async () => {
+        assert.ok(options?.fetch);
+        // A custom provider retries after a successful HTTP response. The recovery
+        // validator must not combine successful response attempts into one result.
+        const first = await options.fetch("https://fixture.invalid/recovery");
+        await first.body?.cancel();
+        for await (const item of provider.stream(model, context, options)) stream.push(item);
+      })()
+        .catch((error: unknown) => {
+          bridgeFailure = error;
+        })
+        .finally(() => stream.end());
+      return stream;
+    },
+  };
+  await assert.rejects(recoverCheckpoint(input, event), /without validated completion/);
+  assert.equal(bridgeFailure, undefined);
 });

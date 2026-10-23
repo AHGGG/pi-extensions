@@ -23,6 +23,12 @@ Older v1 and v2 checkpoints are normalized to the current checkpoint format when
 
 See [model-switch validation](model-switch-validation.md) for the reproduced failure, regression coverage, and observed cross-model backend compatibility.
 
+## Recovery completion validation
+
+A successful recovery terminal with nonempty `output` remains authoritative and must match Pi's normalized completed text. An explicit empty `output: []` can instead use a complete, contiguous, uniquely identified inventory of matching `response.output_item.added` / `response.output_item.done` events. Every item must be safe and complete, and the normalized streamed text must match Pi's completion. An omitted output field, missing terminal, unfinished inventory, unsafe output, or conflicting nonempty terminal still fails closed. Failure diagnostics report only source, item counts, and text byte lengths—not summary text, opaque state, or credentials.
+
+This compatibility path is verified with synthetic streams and the Pi adapter; it does not establish why a particular hosted request timed out or what an unavailable server response contained.
+
 ## Provider changes
 
 When the selected provider differs from the checkpoint issuer but its API/profile remains compatible, the context hook first validates the persisted summary identity and retained-history fingerprints. With `checkpointRecovery: "summarize"`, it resolves the original provider/model and its authentication independently and asks that issuer to summarize only the checkpoint's replacement history. This reuses the recovery stream's terminal-output, size, timeout, and cancellation validation; tools and compaction triggers are disabled. Opaque state and issuer credentials are never substituted into the target provider's request.

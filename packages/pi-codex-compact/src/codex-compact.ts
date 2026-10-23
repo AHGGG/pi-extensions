@@ -17,10 +17,10 @@ import {
 import { projectSessionCheckpointContext } from "./checkpoint-projection.js";
 import { summarizeCheckpoint } from "./checkpoint-recovery.js";
 import { rewriteCheckpointForWork } from "./checkpoint-replay.js";
-import { activeTools, type CompactionAttempt, compactRemotely } from "./compaction-operation.js";
+import { activeTools, compactRemotely } from "./compaction-operation.js";
 import { captureCompactionBranch, captureExactCompactionBranch } from "./compaction-ownership.js";
 import { type RemoteCompactionProtocol, resolveCompactionRoute } from "./model-api.js";
-import { captureCheckpointPreparation, preparedAttempts } from "./prepared-compaction.js";
+import { captureCheckpointPreparation } from "./prepared-compaction.js";
 import {
   COMPACTION_ENGINE_AVAILABLE,
   COMPACTION_ENGINE_REQUEST,
@@ -307,7 +307,6 @@ export function createCodexCompactExtension(
         );
       };
       const execute = async () => {
-        let failedAttempt: CompactionAttempt | undefined;
         const selectedSource = source;
         if (selectedSource) {
           let supplied: Awaited<ReturnType<PreparedCompactionSource["beforeCompact"]>>;
@@ -341,9 +340,11 @@ export function createCodexCompactExtension(
             if (!sourceIsCurrent()) return { cancel: true };
             return supplied.result;
           }
-          if (supplied.kind === "fallback" && supplied.prepared)
-            failedAttempt = preparedAttempts.get(supplied.prepared);
         }
+        // A failed speculative preparation is not a foreground attempt. Start one
+        // fresh operation here; its bounded provider retries and recovery own the
+        // rest of this compaction. A source cancel (including apply claims) never
+        // reaches this path. Rejected OAuth routes remain paused at dispatch.
         return compactRemotely(
           pi,
           event,
@@ -357,7 +358,6 @@ export function createCodexCompactExtension(
             if (isCurrent() && key) owner.lastRoute = { key, protocol };
           },
           options.fetch,
-          { failedAttempt },
         );
       };
       return execute()

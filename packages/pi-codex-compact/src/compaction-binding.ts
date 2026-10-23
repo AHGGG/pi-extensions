@@ -27,7 +27,6 @@ const componentLabels = [
 // Request-scoped diagnostics only: never attach these digests to enumerable state,
 // checkpoint details, notifications, or debug output. Weak keys follow job lifetime.
 const componentDigests = new WeakMap<CompactionBinding, string[]>();
-const exactDigests = new WeakMap<CompactionBinding, string>();
 const digest = (serialized: string) => createHash("sha256").update(serialized).digest("hex");
 
 /** Resolve auth through the same public Pi APIs for preparation and adoption. */
@@ -75,7 +74,6 @@ export async function resolveCompactionBinding(
     stream: provider.stream,
     streamSimple: provider.streamSimple,
   };
-  exactDigests.set(binding, digest(exact));
   // Diagnose the same normalized components without another auth resolution or
   // invocation of provider/model serialization hooks.
   componentDigests.set(
@@ -92,16 +90,6 @@ export function sameCompactionBinding(left: CompactionBinding | undefined, right
     left.provider === right.provider &&
     left.stream === right.stream &&
     left.streamSimple === right.streamSimple
-  );
-}
-
-/** A failed request must not suppress a new attempt with refreshed credentials. */
-export function sameCompactionAttempt(left: CompactionBinding | undefined, right: CompactionBinding): boolean {
-  return (
-    sameCompactionBinding(left, right) &&
-    !!left &&
-    exactDigests.has(left) &&
-    exactDigests.get(left) === exactDigests.get(right)
   );
 }
 

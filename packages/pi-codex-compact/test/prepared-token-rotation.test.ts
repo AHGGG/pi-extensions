@@ -89,7 +89,8 @@ function fixture() {
   const gate = deferred<void>();
   let paused = true;
   let fetches = 0;
-  let failOnce = false;
+  let failuresRemaining = 0;
+  let rejectedOperation = false;
   let apiKey = "fixture-key";
   const prompt = "system";
   const requestSignals: AbortSignal[] = [];
@@ -169,8 +170,13 @@ function fixture() {
       requestSignals.push(init?.signal as AbortSignal);
       started.resolve();
       if (paused) await gate.promise;
-      if (failOnce) {
-        failOnce = false;
+      if (rejectedOperation)
+        return Response.json(
+          { error: { code: "hardened_oauth_rule_missing", type: "rejected_by_hardened_oauth_boundary" } },
+          { status: 403 },
+        );
+      if (failuresRemaining > 0) {
+        failuresRemaining -= 1;
         throw new Error("expired token");
       }
       return response();
@@ -226,8 +232,11 @@ function fixture() {
       paused = false;
       gate.resolve();
     },
-    failNext() {
-      failOnce = true;
+    failNext(count = 1) {
+      failuresRemaining = count;
+    },
+    rejectOperation() {
+      rejectedOperation = true;
     },
     setKey(value: string) {
       apiKey = value;
@@ -310,6 +319,149 @@ test("refreshed OAuth retries a failed preparation instead of reusing its old au
     const result = await h.compact();
     assert.ok(result);
     assert.equal(h.fetches, 2, "fresh authentication must make a new foreground request");
+  } finally {
+    detach();
+    await h.emit("session_shutdown", { type: "session_shutdown" });
+  }
+});
+
+for (const reason of ["manual", "threshold"] as const) {
+  for (const failure of ["request", "deadline"] as const) {
+    test(`${reason} compaction freshly retries ${failure} preparation failure without credential changes`, async () => {
+      const h = fixture();
+      const deadline = new AbortController();
+      const preparation = h.engine().capture(h.ctx);
+      assert.ok(preparation);
+      if (failure === "request") h.failNext();
+      const pending = preparation.start({
+        signal: new AbortController().signal,
+        deadlineSignal: deadline.signal,
+        isCurrent: () => true,
+        ownsStatus: () => true,
+      });
+      await h.started;
+      if (failure === "deadline") deadline.abort(new Error("fixture deadline"));
+      h.release();
+      const checkpoint = await pending;
+      assert.equal(checkpoint.usable, false);
+      assert.equal(h.fetches, 1);
+      const detach = h
+        .engine()
+        .attachSource({ beforeCompact: async () => ({ kind: "fallback", prepared: checkpoint }) });
+      try {
+        const result = await h.compact(reason);
+        assert.ok(result && typeof result === "object" && "compaction" in result);
+        assert.equal(h.fetches, 2, "exactly one new logical checkpoint request succeeds");
+        assert.notEqual(h.requestSignals[0], h.requestSignals[1], "foreground owns a fresh request signal");
+      } finally {
+        detach();
+        await h.emit("session_shutdown", { type: "session_shutdown" });
+      }
+    });
+  }
+
+  test(`${reason} failed fresh attempt returns to native fallback without looping`, async () => {
+    const h = fixture();
+    const preparation = h.engine().capture(h.ctx);
+    assert.ok(preparation);
+    h.failNext(2);
+    h.release();
+    const checkpoint = await preparation.start({
+      signal: new AbortController().signal,
+      isCurrent: () => true,
+      ownsStatus: () => true,
+    });
+    assert.equal(checkpoint.usable, false);
+    const detach = h.engine().attachSource({ beforeCompact: async () => ({ kind: "fallback", prepared: checkpoint }) });
+    try {
+      assert.equal(await h.compact(reason), undefined);
+      assert.equal(h.fetches, 2, "background failure plus one foreground failure; no recursive retry");
+    } finally {
+      detach();
+      await h.emit("session_shutdown", { type: "session_shutdown" });
+    }
+  });
+}
+
+for (const stop of ["source-cancel", "event-abort", "shutdown"] as const) {
+  test(`failed preparation does not start foreground inference after ${stop}`, async () => {
+    const h = fixture();
+    const preparation = h.engine().capture(h.ctx);
+    assert.ok(preparation);
+    h.failNext();
+    h.release();
+    const checkpoint = await preparation.start({
+      signal: new AbortController().signal,
+      isCurrent: () => true,
+      ownsStatus: () => true,
+    });
+    assert.equal(checkpoint.usable, false);
+    const controller = new AbortController();
+    const detach = h.engine().attachSource({
+      beforeCompact: async () => {
+        if (stop === "source-cancel") return { kind: "cancel" };
+        if (stop === "event-abort") controller.abort();
+        if (stop === "shutdown") await h.emit("session_shutdown", { type: "session_shutdown" });
+        return { kind: "fallback", prepared: checkpoint };
+      },
+    });
+    try {
+      assert.deepEqual(await h.compact("threshold", controller.signal), { cancel: true });
+      assert.equal(h.fetches, 1, "an invalid automatic apply or cancelled owner must not infer");
+    } finally {
+      detach();
+      await h.emit("session_shutdown", { type: "session_shutdown" });
+    }
+  });
+}
+
+test("failed preparation then fresh foreground failure uses checkpoint recovery once before native fallback", async () => {
+  const h = fixture();
+  h.release();
+  const initial = (await h.compact()) as {
+    compaction: { summary: string; firstKeptEntryId: string; tokensBefore: number; details: unknown };
+  };
+  assert.ok(initial.compaction);
+  const c = initial.compaction;
+  h.manager.appendCompaction(c.summary, c.firstKeptEntryId, c.tokensBefore, c.details, true);
+  h.manager.appendMessage({ role: "user", content: "continue", timestamp: 3 });
+  const preparation = h.engine().capture(h.ctx);
+  assert.ok(preparation);
+  h.failNext(3);
+  const checkpoint = await preparation.start({
+    signal: new AbortController().signal,
+    isCurrent: () => true,
+    ownsStatus: () => true,
+  });
+  assert.equal(checkpoint.usable, false);
+  assert.equal(h.fetches, 2);
+  const detach = h.engine().attachSource({ beforeCompact: async () => ({ kind: "fallback", prepared: checkpoint }) });
+  try {
+    assert.equal(await h.compact(), undefined);
+    assert.equal(h.fetches, 4, "seed, failed preparation, fresh checkpoint, then one summary recovery");
+    assert.ok(h.notifications.some((notice) => /Checkpoint recovery could not complete/.test(notice.message)));
+  } finally {
+    detach();
+    await h.emit("session_shutdown", { type: "session_shutdown" });
+  }
+});
+
+test("failed preparation with an OAuth operation rejection keeps foreground dispatch paused", async () => {
+  const h = fixture();
+  const preparation = h.engine().capture(h.ctx);
+  assert.ok(preparation);
+  h.rejectOperation();
+  h.release();
+  const checkpoint = await preparation.start({
+    signal: new AbortController().signal,
+    isCurrent: () => true,
+    ownsStatus: () => true,
+  });
+  assert.equal(checkpoint.usable, false);
+  const detach = h.engine().attachSource({ beforeCompact: async () => ({ kind: "fallback", prepared: checkpoint }) });
+  try {
+    assert.equal(await h.compact(), undefined);
+    assert.equal(h.fetches, 1, "fresh foreground operation cannot bypass a paused OAuth route");
   } finally {
     detach();
     await h.emit("session_shutdown", { type: "session_shutdown" });

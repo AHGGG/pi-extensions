@@ -22,7 +22,7 @@ import {
 import { checkpointIssuerRequest } from "./checkpoint-portability.js";
 import { projectedKeptMessages, projectSessionCheckpointContext } from "./checkpoint-projection.js";
 import { recoverCheckpoint, summaryPrefix } from "./checkpoint-recovery.js";
-import { type CompactionBinding, resolveCompactionBinding, sameCompactionAttempt } from "./compaction-binding.js";
+import { type CompactionBinding, resolveCompactionBinding } from "./compaction-binding.js";
 import {
   compactionFailureDetail,
   compactionFailureMessage,
@@ -44,14 +44,7 @@ const STATUS_KEY = "codex-compact";
 export interface CompactionAttempt {
   binding?: CompactionBinding;
   failure?: {
-    error: unknown;
-    diagnostic?: string;
-    routeKey: string;
-    endpointObserved: boolean;
-    paused: boolean;
-    remoteAttempted: boolean;
-    rejectionError?: Error;
-    requestValues: string[];
+    diagnostic: string;
   };
 }
 
@@ -60,7 +53,6 @@ export interface CompactionOperationOptions {
     attempt: CompactionAttempt;
     branchIsCurrent: (current: SessionBeforeCompactEvent["branchEntries"]) => boolean;
   };
-  failedAttempt?: CompactionAttempt;
   deadlineSignal?: AbortSignal;
 }
 
@@ -216,12 +208,6 @@ export async function compactRemotely(
             ? "Responses Remote V2…"
             : "Responses Compact API…",
       );
-    const failed = options.failedAttempt;
-    if (failed?.failure && sameCompactionAttempt(failed.binding, resolved.binding)) {
-      ({ routeKey, endpointObserved, paused, remoteAttempted, rejectionError } = failed.failure);
-      requestValues.push(...failed.failure.requestValues);
-      throw failed.failure.error;
-    }
     const current = projectedCurrentMessages(event, route);
     if (checkpoint && current.prior && checkpoint.details.provider !== model.provider) {
       // Prepared handles only carry opaque checkpoints. Plaintext transfer belongs
@@ -368,7 +354,6 @@ export async function compactRemotely(
       recordRejection(error instanceof Error ? error : new Error(String(error)));
     if (options.preparation) {
       options.preparation.attempt.failure = {
-        error,
         diagnostic: options.deadlineSignal?.aborted
           ? "checkpoint request timed out"
           : (lastTransportFailure ??
@@ -376,12 +361,6 @@ export async function compactRemotely(
               httpStatus: lastHttpStatus,
               remoteAttempted,
             })),
-        routeKey,
-        endpointObserved,
-        paused,
-        remoteAttempted,
-        rejectionError,
-        requestValues,
       };
       return undefined;
     }

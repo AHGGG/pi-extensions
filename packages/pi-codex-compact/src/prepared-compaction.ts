@@ -38,8 +38,6 @@ function completeToolPairs(messages: AgentMessage[]): boolean {
   return pending.size === 0;
 }
 
-export const preparedAttempts = new WeakMap<PreparedCheckpoint, CompactionAttempt>();
-
 /** Capture a provider-bound prefix for later preparation. This does not schedule or start work. */
 export function captureCheckpointPreparation(
   pi: ExtensionAPI,
@@ -162,7 +160,6 @@ export function captureCheckpointPreparation(
         isCurrent,
         runtime,
       );
-      preparedAttempts.set(prepared, attempt);
       return prepared;
     },
   };
@@ -223,7 +220,7 @@ function createPreparedCheckpoint(
 type PreparedAdoption =
   | { kind: "stale" }
   | { kind: "cancel" }
-  | { kind: "failed"; attempt: CompactionAttempt }
+  | { kind: "failed" }
   | { kind: "ready"; result: CompactionResult };
 
 interface PreparedApplicationOptions {
@@ -295,7 +292,7 @@ async function adoptPreparedCheckpoint(
     if (!valid()) return { kind: "stale" };
     if (!sameCompactionBinding(prepared.attempt.binding, binding.binding))
       return stale(compactionBindingChanges(prepared.attempt.binding, binding.binding).join("; "), true);
-    if (prepared.attempt.failure) return { kind: "failed", attempt: prepared.attempt };
+    if (prepared.attempt.failure) return { kind: "failed" };
     if (!result || !("compaction" in result) || !result.compaction)
       return stale("prepared checkpoint result is unavailable", true);
     const rebindStarted = performance.now();

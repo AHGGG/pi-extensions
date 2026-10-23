@@ -2,6 +2,7 @@ import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import { type AssistantMessage, type AssistantMessageEventStream, normalizeContext } from "@earendil-works/pi-ai";
 import type { SessionBeforeCompactEvent } from "@earendil-works/pi-coding-agent";
 import { expandRemoteCompactionPayload, MAX_COMPACTION_ITEM_BYTES, MAX_SSE_BYTES } from "./protocol.js";
+import { RecoveryOutput } from "./recovery-output.js";
 import { abortError, assertPreparedInput, isJsonObject, type RemoteCompactionRequest } from "./remote-types.js";
 
 export const RECOVERY_INSTRUCTION =
@@ -44,8 +45,7 @@ export async function summarizeCheckpoint(
   let stream: AssistantMessageEventStream | undefined;
   let payloadSeen = false;
   let successes = 0;
-  let terminalSeen = false;
-  let terminalText: string | undefined;
+  const output = new RecoveryOutput();
   const baseFetch = request.fetch ?? globalThis.fetch;
   try {
     stream = request.provider.stream(request.model, normalizeContext(request.context), {
@@ -122,55 +122,7 @@ export async function summarizeCheckpoint(
       },
       onProviderStreamEvent: (raw) => {
         if (!isJsonObject(raw)) return;
-        if (raw.type === "response.output_item.done") {
-          const item = raw.item;
-          if (!isJsonObject(item) || (item.type !== "message" && item.type !== "reasoning"))
-            throw new Error("Unsafe checkpoint recovery output");
-          if (
-            item.type === "message" &&
-            (item.role !== "assistant" ||
-              !Array.isArray(item.content) ||
-              !item.content.every(
-                (part) => isJsonObject(part) && part.type === "output_text" && typeof part.text === "string",
-              ))
-          )
-            throw new Error("Unsafe checkpoint recovery message");
-        }
-        if (raw.type !== "response.completed" && raw.type !== "response.done") return;
-        const response = raw.response;
-        if (
-          terminalSeen ||
-          !isJsonObject(response) ||
-          response.status !== "completed" ||
-          response.error != null ||
-          response.incomplete_details != null ||
-          !Array.isArray(response.output)
-        )
-          throw new Error("Checkpoint recovery did not complete safely");
-        if (
-          !Array.from(response.output).every(
-            (item) =>
-              isJsonObject(item) &&
-              (item.status === undefined || item.status === "completed") &&
-              (item.type === "reasoning" ||
-                (item.type === "message" &&
-                  item.role === "assistant" &&
-                  Array.isArray(item.content) &&
-                  item.content.every(
-                    (part) => isJsonObject(part) && part.type === "output_text" && typeof part.text === "string",
-                  ))),
-          )
-        )
-          throw new Error("Unsafe checkpoint recovery terminal output");
-        // Pi emits one text block per message, concatenating its output-text parts.
-        terminalText = response.output
-          .flatMap((item) =>
-            isJsonObject(item) && item.type === "message" && Array.isArray(item.content)
-              ? [item.content.map((part: { text: string }) => part.text).join("")]
-              : [],
-          )
-          .join("\n");
-        terminalSeen = true;
+        output.observe(raw);
       },
     });
     const activeStream = stream;
@@ -190,11 +142,10 @@ export async function summarizeCheckpoint(
           completed = item.message;
         }
       }
-      if (!completed || !payloadSeen || successes !== 1 || !terminalSeen)
+      if (!completed || !payloadSeen || successes !== 1 || !output.terminalSeen)
         throw new Error("Checkpoint recovery ended without validated completion");
       const summary = completed.content.flatMap((block) => (block.type === "text" ? [block.text] : [])).join("\n");
-      if (summary !== terminalText)
-        throw new Error("Checkpoint recovery terminal text conflicts with provider completion");
+      output.assertMatches(summary);
       if (!summary.trim() || Buffer.byteLength(summary) > MAX_COMPACTION_ITEM_BYTES)
         throw new Error("Checkpoint recovery returned an empty or oversized summary");
       return { summary, usage: completed.usage };

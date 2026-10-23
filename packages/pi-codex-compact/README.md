@@ -168,6 +168,8 @@ Changing the protocol or backend can permit a new attempt; switching back to the
 
 Pi's native summary generator cannot read encrypted checkpoint history. Direct native fallback after a checkpoint can therefore lose older context.
 
+If a speculative preparation fails, the next actual compaction first makes **one fresh invisible checkpoint attempt** with current credentials and its own timeout. Configured bounded provider retries still apply. Only if this foreground attempt also fails does recovery below begin. A cancelled automatic-application claim starts no new inference, and OAuth-rejected routes remain paused.
+
 After remote failure with a checkpoint, **Checkpoint recovery → Summarize** (the default) makes a normal inference request through the same compatible provider/model and Pi-managed credentials. It replays the checkpoint, disables tools, and replaces it with a bounded plaintext summary while retaining the recent tail and file metadata. This consumes quota and is lossy; successful validation cannot prove that every fact was preserved. Ordinary work requests do not receive recovery instructions.
 
 If the recovery request fails, times out, or returns invalid or oversized output, **Summarize falls back to Pi-native compaction**. Native compaction can summarize only the fallback marker and visible history; **older context stored only in the opaque checkpoint may be lost**. With `notifyOnFallback` enabled, the extension warns before handing control back to Pi. Recovery and native summarization can each consume quota; native failure follows Pi's normal failure handling.

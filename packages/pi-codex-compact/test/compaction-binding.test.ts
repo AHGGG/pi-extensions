@@ -8,7 +8,6 @@ import {
   type CompactionBinding,
   compactionBindingChanges,
   resolveCompactionBinding,
-  sameCompactionAttempt,
   sameCompactionBinding,
 } from "../src/compaction-binding.js";
 import { type CodexCompactSettings, DEFAULT_CODEX_COMPACT_SETTINGS } from "../src/settings.js";
@@ -97,7 +96,6 @@ describe("compaction binding diagnostics", () => {
     assert.notEqual(first.auth, second.auth);
     assert.notEqual(first.binding, second.binding);
     assert.equal(sameCompactionBinding(first.binding, second.binding), true);
-    assert.equal(sameCompactionAttempt(first.binding, second.binding), true);
     assert.deepEqual(compactionBindingChanges(first.binding, second.binding), []);
     assert.deepEqual(f.calls, { requestAuth: 2, providerAuth: 2 });
   });
@@ -125,7 +123,6 @@ describe("compaction binding diagnostics", () => {
         assert.deepEqual(next.route, first.route);
         assert.equal(next.auth.apiKey, token);
         assert.equal(sameCompactionBinding(first.binding, next.binding), true);
-        assert.equal(sameCompactionAttempt(first.binding, next.binding), false);
         assert.deepEqual(compactionBindingChanges(first.binding, next.binding), []);
       }
     });
@@ -411,7 +408,6 @@ describe("compaction binding diagnostics", () => {
     second.binding.key = first.binding.key;
     assert.equal(originalComparator(first.binding, second.binding), true);
     assert.equal(sameCompactionBinding(first.binding, second.binding), true);
-    assert.equal(sameCompactionAttempt(first.binding, second.binding), false);
     assert.deepEqual(compactionBindingChanges(first.binding, second.binding), []);
   });
 
