@@ -34,6 +34,7 @@ import {
 import { captureCompactionBranch } from "./compaction-ownership.js";
 import { validateContextManagementHistory } from "./context-management.js";
 import { type CompactionRoute, type RemoteCompactionProtocol, resolveCompactionRoute } from "./model-api.js";
+import { preparationFailureDetail } from "./preparation-failure.js";
 import { type RejectedRoutes, rejectionRouteKey } from "./rejection-state.js";
 import { requestRemoteCompaction } from "./remote.js";
 import type { CodexCompactSettings } from "./settings.js";
@@ -44,6 +45,7 @@ export interface CompactionAttempt {
   binding?: CompactionBinding;
   failure?: {
     error: unknown;
+    diagnostic?: string;
     routeKey: string;
     endpointObserved: boolean;
     paused: boolean;
@@ -174,6 +176,8 @@ export async function compactRemotely(
     branchIsCurrent(ctx.sessionManager.getBranch());
   let requestValues: string[] = [];
   let remoteAttempted = false;
+  let lastHttpStatus: number | undefined;
+  let lastTransportFailure: string | undefined;
   let rejectionError: Error | undefined;
   const remoteController = new AbortController();
   const remoteSignal = AbortSignal.any([
@@ -287,6 +291,8 @@ export async function compactRemotely(
             );
           }
           remoteAttempted = true;
+          lastHttpStatus = undefined;
+          lastTransportFailure = undefined;
           const response = await (fetch ?? globalThis.fetch)(input, {
             ...init,
             signal: AbortSignal.any([
@@ -294,7 +300,17 @@ export async function compactRemotely(
               ...(init?.signal ? [init.signal] : []),
               ...(input instanceof Request ? [input.signal] : []),
             ]),
+          }).catch((error: unknown) => {
+            const detail = preparationFailureDetail(error, { remoteAttempted: true });
+            lastTransportFailure =
+              detail.startsWith("network request failed") ||
+              detail === "checkpoint request timed out" ||
+              detail === "provider or transport aborted the checkpoint request"
+                ? detail
+                : "network request failed";
+            throw error;
           });
+          lastHttpStatus = response.ok ? undefined : response.status;
           if (remoteSignal.aborted || !stillCurrent()) {
             void response.body?.cancel().catch(() => undefined);
             throw new Error("Compaction ownership changed after response");
@@ -353,6 +369,13 @@ export async function compactRemotely(
     if (options.preparation) {
       options.preparation.attempt.failure = {
         error,
+        diagnostic: options.deadlineSignal?.aborted
+          ? "checkpoint request timed out"
+          : (lastTransportFailure ??
+            preparationFailureDetail(rejectionError ?? error, {
+              httpStatus: lastHttpStatus,
+              remoteAttempted,
+            })),
         routeKey,
         endpointObserved,
         paused,

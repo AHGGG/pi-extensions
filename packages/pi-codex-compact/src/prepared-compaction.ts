@@ -190,7 +190,7 @@ function createPreparedCheckpoint(
   return {
     checkpointId: details?.checkpointId,
     usable: !!details,
-    failure: details ? undefined : "checkpoint preparation failed",
+    failure: details ? undefined : (attempt.failure?.diagnostic ?? "checkpoint preparation failed"),
     async adopt(event, ctx, guard) {
       data.validationFailure = undefined;
       data.applicationFailure = undefined;

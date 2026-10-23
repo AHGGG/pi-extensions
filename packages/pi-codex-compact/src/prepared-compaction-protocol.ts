@@ -32,6 +32,7 @@ export interface CheckpointDraft {
 export interface PreparedCheckpoint {
   readonly checkpointId?: string;
   readonly usable: boolean;
+  /** Safe, bounded display text: no credentials, request/response bodies, or conversation content. */
   readonly failure?: string;
   adopt(event: SessionBeforeCompactEvent, ctx: ExtensionContext, guard: ApplicationGuard): Promise<CheckpointAdoption>;
   draft(ctx: ExtensionContext, guard: ApplicationGuard): Promise<CheckpointDraft>;
