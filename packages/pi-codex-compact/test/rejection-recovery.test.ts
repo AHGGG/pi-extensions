@@ -975,3 +975,24 @@ test("a later native compaction supersedes an archived malformed checkpoint clai
   assert.equal(await h.run(), undefined);
   assert.equal(h.payloads.length, 1, "only the newest compaction owns the current contract");
 });
+
+test("foreground Context Management and recovery failures display separate safe diagnostic snapshots", async () => {
+  const h = await harness({
+    checkpoint: true,
+    settings: { protocol: "context-management" },
+    response: async () =>
+      new Response("", { headers: { "content-type": "text/event-stream", "x-private": "secret-fixture" } }),
+  });
+  const before = structuredClone(h.entries);
+  assert.equal(await h.run(), undefined);
+  assert.equal(h.payloads.length, 2);
+  assert.deepEqual(h.entries, before);
+  assert.equal(h.notifications.length, 2);
+  assert.match(h.notifications[0].message, /applying checkpoint recovery.*\[diag phase=/);
+  assert.match(h.notifications[1].message, /Checkpoint recovery could not complete.*\[diag phase=/);
+  for (const { message } of h.notifications) {
+    assert.match(message, /attempts=1 headers=200@\d+s mime=sse body=eof/);
+    assert.match(message, /terminal\(c\/d\/i\/f\/e\)=0\/0\/0\/0\/0 abort\(d\/c\/p\)=0\/0\/0/);
+    assert.doesNotMatch(message, /secret-fixture|opaque-assistant-only-fact/);
+  }
+});

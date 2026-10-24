@@ -37,6 +37,7 @@ import { type CompactionRoute, type RemoteCompactionProtocol, resolveCompactionR
 import { preparationFailureDetail } from "./preparation-failure.js";
 import { type RejectedRoutes, rejectionRouteKey } from "./rejection-state.js";
 import { requestRemoteCompaction } from "./remote.js";
+import { RequestDiagnostics } from "./request-diagnostics.js";
 import type { CodexCompactSettings } from "./settings.js";
 
 const STATUS_KEY = "codex-compact";
@@ -105,9 +106,10 @@ function notifyFailure(
   requestValues: readonly string[],
   checkpointPresent = false,
   routePaused = true,
+  diagnostic = "",
 ): void {
   if (!ctx.hasUI || !settings.notifyOnFallback) return;
-  const diagnosis = compactionFailureMessage(error, requestValues);
+  const diagnosis = compactionFailureMessage(error, requestValues) + (diagnostic ? ` [${diagnostic}]` : "");
   const message = routePaused
     ? diagnosis
     : diagnosis.replace(
@@ -166,6 +168,11 @@ export async function compactRemotely(
     ctx.getSystemPrompt?.() === systemPrompt &&
     JSON.stringify([pi.getActiveTools(), activeTools(pi)]) === tools &&
     branchIsCurrent(ctx.sessionManager.getBranch());
+  const diagnostics = new RequestDiagnostics();
+  const markDeadline = () => {
+    diagnostics.deadline = true;
+  };
+  options.deadlineSignal?.addEventListener("abort", markDeadline, { once: true });
   let requestValues: string[] = [];
   let remoteAttempted = false;
   let lastHttpStatus: number | undefined;
@@ -236,8 +243,10 @@ export async function compactRemotely(
       ),
       tools: activeTools(pi),
     };
+    diagnostics.phase = "request";
     const response = await abortable(
       requestRemoteCompaction({
+        diagnostics,
         provider,
         model,
         context,
@@ -279,6 +288,7 @@ export async function compactRemotely(
           remoteAttempted = true;
           lastHttpStatus = undefined;
           lastTransportFailure = undefined;
+          const diagnosticAttempt = diagnostics.currentAttempt;
           const response = await (fetch ?? globalThis.fetch)(input, {
             ...init,
             signal: AbortSignal.any([
@@ -296,6 +306,7 @@ export async function compactRemotely(
                 : "network request failed";
             throw error;
           });
+          if (route.protocol === "context-management") diagnostics.headers(response, diagnosticAttempt);
           lastHttpStatus = response.ok ? undefined : response.status;
           if (remoteSignal.aborted || !stillCurrent()) {
             void response.body?.cancel().catch(() => undefined);
@@ -353,24 +364,37 @@ export async function compactRemotely(
     if (remoteAttempted && isOAuthOperationRejection(error))
       recordRejection(error instanceof Error ? error : new Error(String(error)));
     if (options.preparation) {
+      const detail = options.deadlineSignal?.aborted
+        ? "checkpoint request timed out"
+        : (lastTransportFailure ??
+          preparationFailureDetail(rejectionError ?? error, {
+            httpStatus: lastHttpStatus,
+            remoteAttempted,
+          }));
       options.preparation.attempt.failure = {
-        diagnostic: options.deadlineSignal?.aborted
-          ? "checkpoint request timed out"
-          : (lastTransportFailure ??
-            preparationFailureDetail(rejectionError ?? error, {
-              httpStatus: lastHttpStatus,
-              remoteAttempted,
-            })),
+        diagnostic:
+          route.protocol === "context-management"
+            ? `${detail.split(" (no safe error details available)")[0]} [${diagnostics.compact()}]`
+            : detail,
       };
       return undefined;
     }
     if (!paused || remoteAttempted)
-      notifyFailure(ctx, rejectionError ?? error, settings, requestValues, checkpointPresent, rejected.has(routeKey));
+      notifyFailure(
+        ctx,
+        rejectionError ?? error,
+        settings,
+        requestValues,
+        checkpointPresent,
+        rejected.has(routeKey),
+        route.protocol === "context-management" ? diagnostics.summary() : "",
+      );
     if (!checkpointPresent) return undefined;
     if (!checkpoint) return { cancel: true };
     if (checkpoint.details.provider !== model.provider) return { cancel: true };
     if (settings.checkpointRecovery === "cancel") return { cancel: true };
     let nativeFallbackAllowed = false;
+    const recoveryDiagnostics = new RequestDiagnostics();
     try {
       const current = projectedCurrentMessages(event, route);
       if (!current.prior) throw new Error("Checkpoint recovery lost its checkpoint");
@@ -391,6 +415,7 @@ export async function compactRemotely(
       if (ownsStatus()) ctx.ui.setStatus(STATUS_KEY, "Checkpoint recovery summary…");
       const compaction = await recoverCheckpoint(
         {
+          diagnostics: recoveryDiagnostics,
           provider,
           model,
           context: { systemPrompt: ctx.getSystemPrompt(), messages: convertToLlm(messages), tools: [] },
@@ -419,7 +444,10 @@ export async function compactRemotely(
                 { status: 400, headers: { "x-should-retry": "false" } },
               );
             }
-            return (fetch ?? globalThis.fetch)(input, init);
+            const diagnosticAttempt = recoveryDiagnostics.currentAttempt;
+            const response = await (fetch ?? globalThis.fetch)(input, init);
+            recoveryDiagnostics.headers(response, diagnosticAttempt);
+            return response;
           },
         },
         event,
@@ -433,13 +461,14 @@ export async function compactRemotely(
           ? "using Pi native compaction. Older context stored only in the opaque checkpoint may be lost."
           : "compaction cancelled and history preserved.";
         ctx.ui.notify(
-          `Checkpoint recovery could not complete; ${outcome} ${compactionFailureDetail(recoveryError, requestValues)}`,
+          `Checkpoint recovery could not complete; ${outcome} ${compactionFailureDetail(recoveryError, requestValues)} [${recoveryDiagnostics.summary()}]`,
           "warning",
         );
       }
       return nativeFallbackAllowed ? undefined : { cancel: true };
     }
   } finally {
+    options.deadlineSignal?.removeEventListener("abort", markDeadline);
     remoteController.abort();
     if (!ownerSignal.aborted && ctx.sessionManager.getSessionId() === sessionId && ownsStatus()) {
       ctx.ui.setStatus(STATUS_KEY, undefined);

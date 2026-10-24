@@ -213,6 +213,14 @@ The session stores the provider ID, encrypted checkpoint, and bounded retained u
 An individually oversized media item is dropped. The oldest fitting retained text item may be partially truncated to preserve newer context.
 Context Management does not retain the original plaintext alongside its checkpoint and fails rather than truncating oversized post-checkpoint output. Hard byte ceilings are not configurable.
 
+### Request failure diagnostics
+
+Context Management and checkpoint-recovery failures include a bounded `diag` summary. It reports the operation phase and elapsed seconds, HTTP attempt count, last-attempt status/time to headers, content-type category, observed body bytes/chunks and idle time, and provider-observed terminal event counts. No prompts, credentials, URLs, response IDs, arbitrary headers, provider event content, or checkpoint contents are added to these metrics.
+
+`terminal(c/d/i/f/e)` counts observed `response.completed`, `response.done`, `response.incomplete`, `response.failed`, and `error` events. `abort(d/c/p)` reports whether the extension deadline, caller signal, or provider-supplied fetch signal was observed aborted; overlapping flags are possible and do not identify a root cause. The caller signal can represent a prepared deadline or route cancellation, not just user cancellation. `body=eof` means the observed byte stream ended, not that a valid checkpoint completed; `pipe-error` can also mean downstream cancellation. `open` at the failure snapshot does not prove the socket is still open: asynchronous pipe teardown may not yet have settled. Counts describe the existing bounded stream observer, not network packets, and provider hooks may omit events rejected internally by the SDK. Per-attempt counters reset on retry; elapsed time and the attempt count cover the operation. A `-` means no observation was available.
+
+Prepared failure handles carry a shorter summary (`t` elapsed seconds, `n` attempts, `http` status, `term` and `abort` use the same order) so diagnostics survive bounded caller displays. Other compaction protocols keep their existing failure reporting. Diagnostics do not change retry, timeout, cancellation, checkpoint validation, or recovery policy and cannot determine why a remote request stalled by themselves.
+
 ## 🚧 Limitations
 
 - Backend compaction contracts and OAuth restrictions can change independently; keep backups of important sessions.

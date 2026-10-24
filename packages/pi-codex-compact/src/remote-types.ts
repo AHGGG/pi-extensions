@@ -1,6 +1,7 @@
 import type { Api, Context, Model, Provider, ProviderHeaders, Usage } from "@earendil-works/pi-ai";
 import type { RemoteCompactionProtocol, ResponsesCompactionProfile } from "./model-api.js";
 import type { JsonObject } from "./protocol.js";
+import type { RequestDiagnostics } from "./request-diagnostics.js";
 
 export interface PriorCheckpointPayload {
   marker: string;
@@ -21,6 +22,7 @@ export interface RemoteCompactionRequest {
   requestTimeoutMs?: number;
   maxRetries?: number;
   fetch?: typeof globalThis.fetch;
+  diagnostics?: RequestDiagnostics;
   onProviderStreamEvent?: (event: unknown) => void;
 }
 

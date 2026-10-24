@@ -93,7 +93,7 @@ const model: Model<"openai-responses"> = {
   contextWindow: 100_000,
   maxTokens: 10_000,
 };
-async function preparation(fetch: typeof globalThis.fetch, maxRetries = 0) {
+async function preparation(fetch: typeof globalThis.fetch, maxRetries = 0, contextManagement = false) {
   const specifier = "@earendil-works/pi-ai/providers/openai";
   const { openaiProvider } = (await import(specifier)) as { openaiProvider(): Provider };
   const entries: SessionEntry[] = [
@@ -108,7 +108,11 @@ async function preparation(fetch: typeof globalThis.fetch, maxRetries = 0) {
   const state = {
     kind: "loaded" as const,
     path: "/unused",
-    settings: { ...DEFAULT_CODEX_COMPACT_SETTINGS, protocol: "responses-compact" as const, maxRetries },
+    settings: {
+      ...DEFAULT_CODEX_COMPACT_SETTINGS,
+      protocol: contextManagement ? ("context-management" as const) : ("responses-compact" as const),
+      maxRetries,
+    },
   };
   const runtime: CodexCompactSettingsRuntime = {
     get: () => state,
@@ -231,4 +235,65 @@ test("provider-owned fetch timeout retains its category before the preparation d
     ownsStatus: () => false,
   });
   assert.equal(prepared.failure, "checkpoint request timed out");
+});
+
+test("prepared Context Management failure carries bounded metadata through the public handle", async () => {
+  const { captured } = await preparation(
+    async () =>
+      new Response("", {
+        headers: { "content-type": "text/event-stream", "x-private": "secret" },
+      }),
+    0,
+    true,
+  );
+  const prepared = await captured.start({
+    signal: new AbortController().signal,
+    isCurrent: () => true,
+    ownsStatus: () => false,
+  });
+  assert.equal(prepared.usable, false);
+  assert.match(prepared.failure ?? "", /diag phase=stream|diag phase=headers/);
+  assert.match(prepared.failure ?? "", /http=200 body=eof term=0\/0\/0\/0\/0 abort=0\/0\/0/);
+  assert.ok((prepared.failure?.length ?? 0) <= 200);
+  assert.ok(!prepared.failure?.includes("secret"));
+});
+
+test("prepared deadline preserves HTTP headers received before a stalled error body", async () => {
+  let headers!: () => void;
+  const received = new Promise<void>((resolve) => {
+    headers = resolve;
+  });
+  const { captured } = await preparation(
+    async () => {
+      const response = new Response(
+        new ReadableStream({
+          start() {
+            headers();
+          },
+        }),
+        { status: 503 },
+      );
+      return response;
+    },
+    0,
+    true,
+  );
+  const deadline = new AbortController();
+  const pending = captured.start({
+    signal: new AbortController().signal,
+    deadlineSignal: deadline.signal,
+    isCurrent: () => true,
+    ownsStatus: () => false,
+  });
+  await received;
+  // Let the fetch continuation observe headers, before cancelling its still-open body.
+  await Promise.resolve();
+  await Promise.resolve();
+  deadline.abort(new Error("secret"));
+  const prepared = await pending;
+  assert.equal(prepared.usable, false);
+  assert.match(prepared.failure ?? "", /^checkpoint request timed out \[diag phase=headers/);
+  assert.match(prepared.failure ?? "", /http=503 body=open/);
+  assert.match(prepared.failure ?? "", /abort=1\//);
+  assert.ok((prepared.failure?.length ?? 0) <= 200);
 });

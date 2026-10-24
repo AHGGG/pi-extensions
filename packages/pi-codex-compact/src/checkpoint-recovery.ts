@@ -29,12 +29,14 @@ export async function summarizeCheckpoint(
 ) {
   if (!request.priorCheckpoint) throw new Error("Checkpoint recovery requires a compatible checkpoint");
   if (request.signal.aborted) throw abortError();
+  const diagnostics = request.diagnostics;
+  if (diagnostics) diagnostics.phase = "request";
   const controller = new AbortController();
   const signal = AbortSignal.any([request.signal, controller.signal]);
-  const timer = setTimeout(
-    () => controller.abort(new Error("Checkpoint recovery timed out")),
-    request.requestTimeoutMs ?? 300_000,
-  );
+  const timer = setTimeout(() => {
+    if (diagnostics) diagnostics.deadline = true;
+    controller.abort(new Error("Checkpoint recovery timed out"));
+  }, request.requestTimeoutMs ?? 300_000);
   let abortListener: (() => void) | undefined;
   const aborted = new Promise<never>((_, reject) => {
     abortListener = () => reject(signal.reason instanceof Error ? signal.reason : abortError());
@@ -47,6 +49,7 @@ export async function summarizeCheckpoint(
   let successes = 0;
   const output = new RecoveryOutput();
   const baseFetch = request.fetch ?? globalThis.fetch;
+  const cleanupSignals: (() => void)[] = [];
   try {
     stream = request.provider.stream(request.model, normalizeContext(request.context), {
       apiKey: request.apiKey,
@@ -59,10 +62,23 @@ export async function summarizeCheckpoint(
       maxRetries: request.maxRetries,
       timeoutMs: request.requestTimeoutMs,
       fetch: async (input, init) => {
+        const attempt = diagnostics?.beginAttempt() ?? 0;
+        const providerSignals = [
+          ...(init?.signal ? [init.signal] : []),
+          ...(input instanceof Request ? [input.signal] : []),
+        ];
+        const providerSignal = providerSignals.length ? AbortSignal.any(providerSignals) : undefined;
+        const markProviderAbort = () => {
+          diagnostics?.providerAborted(attempt);
+        };
+        if (providerSignal?.aborted) markProviderAbort();
+        providerSignal?.addEventListener("abort", markProviderAbort, { once: true });
+        cleanupSignals.push(() => providerSignal?.removeEventListener("abort", markProviderAbort));
         const response = await baseFetch(input, {
           ...init,
           signal: AbortSignal.any([signal, ...(init?.signal ? [init.signal] : [])]),
         });
+        diagnostics?.headers(response, attempt);
         if (signal.aborted) {
           void response.body?.cancel().catch(() => undefined);
           throw abortError();
@@ -70,17 +86,23 @@ export async function summarizeCheckpoint(
         if (!response.body) return response;
         if (response.ok) successes += 1;
         let bytes = 0;
-        const body = response.body.pipeThrough(
-          new TransformStream<Uint8Array, Uint8Array>({
-            transform(chunk, destination) {
-              bytes += chunk.byteLength;
-              if (bytes > MAX_SSE_BYTES) throw new Error("Checkpoint recovery stream exceeded the size limit");
-              destination.enqueue(chunk);
-            },
-          }),
-          { signal },
-        );
-        return new Response(body, {
+        const transform = new TransformStream<Uint8Array, Uint8Array>({
+          transform(chunk, destination) {
+            diagnostics?.chunk(chunk.byteLength, attempt);
+            bytes += chunk.byteLength;
+            if (bytes > MAX_SSE_BYTES) throw new Error("Checkpoint recovery stream exceeded the size limit");
+            destination.enqueue(chunk);
+          },
+          flush() {
+            diagnostics?.end(attempt);
+          },
+        });
+        // One pipe, no tee or additional reader. Rejection may be upstream failure
+        // or downstream parser cancellation, so do not mislabel it as a network error.
+        void response.body.pipeTo(transform.writable, { signal }).catch(() => {
+          diagnostics?.pipeError(attempt, signal.aborted);
+        });
+        return new Response(transform.readable, {
           status: response.status,
           statusText: response.statusText,
           headers: response.headers,
@@ -121,6 +143,7 @@ export async function summarizeCheckpoint(
         return prepared;
       },
       onProviderStreamEvent: (raw) => {
+        diagnostics?.observe(raw);
         if (!isJsonObject(raw)) return;
         output.observe(raw);
       },
@@ -145,6 +168,7 @@ export async function summarizeCheckpoint(
       if (!completed || !payloadSeen || successes !== 1 || !output.terminalSeen)
         throw new Error("Checkpoint recovery ended without validated completion");
       const summary = completed.content.flatMap((block) => (block.type === "text" ? [block.text] : [])).join("\n");
+      if (diagnostics) diagnostics.phase = "validation";
       output.assertMatches(summary);
       if (!summary.trim() || Buffer.byteLength(summary) > MAX_COMPACTION_ITEM_BYTES)
         throw new Error("Checkpoint recovery returned an empty or oversized summary");
@@ -152,6 +176,11 @@ export async function summarizeCheckpoint(
     };
     return await Promise.race([collect(), aborted]);
   } finally {
+    if (diagnostics) {
+      diagnostics.callerAbort = request.signal.aborted;
+      diagnostics.seal();
+    }
+    for (const cleanup of cleanupSignals) cleanup();
     clearTimeout(timer);
     if (abortListener) signal.removeEventListener("abort", abortListener);
     controller.abort();
