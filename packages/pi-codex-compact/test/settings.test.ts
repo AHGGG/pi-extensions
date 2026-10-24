@@ -56,21 +56,28 @@ test("normalizes defaults and bounded user settings", () => {
   assert.equal(normalizeCodexCompactSettings({ replacementTokenBudget: 1_000_000 }), undefined);
 });
 
-test("request timeout supports fifteen minutes while preserving defaults and validation", async () => {
+test("request timeout supports thirty minutes while preserving defaults and legacy values", async () => {
   assert.equal(normalizeCodexCompactSettings({})?.requestTimeoutMs, 300_000);
-  for (const requestTimeoutMs of [30_000, 600_000, 900_000])
+  for (const requestTimeoutMs of [30_000, 120_000, 300_000, 600_000, 900_000, 1_200_000, 1_500_000, 1_800_000])
     assert.equal(normalizeCodexCompactSettings({ requestTimeoutMs })?.requestTimeoutMs, requestTimeoutMs);
-  for (const requestTimeoutMs of [29_999, 900_001])
+  for (const requestTimeoutMs of [29_999, 1_800_001, 1_800_000.5, Number.POSITIVE_INFINITY])
     assert.equal(normalizeCodexCompactSettings({ requestTimeoutMs }), undefined);
 
   const path = await tempSettingsPath();
+  await writeFile(path, '{"requestTimeoutMs":120000,"futureField":"kept"}\n');
   const runtime = createCodexCompactSettingsRuntime(path);
-  await runtime.update({ requestTimeoutMs: 900_000 });
-  assert.equal((await runtime.reload()).settings.requestTimeoutMs, 900_000);
+  assert.equal((await runtime.reload()).settings.requestTimeoutMs, 120_000);
+  await runtime.update({ notifyOnFallback: false });
+  assert.equal((await runtime.reload()).settings.requestTimeoutMs, 120_000);
+  for (const requestTimeoutMs of [300_000, 600_000, 900_000, 1_200_000, 1_500_000, 1_800_000]) {
+    await runtime.update({ requestTimeoutMs });
+    assert.equal((await runtime.reload()).settings.requestTimeoutMs, requestTimeoutMs);
+  }
   const saved = await readFile(path, "utf8");
-  assert.equal(JSON.parse(saved).requestTimeoutMs, 900_000);
-  await assert.rejects(runtime.update({ requestTimeoutMs: 900_001 }), /Refusing to save invalid/);
-  assert.equal(runtime.get().settings.requestTimeoutMs, 900_000);
+  assert.equal(JSON.parse(saved).requestTimeoutMs, 1_800_000);
+  assert.equal(JSON.parse(saved).futureField, "kept");
+  await assert.rejects(runtime.update({ requestTimeoutMs: 1_800_001 }), /Refusing to save invalid/);
+  assert.equal(runtime.get().settings.requestTimeoutMs, 1_800_000);
   assert.equal(await readFile(path, "utf8"), saved);
 });
 

@@ -40,7 +40,7 @@ export const DEFAULT_CODEX_COMPACT_SETTINGS: Readonly<CodexCompactSettings> = Ob
 });
 
 const LIMITS = Object.freeze({
-  requestTimeoutMs: { minimum: 30_000, maximum: 900_000 },
+  requestTimeoutMs: { minimum: 30_000, maximum: 1_800_000 },
   maxRetries: { minimum: 0, maximum: 2 },
   replacementTokenBudget: { minimum: 8_000, maximum: 128_000 },
 });

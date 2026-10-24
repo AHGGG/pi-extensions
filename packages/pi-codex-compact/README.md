@@ -208,7 +208,7 @@ The session stores the provider ID, encrypted checkpoint, and bounded retained u
 | Retained user text or Context Management output suffix | 64K approximate tokens by default; configurable from 8K to 128K |
 | Settings file | 64 KiB |
 | Transport retries | At most 2 |
-| Request timeout | At most 15 minutes; default 5 minutes |
+| Request timeout | At most 30 minutes; default 5 minutes |
 
 An individually oversized media item is dropped. The oldest fitting retained text item may be partially truncated to preserve newer context.
 Context Management does not retain the original plaintext alongside its checkpoint and fails rather than truncating oversized post-checkpoint output. Hard byte ceilings are not configurable.

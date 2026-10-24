@@ -181,7 +181,7 @@ export function createCodexCompactMenu(
             label: "Request timeout",
             description: "Maximum time for the extension-owned remote compaction request.",
             currentValue: timeoutLabel(state.settings.requestTimeoutMs),
-            values: ["2 min", "5 min", "10 min", "15 min"],
+            values: ["5 min", "10 min", "15 min", "20 min", "25 min", "30 min"],
             action: "set-timeout",
           },
           {
