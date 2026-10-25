@@ -59,7 +59,7 @@ export async function resolveCompactionBinding(
     route,
     auth,
     providerAuth,
-    [settings.appendMaintenanceMessage, settings.maintenanceMessage],
+    [settings.appendMaintenanceMessage, settings.maintenanceMessage, settings.scratchpadEnabled],
   ]);
   const components = JSON.parse(exact);
   // Single-login policy: ordinary OAuth refresh must not discard prepared work.

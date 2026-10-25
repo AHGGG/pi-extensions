@@ -38,6 +38,7 @@ import { preparationFailureDetail } from "./preparation-failure.js";
 import { type RejectedRoutes, rejectionRouteKey } from "./rejection-state.js";
 import { requestRemoteCompaction } from "./remote.js";
 import { RequestDiagnostics } from "./request-diagnostics.js";
+import { captureScratchpadForCompaction } from "./scratchpad-compaction.js";
 import type { CodexCompactSettings } from "./settings.js";
 
 const STATUS_KEY = "codex-compact";
@@ -107,9 +108,10 @@ function notifyFailure(
   checkpointPresent = false,
   routePaused = true,
   diagnostic = "",
+  safeDetail?: string,
 ): void {
   if (!ctx.hasUI || !settings.notifyOnFallback) return;
-  const diagnosis = compactionFailureMessage(error, requestValues) + (diagnostic ? ` [${diagnostic}]` : "");
+  const diagnosis = compactionFailureMessage(error, requestValues, safeDetail) + (diagnostic ? ` [${diagnostic}]` : "");
   const message = routePaused
     ? diagnosis
     : diagnosis.replace(
@@ -179,6 +181,7 @@ export async function compactRemotely(
   options.deadlineSignal?.addEventListener("abort", markDeadline, { once: true });
   let requestValues: string[] = [settings.maintenanceMessage];
   let remoteAttempted = false;
+  let scratchpadIncluded = false;
   const diagnosticCleanups: (() => void)[] = [];
   let lastHttpStatus: number | undefined;
   let lastTransportFailure: string | undefined;
@@ -246,6 +249,24 @@ export async function compactRemotely(
       return { compaction };
     }
     const preparationStarted = performance.now();
+    let scratchpadSnapshot: string | undefined;
+    if (route.protocol === "context-management" && settings.scratchpadEnabled && settings.appendMaintenanceMessage) {
+      const snapshot = await abortable(
+        captureScratchpadForCompaction(sessionId, { signal: remoteSignal, isCurrent: stillCurrent }),
+        remoteSignal,
+      );
+      if (!stillCurrent()) return { cancel: true };
+      if (snapshot.kind === "ready") {
+        scratchpadSnapshot = snapshot.text;
+        scratchpadIncluded = true;
+        requestValues.push(...snapshot.redactionValues);
+      } else if (snapshot.kind === "unavailable" && ctx.hasUI && settings.notifyOnFallback) {
+        ctx.ui.notify(
+          `[codex-compact] Scratchpad omitted from this compaction request (${snapshot.reason}); using the normal maintenance instruction without scratchpad deduplication.`,
+          "warning",
+        );
+      }
+    }
     const context: Context = {
       systemPrompt: ctx.getSystemPrompt(),
       // Prepared operations borrow raw ancestry under persisted-value guards. Keep
@@ -278,6 +299,7 @@ export async function compactRemotely(
           : undefined,
         appendMaintenanceMessage: settings.appendMaintenanceMessage,
         maintenanceMessage: settings.maintenanceMessage,
+        scratchpadSnapshot,
         requestTimeoutMs: settings.requestTimeoutMs,
         maxRetries: settings.maxRetries,
         onProviderStreamEvent: (raw) => {
@@ -447,6 +469,9 @@ export async function compactRemotely(
         checkpointPresent,
         rejected.has(routeKey),
         route.protocol === "context-management" ? diagnostics.summary() : "",
+        scratchpadIncluded
+          ? preparationFailureDetail(rejectionError ?? error, { httpStatus: lastHttpStatus, remoteAttempted })
+          : undefined,
       );
     if (!checkpointPresent) return undefined;
     if (!checkpoint) return { cancel: true };
@@ -524,7 +549,7 @@ export async function compactRemotely(
           ? "using Pi native compaction. Older context stored only in the opaque checkpoint may be lost."
           : "compaction cancelled and history preserved.";
         ctx.ui.notify(
-          `Checkpoint recovery could not complete; ${outcome} ${compactionFailureDetail(recoveryError, requestValues)} [${recoveryDiagnostics.summary()}]`,
+          `Checkpoint recovery could not complete; ${outcome} ${scratchpadIncluded ? preparationFailureDetail(recoveryError, { remoteAttempted: true }) : compactionFailureDetail(recoveryError, requestValues)} [${recoveryDiagnostics.summary()}]`,
           "warning",
         );
       }

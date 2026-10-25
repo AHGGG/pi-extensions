@@ -28,9 +28,7 @@ export interface CodexCompactSettings {
 export function compactionSettingsKey(settings: CodexCompactSettings): string {
   return JSON.stringify(
     Object.fromEntries(
-      Object.keys(DEFAULT_CODEX_COMPACT_SETTINGS)
-        .filter((key) => key !== "scratchpadEnabled")
-        .map((key) => [key, settings[key as keyof CodexCompactSettings]]),
+      Object.keys(DEFAULT_CODEX_COMPACT_SETTINGS).map((key) => [key, settings[key as keyof CodexCompactSettings]]),
     ),
   );
 }

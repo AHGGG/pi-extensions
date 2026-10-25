@@ -468,7 +468,11 @@ test("failed preparation with an OAuth operation rejection keeps foreground disp
   }
 });
 
-for (const patch of [{ appendMaintenanceMessage: false }, { maintenanceMessage: "CUSTOM private handoff" }]) {
+for (const patch of [
+  { appendMaintenanceMessage: false },
+  { maintenanceMessage: "CUSTOM private handoff" },
+  { scratchpadEnabled: true },
+]) {
   test(`changing maintenance settings while preparing invalidates the captured request: ${Object.keys(patch)[0]}`, async () => {
     const h = fixture();
     const guard = { signal: new AbortController().signal, isCurrent: () => true, ownsStatus: () => true };

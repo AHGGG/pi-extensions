@@ -1,7 +1,8 @@
 # Session scratchpad (v1)
 
-An optional, agent-managed notes file. No automatic memory extraction, context
-injection, compaction changes, global knowledge base, or background job.
+An optional, agent-managed notes file. No automatic memory extraction, global
+knowledge base, or extra model request. Ordinary task context does not automatically
+load notes; Context Management maintenance can include a bounded snapshot as described below.
 
 ## Enable and disable
 
@@ -125,6 +126,32 @@ errors, or note contents are added to diagnostic logs.
 The tool's stable guideline asks the agent to record decisions, constraints,
 verified progress, blockers, and references; read before relying on remembered
 contents; update stale items; and avoid secrets/full logs. Notes are task data,
-not permission to override user instructions. The extension never injects the
-file's contents before or after compaction and never tells compaction to omit
-unseen notes.
+not permission to override user instructions.
+
+## Compaction snapshot
+
+Only when both `scratchpadEnabled` and `appendMaintenanceMessage` are On, a
+Context Management compaction request reads the complete validated notes once.
+It inserts a JSON data block immediately before the existing maintenance text in
+the final maintenance-only user message. A separate instruction asks for important
+context missing from those notes, later changes, contradictions, essential constraints,
+and the immediate next action, without duplicating unchanged saved details. Custom
+maintenance text is preserved verbatim. Tools remain disabled for maintenance.
+
+The complete serialized snapshot is limited to 16 KiB. Empty notes add nothing;
+unreadable or oversized notes fall back to normal maintenance without a partial
+snapshot or deduplication instruction. A fixed warning explains omission when
+fallback notifications are enabled. Disabling either setting leaves the existing
+maintenance behavior unchanged. Other protocols and recovery-summary prompts are
+not modified.
+
+No notes are automatically loaded after compaction, written into session entries,
+or copied into a separate snapshot store. Background requests keep the captured
+version for that request only; later note edits do not restart the job and are never
+overwritten. Read the live scratchpad during continuation when necessary. The
+server may retain input information in its opaque checkpoint; the instruction does
+not guarantee the contents or size of that checkpoint.
+
+Requests containing a snapshot suppress arbitrary provider error prose in extension
+notifications, including partial echoed notes. Fixed failure categories and safe
+transport/timing diagnostics remain available; note contents are not logged.

@@ -238,11 +238,11 @@ test("maintenance settings persist exact text and reject settings files beyond t
   assert.equal(await readFile(path, "utf8"), before);
 });
 
-test("scratchpad defaults off, persists, validates, and is not a provider setting", async () => {
+test("scratchpad defaults off, persists, validates, and changes compaction identity", async () => {
   assert.equal(DEFAULT_CODEX_COMPACT_SETTINGS.scratchpadEnabled, false);
   assert.equal(normalizeCodexCompactSettings({ scratchpadEnabled: true })?.scratchpadEnabled, true);
   assert.equal(normalizeCodexCompactSettings({ scratchpadEnabled: "true" }), undefined);
-  assert.equal(
+  assert.notEqual(
     compactionSettingsKey({ ...DEFAULT_CODEX_COMPACT_SETTINGS, scratchpadEnabled: true }),
     compactionSettingsKey({ ...DEFAULT_CODEX_COMPACT_SETTINGS }),
   );

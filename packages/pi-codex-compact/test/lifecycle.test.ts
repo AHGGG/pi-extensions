@@ -1,4 +1,7 @@
 import assert from "node:assert/strict";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
   type Api,
   createAssistantMessageEventStream,
@@ -15,6 +18,7 @@ import { createCheckpointDetails, fallbackSummary, parseCheckpointDetails } from
 import { COMPACTION_WORK_REPLAY_MESSAGE } from "../src/checkpoint-replay.js";
 import { createCodexCompactExtension } from "../src/codex-compact.js";
 import type { RemoteCompactionProtocol } from "../src/model-api.js";
+import { ScratchpadStore } from "../src/scratchpad-store.js";
 import {
   type CodexCompactSettingsRuntime,
   type CodexCompactSettingsState,
@@ -1041,5 +1045,107 @@ for (const protocol of ["remote-v2", "context-management"] as const) {
       serverCheckpoint,
       serverSuffix,
     ]);
+  });
+}
+
+for (const mode of [
+  "both",
+  "scratchpad-off",
+  "append-off",
+  "both-off",
+  "invalid",
+  "oversized",
+  "error-echo",
+  "recovery-error-echo",
+] as const) {
+  test(`scratchpad compaction integration gates, captures, and protects notes: ${mode}`, async () => {
+    const directory = await mkdtemp(join(tmpdir(), "scratchpad-compaction-operation-"));
+    const oldAgentDir = process.env.PI_CODING_AGENT_DIR;
+    process.env.PI_CODING_AGENT_DIR = directory;
+    try {
+      const store = new ScratchpadStore({ directory: join(directory, "scratchpads") });
+      const privateText = 'PRIVATE saved detail with "quotes" and\nnew line';
+      await store.execute("session", {
+        action: "add",
+        texts: mode === "oversized" ? ["a".repeat(8000), "b".repeat(8000), "c".repeat(1000)] : [privateText],
+      });
+      if (mode === "invalid") await writeFile(join(directory, "scratchpads", "session.json"), "INVALID PRIVATE FILE");
+      const mock = createMockPi();
+      let payload: unknown;
+      const runtime = settingsRuntime({
+        protocol: "context-management",
+        scratchpadEnabled: mode !== "scratchpad-off" && mode !== "both-off",
+        appendMaintenanceMessage: mode !== "append-off" && mode !== "both-off",
+        maintenanceMessage: "CUSTOM preserved instruction",
+      });
+      createCodexCompactExtension({ settingsRuntime: runtime, fetch: async () => serverResponse() })(mock.pi);
+      const entries = branch();
+      if (mode === "recovery-error-echo") {
+        const kept = entries[1].type === "message" ? entries[1].message : assert.fail("kept");
+        const prior = createCheckpointDetails({
+          provider: model.provider,
+          api: model.api,
+          profile: "codex-responses-v1",
+          modelId: model.id,
+          protocol: "context-management",
+          replacementHistory: [serverCheckpoint, serverSuffix],
+          keptMessages: [kept],
+        });
+        entries.push({
+          type: "compaction",
+          id: "prior",
+          parentId: "assistant",
+          timestamp: "2026-01-01T00:00:02.000Z",
+          firstKeptEntryId: "assistant",
+          tokensBefore: 123,
+          summary: fallbackSummary(prior.checkpointId),
+          details: prior,
+        });
+      }
+      const { ctx, notifications } = createMockContext({
+        model,
+        hasUI: true,
+        getSystemPrompt: () => "unchanged system",
+        sessionManager: { getSessionId: () => "session", getBranch: () => entries },
+        modelRegistry: {
+          getApiKeyAndHeaders: async () => ({ ok: true, apiKey: "test-key" }),
+          getProvider: () =>
+            fakeProvider(
+              undefined,
+              model,
+              (value) => {
+                payload ??= value;
+                if (mode === "error-echo" || mode === "recovery-error-echo")
+                  throw new Error("Provider echoed PRIVATE saved detail");
+              },
+              "context-management",
+            ),
+        },
+      });
+      const result = await mock.events.get("session_before_compact")?.[0]?.(event(undefined, entries), ctx);
+      if (mode === "error-echo" || mode === "recovery-error-echo") {
+        if (mode === "error-echo") assert.equal(result, undefined);
+        assert.match(JSON.stringify(notifications), /checkpoint preparation failed/);
+        assert.doesNotMatch(JSON.stringify(notifications), /PRIVATE saved detail/);
+        if (mode === "recovery-error-echo")
+          assert.match(JSON.stringify(notifications), /Checkpoint recovery could not complete/, JSON.stringify(result));
+      } else assert.ok(result && typeof result === "object" && "compaction" in result, JSON.stringify(notifications));
+      assert.ok(payload);
+      const inputText = JSON.stringify(payload);
+      assert.equal(
+        inputText.includes("PI_SCRATCHPAD_SNAPSHOT_V1"),
+        mode === "both" || mode === "error-echo" || mode === "recovery-error-echo",
+      );
+      assert.equal(inputText.includes("CUSTOM preserved instruction"), mode !== "append-off" && mode !== "both-off");
+      if (mode === "invalid" || mode === "oversized") {
+        assert.match(JSON.stringify(notifications), /Scratchpad omitted/);
+        assert.doesNotMatch(inputText, /avoid repeating unchanged details/);
+      }
+      assert.doesNotMatch(JSON.stringify(entries), /PRIVATE saved detail|PI_SCRATCHPAD/);
+    } finally {
+      if (oldAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+      else process.env.PI_CODING_AGENT_DIR = oldAgentDir;
+      await rm(directory, { recursive: true, force: true });
+    }
   });
 }

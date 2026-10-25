@@ -293,11 +293,20 @@ update, and delete batches. Notes live under Pi's configured agent directory at
 `scratchpads/<session-id>.json`. Resume reuses that file; new/forked sessions get
 separate empty notes. `/tree` does **not** rewind notes.
 
-This feature does not inject note contents, run a summarizer, modify compaction
-instructions, or depend on the background-compaction extension. The agent must
-read notes when needed. Ordinary note edits do not rebuild the tool set.
-Enabling/disabling the tool does change the active tool inventory and can
-invalidate an in-flight prepared checkpoint, like any other tool-set change.
+When both **Scratchpad** and **Append maintenance message** are On, Context
+Management compaction captures the current complete notes (up to 16 KiB of
+serialized JSON) and places them before the maintenance instruction. Your custom
+instruction is preserved, followed by guidance to avoid repeating unchanged saved
+details while retaining missing facts, corrections, constraints, and the next action.
+Empty notes add nothing. Unreadable or oversized notes are omitted without truncation,
+with a warning when fallback notifications are enabled; normal maintenance continues.
+
+There is no extra summarizer, post-compaction note injection, or dependency on the
+background-compaction extension. The agent reads live notes when needed. A background
+request uses its captured notes; later edits do not restart it or get overwritten.
+Toggling scratchpad changes compaction identity and can invalidate prepared work.
+Other compaction protocols and recovery-summary prompts are unchanged. This guides
+the readable handoff, not the server-controlled opaque checkpoint's exact contents.
 
 See [Scratchpad tool contract](docs/scratchpad.md) for operations, limits, direct
 editing, and errors.

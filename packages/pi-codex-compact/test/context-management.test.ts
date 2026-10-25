@@ -2,7 +2,11 @@ import assert from "node:assert/strict";
 import type { Api, Model, Provider } from "@earendil-works/pi-ai";
 import { test } from "vitest";
 import { createCheckpointDetails, parseCheckpointDetails } from "../src/checkpoint.js";
-import { COMPACTION_MAINTENANCE_MESSAGE } from "../src/context-management.js";
+import {
+  COMPACTION_MAINTENANCE_MESSAGE,
+  SCRATCHPAD_COMPACTION_GUIDANCE,
+  SCRATCHPAD_SNAPSHOT_LABEL,
+} from "../src/context-management.js";
 import type { RemoteCompactionProtocol } from "../src/model-api.js";
 import { MAX_SSE_BYTES } from "../src/protocol.js";
 import { requestRemoteCompaction } from "../src/remote.js";
@@ -455,5 +459,28 @@ for (const mode of ["default", "custom", "off"] as const) {
     assert.equal(text.includes(COMPACTION_MAINTENANCE_MESSAGE), mode === "default");
     assert.equal(text.includes("CUSTOM handoff"), mode === "custom");
     assert.equal(input.filter((item) => item.role === "user").length, mode === "off" ? 1 : 2);
+  });
+}
+
+for (const appendMaintenanceMessage of [true, false]) {
+  test(`scratchpad snapshot precedes preserved custom maintenance only when appended: ${appendMaintenanceMessage}`, async () => {
+    const scratchpadSnapshot = JSON.stringify({ items: [{ id: 1, text: "Saved task detail" }] });
+    let payload: Record<string, unknown> | undefined;
+    const result = await request(
+      async (_input, init) => {
+        payload = JSON.parse(String(init?.body));
+        return sse([latest]);
+      },
+      { scratchpadSnapshot, maintenanceMessage: "CUSTOM maintenance unchanged", appendMaintenanceMessage },
+    );
+    const input = payload?.input as { content: { type: string; text: string }[] }[];
+    if (appendMaintenanceMessage) {
+      assert.deepEqual(input.at(-1)?.content, [
+        { type: "input_text", text: SCRATCHPAD_SNAPSHOT_LABEL + scratchpadSnapshot },
+        { type: "input_text", text: `CUSTOM maintenance unchanged\n\n${SCRATCHPAD_COMPACTION_GUIDANCE}` },
+      ]);
+    } else assert.doesNotMatch(JSON.stringify(input), /Saved task detail|PI_SCRATCHPAD|CUSTOM maintenance/);
+    assert.equal(payload?.tool_choice, "none");
+    assert.doesNotMatch(JSON.stringify(result.promptInput), /Saved task detail|PI_SCRATCHPAD/);
   });
 }

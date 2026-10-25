@@ -46,6 +46,8 @@ export function preparationFailureDetail(
     const cause = error.cause instanceof Error ? error.cause : error;
     const code = "code" in cause ? cause.code : undefined;
     if (typeof code === "string" && NETWORK_CODES.has(code)) return `network request failed (${code})`;
+    if (error.message === "OpenAI Responses stream ended before a terminal response event")
+      return "provider stream ended before a terminal response event";
     if (error instanceof CodexCompactionProtocolError) return "invalid compaction response or checkpoint";
     if (error.name === "AbortError") return "provider or transport aborted the checkpoint request";
     if (error instanceof TypeError && error.message === "fetch failed") return "network request failed";

@@ -212,12 +212,27 @@ export class ScratchpadStore {
     input: unknown,
     options: ScratchpadExecutionOptions = {},
   ): Promise<ScratchpadResult> {
+    const request = parseRequest(input);
+    return this.enqueue(sessionId, (path) => this.run(path, sessionId, request, options));
+  }
+  /** Read one complete, validated version without pagination or changing storage. */
+  async readSnapshot(sessionId: string, options: ScratchpadExecutionOptions = {}): Promise<ScratchpadItem[]> {
+    return this.enqueue(sessionId, async (path) => {
+      checkCurrent(options);
+      const raw = await this.readRaw(path);
+      const items = raw === undefined ? [] : parseDocument(raw, sessionId).items;
+      checkCurrent(options);
+      return items
+        .map(({ id, text, createdAt, updatedAt }) => ({ id, text, createdAt, updatedAt }))
+        .sort((a, b) => a.id - b.id);
+    });
+  }
+  private async enqueue<T>(sessionId: string, operation: (path: string) => Promise<T>): Promise<T> {
     if (!/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,127}$/.test(sessionId))
       fail("INVALID_SESSION", "A valid session ID is required.");
-    const request = parseRequest(input);
     const path = join(this.directory, `${sessionId}.json`);
     const previous = queues.get(path) ?? Promise.resolve();
-    const pending = previous.catch(() => {}).then(() => this.run(path, sessionId, request, options));
+    const pending = previous.catch(() => {}).then(() => operation(path));
     queues.set(path, pending);
     try {
       return await pending;

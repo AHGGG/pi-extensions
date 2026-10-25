@@ -21,6 +21,7 @@ export interface RemoteCompactionRequest {
   priorCheckpoint?: PriorCheckpointPayload;
   appendMaintenanceMessage?: boolean;
   maintenanceMessage?: string;
+  scratchpadSnapshot?: string;
   requestTimeoutMs?: number;
   maxRetries?: number;
   fetch?: typeof globalThis.fetch;

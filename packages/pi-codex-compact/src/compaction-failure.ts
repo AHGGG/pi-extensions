@@ -144,7 +144,11 @@ export function compactionFailureDetail(error: unknown, requestValues: readonly 
   return terminalText(redactRequestValues(error instanceof Error ? error.message : String(error), requestValues));
 }
 
-export function compactionFailureMessage(error: unknown, requestValues: readonly string[] = []): string {
+export function compactionFailureMessage(
+  error: unknown,
+  requestValues: readonly string[] = [],
+  safeDetail?: string,
+): string {
   const raw = error instanceof Error ? error.message : String(error);
   const guidance = isOAuthOperationRejection(raw)
     ? "ChatGPT OAuth is not authorized for this compaction operation. " +
@@ -152,5 +156,5 @@ export function compactionFailureMessage(error: unknown, requestValues: readonly
       "with a checkpoint, applying Checkpoint recovery (summary or safe cancellation). " +
       "Compatible checkpoint replay remains enabled. "
     : "Responses compaction failed; using Pi compaction. ";
-  return guidance + compactionFailureDetail(error, requestValues);
+  return guidance + (safeDetail ?? compactionFailureDetail(error, requestValues));
 }

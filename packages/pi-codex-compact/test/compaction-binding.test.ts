@@ -111,7 +111,11 @@ describe("compaction binding diagnostics", () => {
           result.route,
           result.auth,
           f.state.providerAuth,
-          [f.state.settings.appendMaintenanceMessage, f.state.settings.maintenanceMessage],
+          [
+            f.state.settings.appendMaintenanceMessage,
+            f.state.settings.maintenanceMessage,
+            f.state.settings.scratchpadEnabled,
+          ],
         ]),
       )
       .digest("hex");
@@ -443,7 +447,11 @@ describe("compaction binding diagnostics", () => {
           first.route,
           { ...originalAuth, apiKey: "serialized-request-1" },
           { ...originalProviderAuth, source: "serialized-provider-1" },
-          [f.state.settings.appendMaintenanceMessage, f.state.settings.maintenanceMessage],
+          [
+            f.state.settings.appendMaintenanceMessage,
+            f.state.settings.maintenanceMessage,
+            f.state.settings.scratchpadEnabled,
+          ],
         ]),
       )
       .digest("hex");
