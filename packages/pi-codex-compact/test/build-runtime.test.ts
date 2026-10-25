@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { access, cp, mkdir, mkdtemp, rm } from "node:fs/promises";
+import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -10,7 +11,7 @@ import { createMockContext } from "../../../test/support.js";
 
 const { packageRoot, loadBuilder } = registerRuntimeBuilderContract({
   packageId: "pi-codex-compact",
-  forbiddenEagerInputs: ["src/settings-menu.ts"],
+  forbiddenEagerInputs: ["src/settings-menu.ts", "src/scratchpad-viewer.ts"],
   forbiddenEagerExternals: ["@narumitw/pi-tui-kit"],
 });
 
@@ -64,6 +65,11 @@ test("managed package layouts load the settings menu without physical Pi peers",
     await mkdir(isolatedTuiKitRoot, { recursive: true });
     await cp(join(tuiKitRoot, "package.json"), join(isolatedTuiKitRoot, "package.json"));
     await cp(join(tuiKitRoot, "dist"), join(isolatedTuiKitRoot, "dist"), { recursive: true });
+    // Kit's document renderer imports its declared Diff dependency even for plain text.
+    // Copy it like a managed npm install would; Pi peers must still be host-provided.
+    const kitRequire = createRequire(join(tuiKitRoot, "package.json"));
+    const diffRoot = resolve(kitRequire.resolve("diff/package.json"), "..");
+    await cp(diffRoot, join(isolatedRoot, "node_modules", "diff"), { recursive: true });
     await assert.rejects(access(join(isolatedRoot, "node_modules", "@earendil-works", "pi-tui")));
     await mkdir(agentDir, { recursive: true });
     process.env.PI_CODING_AGENT_DIR = agentDir;

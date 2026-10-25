@@ -18,6 +18,25 @@ from codemode. Explicit Pi tool allowlists/exclusions still take precedence.
 A tool-name conflict with another extension is reported; we never replace that
 tool. Turn off/remove the conflicting extension before using this one.
 
+## View your notes
+
+Use `/scratchpad show` in TUI mode to open a read-only, scrollable snapshot of the
+current session's notes: full text, stable IDs, and UTC creation/update timestamps.
+It works while Scratchpad is Off and does not enable the tool, call the model,
+change files, or add notes to conversation history. The bare `/scratchpad` command
+still toggles the tool; `/scratchpad status` still shows the notes-file path.
+
+Use Pi's configured up/down and page keys to scroll, Home/End to jump, and Escape
+(or your configured cancel key) to close. Ctrl+C also closes. Notes are plain text;
+terminal controls are stripped for display. Reopen the viewer to see later edits.
+The complete validated file is shown, not just the first tool-result page; the
+existing 1 MiB storage limit applies. Missing/empty notes show an empty-state message;
+unreadable or invalid files show an error without overwriting them. Session replacement,
+reload, shutdown, and UI disposal close the old viewer.
+
+RPC shows a local notes-file hint rather than opening an interactive viewer. Print
+and JSON modes reject this TUI-only action with an error; no notes enter model history.
+
 ## Tool
 
 One tool named `scratchpad`. Session identity and storage paths are selected by

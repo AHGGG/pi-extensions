@@ -121,13 +121,26 @@ export function createScratchpadRuntime(
   };
 
   pi.registerCommand("scratchpad", {
-    description: "Toggle session notes, or use on, off, toggle, status (saved across sessions)",
+    description: "Toggle session notes, or use on, off, toggle, status, show (read-only viewer)",
+    getArgumentCompletions: (prefix) =>
+      ["on", "off", "toggle", "status", "show"]
+        .filter((value) => value.startsWith(prefix.toLowerCase()))
+        .map((value) => ({ value, label: value })),
     handler: async (args, ctx) => {
       const action = args.trim().toLowerCase() || "toggle";
-      if (!["on", "off", "toggle", "status"].includes(action))
-        throw new Error("Usage: /scratchpad [on|off|toggle|status]");
+      if (!["on", "off", "toggle", "status", "show"].includes(action))
+        throw new Error("Usage: /scratchpad [on|off|toggle|status|show]");
       const candidate = owner;
       if (!candidate || !isCurrent(candidate, ctx)) throw new Error("Scratchpad is not ready for the current session.");
+      if (action === "show") {
+        const { showScratchpad } = await import("./scratchpad-viewer.js");
+        if (!isCurrent(candidate, ctx)) return;
+        await showScratchpad(ctx, store, candidate.sessionId, {
+          signal: candidate.controller.signal,
+          isCurrent: () => isCurrent(candidate, ctx),
+        });
+        return;
+      }
       if (action !== "status") {
         const enabled = action === "on" || (action === "toggle" && !settings.get().settings.scratchpadEnabled);
         if (enabled && !registered && pi.getAllTools().some((tool) => tool.name === SCRATCHPAD_TOOL_NAME))
