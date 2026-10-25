@@ -23,6 +23,7 @@ const componentLabels = [
   "route changed",
   "request authentication changed",
   "provider authentication changed",
+  "maintenance settings changed",
 ] as const;
 // Request-scoped diagnostics only: never attach these digests to enumerable state,
 // checkpoint details, notifications, or debug output. Weak keys follow job lifetime.
@@ -53,7 +54,13 @@ export async function resolveCompactionBinding(
   }
   const provider = ctx.modelRegistry.getProvider(model.provider);
   if (!provider) throw new Error("The active Responses provider is unavailable");
-  const exact = JSON.stringify([model, route, auth, providerAuth]);
+  const exact = JSON.stringify([
+    model,
+    route,
+    auth,
+    providerAuth,
+    [settings.appendMaintenanceMessage, settings.maintenanceMessage],
+  ]);
   const components = JSON.parse(exact);
   // Single-login policy: ordinary OAuth refresh must not discard prepared work.
   // Preserve every non-token field and keep custom serialization/mismatched auth strict.

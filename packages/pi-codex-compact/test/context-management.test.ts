@@ -435,3 +435,25 @@ test("already aborted input never dispatches", async () => {
   );
   assert.equal(requests, 0);
 });
+
+for (const mode of ["default", "custom", "off"] as const) {
+  test(`maintenance message ${mode} preserves compaction controls and original prefix`, async () => {
+    let payload: Record<string, unknown> | undefined;
+    const options =
+      mode === "default"
+        ? {}
+        : { maintenanceMessage: "CUSTOM handoff\nnext action", appendMaintenanceMessage: mode !== "off" };
+    await request(async (_input, init) => {
+      payload = JSON.parse(String(init?.body));
+      return sse([latest]);
+    }, options);
+    assert.deepEqual(payload?.context_management, [{ type: "compaction", compact_threshold: 1024 }]);
+    assert.equal(payload?.tool_choice, "none");
+    const input = payload?.input as { role?: string; content?: unknown }[];
+    const text = JSON.stringify(input);
+    assert.ok(text.includes("original history"));
+    assert.equal(text.includes(COMPACTION_MAINTENANCE_MESSAGE), mode === "default");
+    assert.equal(text.includes("CUSTOM handoff"), mode === "custom");
+    assert.equal(input.filter((item) => item.role === "user").length, mode === "off" ? 1 : 2);
+  });
+}

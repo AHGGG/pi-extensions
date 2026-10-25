@@ -259,7 +259,9 @@ test("exact rejection without checkpoint skips later remote requests even with n
   assert.equal(await h.run(), undefined);
   assert.equal(await h.run(), undefined);
   assert.equal(h.payloads.length, 1);
-  assert.deepEqual(h.notifications, []);
+  assert.equal(h.notifications.length, 1);
+  assert.equal(h.notifications[0].level, "info");
+  assert.match(h.notifications[0].message, /Compaction outcome=failed/);
 });
 
 for (const body of [{ ...rejection, code: "other" }, { message: JSON.stringify(rejection) }, "unauthorized"]) {
@@ -423,8 +425,14 @@ test("summary recovery failure hands off to Pi native without prematurely changi
   assert.equal(await h.run(), undefined);
   assert.equal(h.payloads.length, 2);
   assert.deepEqual(h.entries, before);
-  assert.match(h.notifications.at(-1)?.message ?? "", /using Pi native compaction.*opaque checkpoint may be lost/);
-  assert.doesNotMatch(h.notifications.at(-1)?.message ?? "", /secret-fixture/);
+  assert.match(
+    h.notifications.filter(({ level }) => level === "warning").at(-1)?.message ?? "",
+    /using Pi native compaction.*opaque checkpoint may be lost/,
+  );
+  assert.doesNotMatch(
+    h.notifications.filter(({ level }) => level === "warning").at(-1)?.message ?? "",
+    /secret-fixture/,
+  );
 });
 
 for (const failure of ["malformed", "unsafe", "empty", "oversized", "timeout"] as const) {
@@ -472,11 +480,22 @@ for (const failure of ["malformed", "unsafe", "empty", "oversized", "timeout"] a
       assert.equal(calls, 2);
       assert.deepEqual(h.entries, before);
       assert.equal(recoverySignal?.aborted, true);
-      assert.match(h.notifications.at(-1)?.message ?? "", /using Pi native compaction/);
+      assert.match(
+        h.notifications.filter(({ level }) => level === "warning").at(-1)?.message ?? "",
+        /using Pi native compaction/,
+      );
       if (failure === "empty" || failure === "oversized")
-        assert.match(h.notifications.at(-1)?.message ?? "", /empty or oversized summary/);
-      if (failure === "unsafe") assert.match(h.notifications.at(-1)?.message ?? "", /Unsafe checkpoint recovery/);
-      if (failure === "timeout") assert.match(h.notifications.at(-1)?.message ?? "", /timed out/);
+        assert.match(
+          h.notifications.filter(({ level }) => level === "warning").at(-1)?.message ?? "",
+          /empty or oversized summary/,
+        );
+      if (failure === "unsafe")
+        assert.match(
+          h.notifications.filter(({ level }) => level === "warning").at(-1)?.message ?? "",
+          /Unsafe checkpoint recovery/,
+        );
+      if (failure === "timeout")
+        assert.match(h.notifications.filter(({ level }) => level === "warning").at(-1)?.message ?? "", /timed out/);
     } finally {
       vi.useRealTimers();
     }
@@ -492,9 +511,21 @@ for (const mode of ["tui", "rpc", "print", "json"] as const) {
     Object.assign(h.ctx, { mode, hasUI: mode === "tui" || mode === "rpc" });
     assert.equal(await h.run(), undefined);
     if (mode === "tui" || mode === "rpc") {
-      assert.match(h.notifications.at(-1)?.message ?? "", /opaque checkpoint may be lost/);
-      assert.doesNotMatch(h.notifications.at(-1)?.message ?? "", /secret-fixture/);
-      assert.equal(h.notifications.at(-1)?.message.includes("\u001b"), false);
+      assert.match(
+        h.notifications.filter(({ level }) => level === "warning").at(-1)?.message ?? "",
+        /opaque checkpoint may be lost/,
+      );
+      assert.doesNotMatch(
+        h.notifications.filter(({ level }) => level === "warning").at(-1)?.message ?? "",
+        /secret-fixture/,
+      );
+      assert.equal(
+        h.notifications
+          .filter(({ level }) => level === "warning")
+          .at(-1)
+          ?.message.includes("\u001b"),
+        false,
+      );
     } else assert.equal(h.notifications.length, 0);
   });
 }
@@ -506,7 +537,8 @@ test("notifications disabled still permits recovery-to-native handoff", async ()
     response: async () => Response.json({ error: rejection }, { status: 401 }),
   });
   assert.equal(await h.run(), undefined);
-  assert.equal(h.notifications.length, 0);
+  assert.equal(h.notifications.filter(({ level }) => level === "warning").length, 0);
+  assert.equal(h.notifications.filter(({ level }) => level === "info").length, 2);
 });
 
 test("unverifiable checkpoint projection cancels rather than handing off to native", async () => {
@@ -516,7 +548,10 @@ test("unverifiable checkpoint projection cancels rather than handing off to nati
   if (old.type === "message") old.message = { role: "user", content: "changed retained snapshot", timestamp: 1 };
   assert.deepEqual(await h.run(), { cancel: true });
   assert.equal(h.payloads.length, 0);
-  assert.match(h.notifications.at(-1)?.message ?? "", /cancelled and history preserved/);
+  assert.match(
+    h.notifications.filter(({ level }) => level === "warning").at(-1)?.message ?? "",
+    /cancelled and history preserved/,
+  );
 });
 
 for (const patch of [{ id: "other-model" }, { provider: "proxy" }, { baseUrl: "https://proxy.test/v1" }] as const) {
@@ -778,7 +813,8 @@ for (const protocol of ["auto", "responses-compact", "remote-v2", "context-manag
     assert.equal(await h.run(), undefined);
     assert.equal(await h.run(), undefined);
     assert.equal(h.payloads.length, 1);
-    assert.equal(h.notifications.length, 1);
+    assert.equal(h.notifications.length, 2);
+    assert.equal(h.notifications.filter(({ level }) => level === "warning").length, 1);
     assert.match(h.notifications[0].message, /hardened_oauth_rule_missing/);
     assert.match(h.notifications[0].message, /rejected_by_hardened_oauth_boundary/);
   });
@@ -802,7 +838,8 @@ for (const codex of [false, true]) {
         assert.equal(await h.run(), undefined);
         assert.equal(await h.run(), undefined);
         assert.equal(h.payloads.length, 1);
-        assert.equal(h.notifications.length, 1);
+        assert.equal(h.notifications.length, 2);
+        assert.equal(h.notifications.filter(({ level }) => level === "warning").length, 1);
         assert.match(h.notifications[0].message, /hardened_oauth_rule_missing/);
       });
     }
@@ -836,7 +873,10 @@ test("a changed Azure recovery backend cancels before an inference dispatch", as
   change = () => h.setEnv({ AZURE_OPENAI_BASE_URL: "https://second.openai.azure.com", AZURE_OPENAI_API_VERSION: "v1" });
   assert.deepEqual(await h.run(), { cancel: true });
   assert.equal(h.payloads.length, 1);
-  assert.match(h.notifications.at(-1)?.message ?? "", /backend changed before dispatch/);
+  assert.match(
+    h.notifications.filter(({ level }) => level === "warning").at(-1)?.message ?? "",
+    /backend changed before dispatch/,
+  );
 });
 
 test("configured custom API keeps suppression, compatible replay, and ordinary summary recovery independent", async () => {
@@ -948,7 +988,10 @@ for (const patch of [
     assert.deepEqual(await h.run(), { cancel: true });
     assert.equal(h.payloads.length, 0);
     assert.deepEqual(h.entries, before);
-    assert.match(h.notifications.at(-1)?.message ?? "", /invalid or unsupported/);
+    assert.match(
+      h.notifications.filter(({ level }) => level === "warning").at(-1)?.message ?? "",
+      /invalid or unsupported/,
+    );
     h.setModel({ api: "anthropic-messages", provider: "anthropic" });
     assert.deepEqual(await h.run(), { cancel: true });
     assert.equal(h.payloads.length, 0);
@@ -987,12 +1030,26 @@ test("foreground Context Management and recovery failures display separate safe 
   assert.equal(await h.run(), undefined);
   assert.equal(h.payloads.length, 2);
   assert.deepEqual(h.entries, before);
-  assert.equal(h.notifications.length, 2);
-  assert.match(h.notifications[0].message, /applying checkpoint recovery.*\[diag phase=/);
-  assert.match(h.notifications[1].message, /Checkpoint recovery could not complete.*\[diag phase=/);
+  assert.equal(h.notifications.length, 4);
+  const warnings = h.notifications.filter(({ level }) => level === "warning");
+  assert.equal(warnings.length, 2);
+  assert.match(warnings[0].message, /applying checkpoint recovery.*\[diag phase=/);
+  assert.match(warnings[1].message, /Checkpoint recovery could not complete.*\[diag phase=/);
   for (const { message } of h.notifications) {
     assert.match(message, /attempts=1 headers=200@\d+s mime=sse body=eof/);
     assert.match(message, /terminal\(c\/d\/i\/f\/e\)=0\/0\/0\/0\/0 abort\(d\/c\/p\)=0\/0\/0/);
     assert.doesNotMatch(message, /secret-fixture|opaque-assistant-only-fact/);
   }
+});
+
+test("custom maintenance instructions are redacted if a provider echoes them in an error", async () => {
+  const maintenanceMessage = "PRIVATE_CUSTOM_MAINTENANCE_SENTINEL";
+  const h = await harness({
+    checkpoint: true,
+    settings: { maintenanceMessage },
+    response: async () => Response.json({ error: { message: maintenanceMessage } }, { status: 400 }),
+  });
+  await h.run();
+  assert.ok(h.notifications.length > 0);
+  assert.doesNotMatch(JSON.stringify(h.notifications), /PRIVATE_CUSTOM_MAINTENANCE_SENTINEL/);
 });

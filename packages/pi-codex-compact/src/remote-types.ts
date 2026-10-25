@@ -19,6 +19,8 @@ export interface RemoteCompactionRequest {
   env?: Record<string, string>;
   signal: AbortSignal;
   priorCheckpoint?: PriorCheckpointPayload;
+  appendMaintenanceMessage?: boolean;
+  maintenanceMessage?: string;
   requestTimeoutMs?: number;
   maxRetries?: number;
   fetch?: typeof globalThis.fetch;

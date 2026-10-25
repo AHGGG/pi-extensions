@@ -437,7 +437,9 @@ test("generic OpenAI Responses compacts through the unary endpoint", async () =>
   assert.equal(details.profile, "openai-responses-v1");
   assert.equal(details.protocol, "responses-compact");
   assert.deepEqual(result.compaction.usage, usage);
-  assert.deepEqual(notifications, []);
+  assert.equal(notifications.length, 1);
+  assert.equal(notifications[0].level, "info");
+  assert.match(notifications[0].message, /Compaction outcome=ready/);
   assert.equal(statuses.get("codex-compact"), undefined);
 });
 
@@ -692,7 +694,9 @@ for (const selectedModel of [model, { ...model, id: "selected-responses-model" }
       encrypted_content: "prior-opaque",
     });
     assert.doesNotMatch(JSON.stringify(preparedPayload), /legacy-checkpoint.*stores the older history/);
-    assert.deepEqual(notifications, []);
+    assert.equal(notifications.length, 1);
+    assert.equal(notifications[0].level, "info");
+    assert.match(notifications[0].message, /Compaction outcome=ready/);
     assert.equal(statuses.get("codex-compact"), undefined);
   });
 }
@@ -835,10 +839,16 @@ test("disabled, wrong-API, remote-failed, auth-failed, and aborted paths remain 
     fetch: async () => new Response('data: {"type":"response.completed","response":{"output":[]}}\n\n'),
   });
   assert.equal(remoteFailed.result, undefined);
-  assert.match(remoteFailed.notifications.at(-1)?.message ?? "", /using Pi compaction/);
+  assert.match(
+    remoteFailed.notifications.filter(({ level }) => level === "warning").at(-1)?.message ?? "",
+    /using Pi compaction/,
+  );
   const authFailed = await run({ auth: { ok: false, error: "missing provider credentials" } });
   assert.equal(authFailed.result, undefined);
-  assert.match(authFailed.notifications.at(-1)?.message ?? "", /missing provider credentials/);
+  assert.match(
+    authFailed.notifications.filter(({ level }) => level === "warning").at(-1)?.message ?? "",
+    /missing provider credentials/,
+  );
   assert.equal(authFailed.statuses.get("codex-compact"), undefined);
   const controller = new AbortController();
   controller.abort();
@@ -900,7 +910,9 @@ for (const reason of ["manual", "threshold", "overflow"] as const) {
     assert.deepEqual(result.compaction.usage, usage);
     assert.doesNotMatch(JSON.stringify(parsed), /private-fixture|PI_CONTEXT_COMPACTION|hello/);
     assert.equal(statuses.get("codex-compact"), undefined);
-    assert.deepEqual(notifications, []);
+    assert.equal(notifications.length, 1);
+    assert.equal(notifications[0].level, "info");
+    assert.match(notifications[0].message, /Compaction outcome=ready/);
   });
 }
 

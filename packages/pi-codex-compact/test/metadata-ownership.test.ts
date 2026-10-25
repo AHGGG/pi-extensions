@@ -211,7 +211,9 @@ for (const protocol of ["responses-compact", "remote-v2", "context-management"] 
               "metadata alone must not cancel valid work",
             );
             assert.equal(h.payloads.length, 1);
-            assert.deepEqual(h.notifications, []);
+            assert.equal(h.notifications.length, 1);
+            assert.equal(h.notifications[0].level, "info");
+            assert.match(h.notifications[0].message, /Compaction outcome=ready/);
           } finally {
             h.authDone.release();
             h.requestDone.release();
@@ -239,7 +241,13 @@ for (const recovery of [false, true]) {
         assert.match((result.compaction as { summary: string }).summary, /Earlier fact summarized/);
       } else assert.equal(result, undefined);
       assert.equal(h.payloads.length, recovery ? 2 : 1);
-      assert.equal(h.notifications.length, 1);
+      assert.equal(h.notifications.filter((notice) => notice.level === "warning").length, 1);
+      assert.equal(h.notifications.length, recovery ? 3 : 2);
+      assert.ok(
+        h.notifications
+          .filter((notice) => notice.level === "info")
+          .every((notice) => notice.message.startsWith("[codex-compact]")),
+      );
     } finally {
       h.requestDone.release();
       await pending;

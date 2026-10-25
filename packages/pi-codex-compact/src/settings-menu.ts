@@ -2,13 +2,22 @@ import type { Api } from "@earendil-works/pi-ai";
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { type MenuDefinition, runMenu } from "@narumitw/pi-tui-kit";
 import { type RemoteCompactionProtocol, resolveCompactionRouteForApi } from "./model-api.js";
-import type { CodexCompactSettings, CodexCompactSettingsRuntime, CodexCompactSettingsState } from "./settings.js";
+import {
+  type CodexCompactSettings,
+  type CodexCompactSettingsRuntime,
+  type CodexCompactSettingsState,
+  DEFAULT_CODEX_COMPACT_SETTINGS,
+  MAX_MAINTENANCE_MESSAGE_BYTES,
+} from "./settings.js";
 import { terminalText as safeText } from "./terminal.js";
 
 type Screen = "main" | "settings" | "invalid";
 type Action =
   | "compact-now"
   | "set-enabled"
+  | "set-append-message"
+  | "edit-maintenance-message"
+  | "reset-maintenance-message"
   | "set-protocol"
   | "set-timeout"
   | "set-retries"
@@ -62,15 +71,17 @@ async function update(
   patch: Partial<CodexCompactSettings>,
   signal: AbortSignal,
   onSettingsChanged?: () => void,
+  isCurrent: () => boolean = () => true,
 ) {
   try {
+    if (signal.aborted || !isCurrent()) return { kind: "rejected" as const };
     await runtime.update(patch, signal);
-    if (signal.aborted) return { kind: "rejected" as const };
+    if (signal.aborted || !isCurrent()) return { kind: "rejected" as const };
     onSettingsChanged?.();
     ctx.ui.notify("Responses compaction settings saved.", "info");
     return { kind: "stay" as const };
   } catch (error) {
-    if (signal.aborted) return { kind: "rejected" as const };
+    if (signal.aborted || !isCurrent()) return { kind: "rejected" as const };
     ctx.ui.notify(
       `Could not save pi-codex-compact.json: ${safeText(error instanceof Error ? error.message : String(error))}`,
       "error",
@@ -83,6 +94,7 @@ export function createCodexCompactMenu(
   runtime: CodexCompactSettingsRuntime,
   options: {
     onCompactRequested?: () => void;
+    onEditMessageRequested?: () => void;
     status?: CompactMenuStatus;
     isPaused?: () => boolean;
     hasCheckpoint?: () => boolean;
@@ -105,7 +117,9 @@ export function createCodexCompactMenu(
           `Active model: ${safeText(options.status?.model ?? "none")}`,
           `Preferred route: ${safeText(compactRoute(state, options.status))}`,
           ...(state.settings.enabled && options.status?.api === "openai-responses"
-            ? ["On the official OpenAI endpoint, ChatGPT OAuth uses Context Management (experimental)."]
+            ? [
+                "For official OpenAI ChatGPT OAuth subscription-sharing, Remote V2 is unsupported. The effective route is Context Management (experimental), regardless of the preferred protocol.",
+              ]
             : []),
           ...lastProtocolLines(options.lastProtocol?.()),
           ...(state.settings.enabled && options.hasCheckpoint?.() && options.canReplayCheckpoint?.() === false
@@ -162,10 +176,37 @@ export function createCodexCompactMenu(
             id: "protocol",
             label: "Protocol",
             description:
-              "Choose a preferred protocol. OpenAI ChatGPT OAuth uses experimental Context Management through normal inference.",
+              "Preferred protocol only. Official OpenAI ChatGPT OAuth subscription-sharing does not support Remote V2; it uses Context Management instead. Other routes may support V2.",
             currentValue: protocolLabel(state.settings.protocol),
             values: ["Auto", "Remote V2", "Responses Compact", "Context Management (experimental)"],
             action: "set-protocol",
+          },
+          {
+            id: "appendMaintenanceMessage",
+            label: "Append maintenance message",
+            description:
+              "Context Management only. Off omits the extra user message; checkpoint recovery instructions are unchanged.",
+            currentValue: state.settings.appendMaintenanceMessage ? "On" : "Off",
+            values: ["On", "Off"],
+            action: "set-append-message",
+          },
+          {
+            id: "maintenanceMessage",
+            label: "Maintenance message",
+            description:
+              "Close this menu and edit the Context Management request-only instruction (nonempty, at most 16 KiB UTF-8). Used only when appending is On.",
+            currentValue:
+              state.settings.maintenanceMessage === DEFAULT_CODEX_COMPACT_SETTINGS.maintenanceMessage
+                ? "Default"
+                : "Custom",
+            action: "edit-maintenance-message",
+          },
+          {
+            id: "resetMaintenanceMessage",
+            label: "Reset maintenance message",
+            description: "Restore the built-in instruction without changing the append toggle.",
+            currentValue: "Reset to default",
+            action: "reset-maintenance-message",
           },
           {
             id: "checkpointRecovery",
@@ -226,6 +267,13 @@ export function createCodexCompactMenu(
         options.onCompactRequested?.();
         return { kind: "close" };
       },
+      "set-append-message": ({ ctx, value, signal }) => save(ctx, { appendMaintenanceMessage: value === "On" }, signal),
+      "reset-maintenance-message": ({ ctx, signal }) =>
+        save(ctx, { maintenanceMessage: DEFAULT_CODEX_COMPACT_SETTINGS.maintenanceMessage }, signal),
+      "edit-maintenance-message": async () => {
+        options.onEditMessageRequested?.();
+        return { kind: "close" };
+      },
       "set-enabled": ({ ctx, value, signal }) => save(ctx, { enabled: value === "On" }, signal),
       "set-protocol": ({ ctx, value, signal }) =>
         save(
@@ -268,9 +316,13 @@ export async function showCodexCompactMenu(
   }
   if (owner.signal.aborted || !owner.isCurrent()) return;
   let compactRequested = false;
+  let editMessageRequested = false;
   await runMenu(
     ctx,
     createCodexCompactMenu(runtime, {
+      onEditMessageRequested: () => {
+        editMessageRequested = true;
+      },
       onCompactRequested: () => {
         compactRequested = true;
       },
@@ -296,7 +348,12 @@ export async function showCodexCompactMenu(
       isCurrent: owner.isCurrent,
     },
   );
-  if (!compactRequested || owner.signal.aborted || !owner.isCurrent()) return;
+  if (owner.signal.aborted || !owner.isCurrent()) return;
+  if (editMessageRequested) {
+    await editMaintenanceMessage(runtime, ctx, owner);
+    return;
+  }
+  if (!compactRequested) return;
   ctx.compact({
     onError: (error) => {
       if (!owner.signal.aborted && owner.isCurrent()) {
@@ -304,6 +361,37 @@ export async function showCodexCompactMenu(
       }
     },
   });
+}
+
+/** Use Pi's editor only after the menu releases its custom component. */
+export async function editMaintenanceMessage(
+  runtime: CodexCompactSettingsRuntime,
+  ctx: ExtensionCommandContext,
+  owner: SettingsMenuOwner,
+): Promise<void> {
+  if (owner.signal.aborted || !owner.isCurrent() || ctx.mode !== "tui") return;
+  const message = await ctx.ui.editor(
+    "Context Management maintenance message",
+    runtime.get().settings.maintenanceMessage,
+  );
+  if (owner.signal.aborted || !owner.isCurrent() || message === undefined) return;
+  if (message.trim().length === 0 || Buffer.byteLength(message, "utf8") > MAX_MAINTENANCE_MESSAGE_BYTES) {
+    ctx.ui.notify(
+      "Maintenance message must be nonempty and at most 16 KiB UTF-8. Use the append toggle to disable it.",
+      "error",
+    );
+    return;
+  }
+  await update(
+    runtime,
+    ctx,
+    { maintenanceMessage: message },
+    owner.signal,
+    () => {
+      if (!owner.signal.aborted && owner.isCurrent()) owner.onSettingsChanged?.();
+    },
+    owner.isCurrent,
+  );
 }
 
 export function compactMenuStatus(ctx: ExtensionCommandContext): CompactMenuStatus {

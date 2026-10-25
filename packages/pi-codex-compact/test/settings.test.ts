@@ -4,9 +4,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, test } from "vitest";
 import {
+  compactionSettingsKey,
   createCodexCompactSettingsRuntime,
   DEFAULT_CODEX_COMPACT_SETTINGS,
   loadCodexCompactSettings,
+  MAX_MAINTENANCE_MESSAGE_BYTES,
   normalizeCodexCompactSettings,
 } from "../src/settings.js";
 
@@ -194,4 +196,44 @@ test("legacy companion settings remain unowned and survive core saves", async ()
   assert.equal(saved.asyncAutoApply, true);
   assert.equal(saved.asyncThresholdPercent, 75);
   assert.equal(saved.logCompaction, true);
+});
+
+test("maintenance settings default safely, validate UTF-8 bounds, and change request settings keys", () => {
+  const defaults = DEFAULT_CODEX_COMPACT_SETTINGS;
+  assert.equal(defaults.appendMaintenanceMessage, true);
+  assert.match(defaults.maintenanceMessage, /^\[PI_CONTEXT_COMPACTION_V1\]/);
+  const baseline = compactionSettingsKey({ ...defaults });
+  for (const patch of [{ appendMaintenanceMessage: false }, { maintenanceMessage: "custom instruction" }]) {
+    const settings = normalizeCodexCompactSettings(patch);
+    assert.ok(settings);
+    assert.notEqual(compactionSettingsKey(settings), baseline);
+  }
+  for (const appendMaintenanceMessage of [null, "false", 0])
+    assert.equal(normalizeCodexCompactSettings({ appendMaintenanceMessage }), undefined);
+  for (const maintenanceMessage of [
+    null,
+    1,
+    "",
+    " \n",
+    "x".repeat(MAX_MAINTENANCE_MESSAGE_BYTES + 1),
+    "🧪".repeat(MAX_MAINTENANCE_MESSAGE_BYTES / 4 + 1),
+  ])
+    assert.equal(normalizeCodexCompactSettings({ maintenanceMessage }), undefined);
+  const boundary = "🧪".repeat(MAX_MAINTENANCE_MESSAGE_BYTES / 4);
+  assert.equal(normalizeCodexCompactSettings({ maintenanceMessage: boundary })?.maintenanceMessage, boundary);
+});
+
+test("maintenance settings persist exact text and reject settings files beyond the total byte bound", async () => {
+  const path = await tempSettingsPath();
+  await writeFile(path, JSON.stringify({ unknown: "kept" }));
+  const runtime = createCodexCompactSettingsRuntime(path);
+  const maintenanceMessage = "  custom\nsecond line 🧪\n";
+  await runtime.update({ maintenanceMessage, appendMaintenanceMessage: false });
+  assert.equal((await runtime.reload()).settings.maintenanceMessage, maintenanceMessage);
+  assert.equal(runtime.get().settings.appendMaintenanceMessage, false);
+  assert.equal(JSON.parse(await readFile(path, "utf8")).unknown, "kept");
+  await writeFile(path, JSON.stringify({ padding: "x".repeat(60 * 1024) }));
+  const before = await readFile(path, "utf8");
+  await assert.rejects(runtime.update({ maintenanceMessage: "x".repeat(8 * 1024) }), /exceeding 64 KiB/);
+  assert.equal(await readFile(path, "utf8"), before);
 });

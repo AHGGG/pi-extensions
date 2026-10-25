@@ -105,7 +105,15 @@ describe("compaction binding diagnostics", () => {
     f.state.providerAuth = { source: "API key", auth: { apiKey: "fixture-secret-request-key" } };
     const result = await f.resolve();
     const expected = createHash("sha256")
-      .update(JSON.stringify([f.state.model, result.route, result.auth, f.state.providerAuth]))
+      .update(
+        JSON.stringify([
+          f.state.model,
+          result.route,
+          result.auth,
+          f.state.providerAuth,
+          [f.state.settings.appendMaintenanceMessage, f.state.settings.maintenanceMessage],
+        ]),
+      )
       .digest("hex");
     assert.equal(result.binding.key, expected);
   });
@@ -435,6 +443,7 @@ describe("compaction binding diagnostics", () => {
           first.route,
           { ...originalAuth, apiKey: "serialized-request-1" },
           { ...originalProviderAuth, source: "serialized-provider-1" },
+          [f.state.settings.appendMaintenanceMessage, f.state.settings.maintenanceMessage],
         ]),
       )
       .digest("hex");
@@ -460,3 +469,16 @@ describe("compaction binding diagnostics", () => {
     assert.match(binding.key, /^[a-f0-9]{64}$/);
   });
 });
+
+for (const field of ["appendMaintenanceMessage", "maintenanceMessage"] as const) {
+  test(`maintenance configuration invalidates request binding: ${field}`, async () => {
+    const f = fixture();
+    const first = await f.resolve();
+    if (field === "appendMaintenanceMessage") f.state.settings.appendMaintenanceMessage = false;
+    else f.state.settings.maintenanceMessage = "PRIVATE custom instruction";
+    const next = await f.resolve();
+    assert.equal(sameCompactionBinding(first.binding, next.binding), false);
+    assert.deepEqual(compactionBindingChanges(first.binding, next.binding), ["maintenance settings changed"]);
+    assert.ok(!JSON.stringify(next.binding).includes("PRIVATE"));
+  });
+}

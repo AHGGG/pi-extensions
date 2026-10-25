@@ -170,7 +170,28 @@ test("diagnostics classify absent bodies and remain bounded for arbitrary conten
     d.observe({ type, secret: "SECRET".repeat(10000) });
   assert.match(d.summary(), /mime=other body=absent/);
   assert.match(d.summary(), /terminal\(c\/d\/i\/f\/e\)=1\/1\/1\/1\/1/);
-  assert.ok(d.summary().length < 400);
+  assert.ok(d.summary().length < 1000);
   assert.ok(d.compact().length < 140);
+  assert.ok(!d.summary().includes("SECRET"));
+});
+
+test("safe milestone and output-category diagnostics include successful checkpoint timing", () => {
+  const d = new RequestDiagnostics();
+  d.configure("remote-v2", "context-management", false);
+  const attempt = d.beginAttempt();
+  d.headers(response([]), attempt);
+  d.chunk(12, attempt);
+  d.observe(checkpoint);
+  d.observe({ type: "response.output_item.done", item: { type: "reasoning", encrypted_content: "SECRET" } });
+  d.observe({ type: "response.output_item.done", item: { type: "message", content: "SECRET" } });
+  d.observe({ type: "response.output_item.done", item: { type: "SECRET type" } });
+  d.observe(terminal("response.completed"));
+  d.seal();
+  assert.match(d.summary(), /requested=remote-v2 resolved=context-management append=off/);
+  assert.match(d.summary(), /items\(compaction\/reasoning\/message\/other\)=1\/1\/1\/1/);
+  assert.match(
+    d.summary(),
+    /milestones-ms\(firstByte\/firstEvent\/firstCompaction\/terminal\/lastByte\)=\d+\/\d+\/\d+\/\d+\/\d+/,
+  );
   assert.ok(!d.summary().includes("SECRET"));
 });

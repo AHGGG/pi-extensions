@@ -184,7 +184,9 @@ for (const protocol of ["auto", "remote-v2", "responses-compact", "context-manag
         assert.match(JSON.stringify(request.body), /opaque-existing/);
         assert.ok(!JSON.stringify(request.body).includes(checkpointMarker("existing")));
       }
-      assert.deepEqual(h.notifications, []);
+      assert.equal(h.notifications.length, 1);
+      assert.equal(h.notifications[0].level, "info");
+      assert.match(h.notifications[0].message, /Compaction outcome=ready/);
       assert.deepEqual(h.entries, h.original);
       assert.equal(h.settings().protocol, protocol, "auth routing does not rewrite the user's settings");
     });
@@ -205,7 +207,9 @@ for (const protocol of ["auto", "remote-v2", "responses-compact", "context-manag
     );
     assert.equal(h.requests[0].body.context_management !== undefined, expected === "context-management");
     assert.equal(JSON.stringify(h.requests[0].body).includes("compaction_trigger"), expected === "remote-v2");
-    assert.deepEqual(h.notifications, []);
+    assert.equal(h.notifications.length, 1);
+    assert.equal(h.notifications[0].level, "info");
+    assert.match(h.notifications[0].message, /Compaction outcome=ready/);
   });
 }
 

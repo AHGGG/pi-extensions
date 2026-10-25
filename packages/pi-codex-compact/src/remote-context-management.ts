@@ -111,7 +111,16 @@ export async function requestContextManagement(request: RemoteCompactionRequest)
             : [...include, "reasoning.encrypted_content"],
           input: [
             ...sentInput,
-            { role: "user", content: [{ type: "input_text", text: COMPACTION_MAINTENANCE_MESSAGE }] },
+            ...(request.appendMaintenanceMessage === false
+              ? []
+              : [
+                  {
+                    role: "user",
+                    content: [
+                      { type: "input_text", text: request.maintenanceMessage ?? COMPACTION_MAINTENANCE_MESSAGE },
+                    ],
+                  },
+                ]),
           ],
           context_management: [{ type: "compaction", compact_threshold: CONTEXT_MANAGEMENT_THRESHOLD }],
           store: false,
@@ -136,7 +145,9 @@ export async function requestContextManagement(request: RemoteCompactionRequest)
       );
     }
     if (diagnostics) diagnostics.phase = "validation";
-    const replacementHistory = collector.finish();
+    const replacementHistory = diagnostics
+      ? diagnostics.measure("validation", () => collector.finish())
+      : collector.finish();
     return { item: replacementHistory[0], replacementHistory, promptInput: sentInput, usage };
   } finally {
     if (diagnostics) {

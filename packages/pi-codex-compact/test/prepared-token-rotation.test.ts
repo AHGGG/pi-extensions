@@ -467,3 +467,19 @@ test("failed preparation with an OAuth operation rejection keeps foreground disp
     await h.emit("session_shutdown", { type: "session_shutdown" });
   }
 });
+
+for (const patch of [{ appendMaintenanceMessage: false }, { maintenanceMessage: "CUSTOM private handoff" }]) {
+  test(`changing maintenance settings while preparing invalidates the captured request: ${Object.keys(patch)[0]}`, async () => {
+    const h = fixture();
+    const guard = { signal: new AbortController().signal, isCurrent: () => true, ownsStatus: () => true };
+    const preparation = h.engine().capture(h.ctx);
+    assert.ok(preparation);
+    const pending = preparation.start(guard);
+    await h.started;
+    await h.runtime.update(patch);
+    h.release();
+    const checkpoint = await pending;
+    assert.equal(checkpoint.usable, false);
+    assert.equal(h.fetches, 1);
+  });
+}

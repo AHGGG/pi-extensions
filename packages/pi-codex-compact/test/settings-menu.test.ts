@@ -8,7 +8,12 @@ import {
   type CodexCompactSettingsState,
   DEFAULT_CODEX_COMPACT_SETTINGS,
 } from "../src/settings.js";
-import { compactMenuStatus, createCodexCompactMenu, showCodexCompactMenu } from "../src/settings-menu.js";
+import {
+  compactMenuStatus,
+  createCodexCompactMenu,
+  editMaintenanceMessage,
+  showCodexCompactMenu,
+} from "../src/settings-menu.js";
 
 function memoryRuntime(kind: CodexCompactSettingsState["kind"] = "missing") {
   let state: CodexCompactSettingsState = {
@@ -117,6 +122,9 @@ test("settings screen exposes bounded controls and invalid files remain repairab
     [
       ["enabled", "On"],
       ["protocol", "Auto"],
+      ["appendMaintenanceMessage", "On"],
+      ["maintenanceMessage", "Default"],
+      ["resetMaintenanceMessage", "Reset to default"],
       ["checkpointRecovery", "Summarize"],
       ["requestTimeoutMs", "5 min"],
       ["maxRetries", "2"],
@@ -479,4 +487,181 @@ test("menu distinguishes direct replay from conditional issuer recovery and inco
     "summarize",
     "effective cancellation does not rewrite policy",
   );
+});
+
+test("maintenance editor preserves multiline pasted content, supports reset, and omits content from notifications", async () => {
+  const memory = memoryRuntime();
+  let changes = 0;
+  const menu = createCodexCompactMenu(memory.runtime, {
+    onSettingsChanged: () => {
+      changes += 1;
+    },
+  });
+  const message = "  Private custom instruction\nsecond line 🧪\n";
+  let prefill: unknown;
+  const { ctx, notifications } = createMockContext({
+    mode: "tui",
+    editor: async (_title: string, initial: string) => {
+      prefill = initial;
+      return message;
+    },
+  });
+  const action = {
+    ctx,
+    state: memory.runtime.get(),
+    signal: new AbortController().signal,
+    itemId: "maintenanceMessage",
+  };
+  await editMaintenanceMessage(memory.runtime, ctx, {
+    signal: action.signal,
+    isCurrent: () => true,
+    onSettingsChanged: () => {
+      changes += 1;
+    },
+  });
+  assert.equal(prefill, DEFAULT_CODEX_COMPACT_SETTINGS.maintenanceMessage);
+  assert.deepEqual(memory.patches, [{ maintenanceMessage: message }]);
+  assert.equal(memory.runtime.get().settings.maintenanceMessage, message);
+  assert.equal(changes, 1);
+  assert.ok(notifications.every((notice) => !notice.message.includes("Private custom")));
+  await menu.actions["set-append-message"]({ ...action, value: "Off" });
+  await menu.actions["reset-maintenance-message"](action);
+  assert.equal(memory.runtime.get().settings.maintenanceMessage, DEFAULT_CODEX_COMPACT_SETTINGS.maintenanceMessage);
+  assert.equal(memory.runtime.get().settings.appendMaintenanceMessage, false);
+});
+
+test("maintenance editor rejects canceled, stale, blank, oversized, and non-TUI edits", async () => {
+  for (const result of [undefined, " \n ", "x".repeat(16 * 1024 + 1)]) {
+    const memory = memoryRuntime();
+    const { ctx } = createMockContext({ mode: "tui", editor: async () => result });
+    await editMaintenanceMessage(memory.runtime, ctx, { signal: new AbortController().signal, isCurrent: () => true });
+    assert.deepEqual(memory.patches, []);
+  }
+  const memory = memoryRuntime();
+  const controller = new AbortController();
+  const { ctx, notifications } = createMockContext({
+    mode: "tui",
+    editor: async () => {
+      controller.abort();
+      return "stale";
+    },
+  });
+  await editMaintenanceMessage(memory.runtime, ctx, { signal: controller.signal, isCurrent: () => true });
+  assert.deepEqual(memory.patches, []);
+  assert.deepEqual(notifications, []);
+  let opened = false;
+  const rpc = createMockContext({
+    mode: "rpc",
+    editor: async () => {
+      opened = true;
+      return "not saved";
+    },
+  });
+  await editMaintenanceMessage(memory.runtime, rpc.ctx, {
+    signal: new AbortController().signal,
+    isCurrent: () => true,
+  });
+  assert.equal(opened, false);
+});
+
+test("protocol warning is conditional on official ChatGPT OAuth and does not disable V2 elsewhere", () => {
+  const memory = memoryRuntime();
+  const menu = createCodexCompactMenu(memory.runtime, { status: { model: "openai/model", api: "openai-responses" } });
+  const main = resolveMenuScreen(menu, "main", memory.runtime.get());
+  const lines = main.lines?.join("\n") ?? "";
+  assert.match(lines, /For official OpenAI ChatGPT OAuth subscription-sharing, Remote V2 is unsupported/);
+  assert.match(lines, /effective route is Context Management.*regardless of the preferred protocol/);
+  const legacy = resolveMenuScreen(
+    createCodexCompactMenu(memory.runtime, { status: { model: "openai-codex/model", api: "openai-codex-responses" } }),
+    "main",
+    memory.runtime.get(),
+  );
+  assert.doesNotMatch(legacy.lines?.join("\n") ?? "", /V2 is unsupported/);
+});
+
+test("maintenance edit action closes before requesting the native editor", async () => {
+  const memory = memoryRuntime();
+  let requested = 0;
+  const menu = createCodexCompactMenu(memory.runtime, {
+    onEditMessageRequested: () => {
+      requested += 1;
+    },
+  });
+  const context = createMockContext({
+    mode: "tui",
+    editor: async () => {
+      throw new Error("must not open inside the menu");
+    },
+  });
+  assert.deepEqual(
+    await menu.actions["edit-maintenance-message"]({
+      ctx: context.ctx,
+      state: memory.runtime.get(),
+      signal: new AbortController().signal,
+      itemId: "maintenanceMessage",
+    }),
+    { kind: "close" },
+  );
+  assert.equal(requested, 1);
+  assert.deepEqual(memory.patches, []);
+});
+
+test("maintenance editor rejects replaced ownership and preserves settings after a failed save", async () => {
+  const memory = memoryRuntime();
+  let current = true;
+  const replaced = createMockContext({
+    mode: "tui",
+    editor: async () => {
+      current = false;
+      return "stale";
+    },
+  });
+  await editMaintenanceMessage(memory.runtime, replaced.ctx, {
+    signal: new AbortController().signal,
+    isCurrent: () => current,
+  });
+  assert.deepEqual(memory.patches, []);
+  assert.deepEqual(replaced.notifications, []);
+  const failed = createMockContext({ mode: "tui", editor: async () => "unsaved custom prompt" });
+  await editMaintenanceMessage(
+    {
+      ...memory.runtime,
+      update: async () => {
+        throw new Error("disk failure");
+      },
+    },
+    failed.ctx,
+    { signal: new AbortController().signal, isCurrent: () => true },
+  );
+  assert.equal(memory.runtime.get().settings.maintenanceMessage, DEFAULT_CODEX_COMPACT_SETTINGS.maintenanceMessage);
+  assert.match(failed.notifications[0]?.message ?? "", /disk failure/);
+  assert.doesNotMatch(failed.notifications[0]?.message ?? "", /unsaved custom prompt/);
+});
+
+test("show menu hands off to native editor after selecting the maintenance row", async () => {
+  const memory = memoryRuntime();
+  const selections: string[] = [];
+  let editorOpened = false;
+  const context = createMockContext({
+    mode: "tui",
+    select: async (_title: string, options: string[]) => {
+      const selected =
+        selections.length === 0
+          ? options.find((value) => value.startsWith("Settings"))
+          : options.find((value) => value.startsWith("Maintenance message"));
+      selections.push(selected ?? "missing");
+      return selected;
+    },
+    editor: async () => {
+      editorOpened = true;
+      return "handoff after menu close";
+    },
+  });
+  await showCodexCompactMenu(memory.runtime, context.ctx, {
+    signal: new AbortController().signal,
+    isCurrent: () => true,
+  });
+  assert.equal(selections.length, 2);
+  assert.equal(editorOpened, true);
+  assert.deepEqual(memory.patches, [{ maintenanceMessage: "handoff after menu close" }]);
 });

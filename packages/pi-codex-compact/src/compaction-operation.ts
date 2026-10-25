@@ -168,13 +168,18 @@ export async function compactRemotely(
     ctx.getSystemPrompt?.() === systemPrompt &&
     JSON.stringify([pi.getActiveTools(), activeTools(pi)]) === tools &&
     branchIsCurrent(ctx.sessionManager.getBranch());
+  const operationStarted = performance.now();
+  let outcome: "failed" | "prepared" | "ready" | "recovered" = "failed";
+  let validationMs = 0;
   const diagnostics = new RequestDiagnostics();
+  diagnostics.configure(settings.protocol);
   const markDeadline = () => {
     diagnostics.deadline = true;
   };
   options.deadlineSignal?.addEventListener("abort", markDeadline, { once: true });
-  let requestValues: string[] = [];
+  let requestValues: string[] = [settings.maintenanceMessage];
   let remoteAttempted = false;
+  const diagnosticCleanups: (() => void)[] = [];
   let lastHttpStatus: number | undefined;
   let lastTransportFailure: string | undefined;
   let rejectionError: Error | undefined;
@@ -197,14 +202,21 @@ export async function compactRemotely(
   try {
     if (checkpointPresent && !checkpoint)
       throw new Error("The active opaque checkpoint is invalid or unsupported; history preserved");
-    const resolved = await abortable(resolveCompactionBinding(ctx, model, settings, stillCurrent), remoteSignal);
+    const resolved = await abortable(
+      diagnostics.wait("binding", () => resolveCompactionBinding(ctx, model, settings, stillCurrent, diagnostics)),
+      remoteSignal,
+    );
     if (!stillCurrent()) return { cancel: true };
     const { auth, provider } = resolved;
     route = resolved.route;
+    diagnostics.configure(settings.protocol, route.protocol, settings.appendMaintenanceMessage);
     if (options.preparation) options.preparation.attempt.binding = resolved.binding;
-    requestValues = [auth.apiKey, ...Object.values(auth.headers ?? {}), ...Object.values(auth.env ?? {})].filter(
-      (value): value is string => typeof value === "string" && value.length > 0,
-    );
+    requestValues = [
+      settings.maintenanceMessage,
+      auth.apiKey,
+      ...Object.values(auth.headers ?? {}),
+      ...Object.values(auth.env ?? {}),
+    ].filter((value): value is string => typeof value === "string" && value.length > 0);
     onRouteResolved(route.protocol);
     if (ownsStatus())
       ctx.ui.setStatus(
@@ -233,6 +245,7 @@ export async function compactRemotely(
       if (!stillCurrent()) return { cancel: true };
       return { compaction };
     }
+    const preparationStarted = performance.now();
     const context: Context = {
       systemPrompt: ctx.getSystemPrompt(),
       // Prepared operations borrow raw ancestry under persisted-value guards. Keep
@@ -243,6 +256,7 @@ export async function compactRemotely(
       ),
       tools: activeTools(pi),
     };
+    diagnostics.record("preparation", preparationStarted);
     diagnostics.phase = "request";
     const response = await abortable(
       requestRemoteCompaction({
@@ -262,9 +276,12 @@ export async function compactRemotely(
               replacementHistory: current.prior.replacementHistory,
             }
           : undefined,
+        appendMaintenanceMessage: settings.appendMaintenanceMessage,
+        maintenanceMessage: settings.maintenanceMessage,
         requestTimeoutMs: settings.requestTimeoutMs,
         maxRetries: settings.maxRetries,
         onProviderStreamEvent: (raw) => {
+          if (route.protocol !== "context-management") diagnostics.observe(raw);
           const error = streamOperationRejection(raw);
           if (error) recordRejection(error);
         },
@@ -288,7 +305,19 @@ export async function compactRemotely(
           remoteAttempted = true;
           lastHttpStatus = undefined;
           lastTransportFailure = undefined;
-          const diagnosticAttempt = diagnostics.currentAttempt;
+          const diagnosticAttempt =
+            route.protocol === "context-management" ? diagnostics.currentAttempt : diagnostics.beginAttempt();
+          if (route.protocol !== "context-management") {
+            const providerSignals = [
+              ...(init?.signal ? [init.signal] : []),
+              ...(input instanceof Request ? [input.signal] : []),
+            ];
+            const providerSignal = providerSignals.length ? AbortSignal.any(providerSignals) : undefined;
+            const markProviderAbort = () => diagnostics.providerAborted(diagnosticAttempt);
+            if (providerSignal?.aborted) markProviderAbort();
+            providerSignal?.addEventListener("abort", markProviderAbort, { once: true });
+            diagnosticCleanups.push(() => providerSignal?.removeEventListener("abort", markProviderAbort));
+          }
           const response = await (fetch ?? globalThis.fetch)(input, {
             ...init,
             signal: AbortSignal.any([
@@ -306,7 +335,7 @@ export async function compactRemotely(
                 : "network request failed";
             throw error;
           });
-          if (route.protocol === "context-management") diagnostics.headers(response, diagnosticAttempt);
+          diagnostics.headers(response, diagnosticAttempt);
           lastHttpStatus = response.ok ? undefined : response.status;
           if (remoteSignal.aborted || !stillCurrent()) {
             void response.body?.cancel().catch(() => undefined);
@@ -318,7 +347,27 @@ export async function compactRemotely(
             ...(input instanceof Request ? [input.signal] : []),
           ];
           const requestSignal = AbortSignal.any(signals);
-          const failure = await inspectFailureResponse(response, requestSignal);
+          let observed = response;
+          if (route.protocol !== "context-management" && observed.body) {
+            const transform = new TransformStream<Uint8Array, Uint8Array>({
+              transform(chunk, destination) {
+                diagnostics.chunk(chunk.byteLength, diagnosticAttempt);
+                destination.enqueue(chunk);
+              },
+              flush() {
+                diagnostics.end(diagnosticAttempt);
+              },
+            });
+            void observed.body.pipeTo(transform.writable, { signal: requestSignal }).catch(() => {
+              diagnostics.pipeError(diagnosticAttempt, requestSignal.aborted);
+            });
+            observed = new Response(transform.readable, {
+              status: observed.status,
+              statusText: observed.statusText,
+              headers: observed.headers,
+            });
+          }
+          const failure = await inspectFailureResponse(observed, requestSignal);
           if (!stillCurrent()) {
             void failure.response.body?.cancel().catch(() => undefined);
             throw new Error("Compaction ownership changed during error inspection");
@@ -331,16 +380,23 @@ export async function compactRemotely(
       }),
       remoteSignal,
     );
+    diagnostics.seal();
     if (!stillCurrent()) return { cancel: true };
-    const replacementHistory =
-      route.protocol === "context-management"
-        ? validateContextManagementHistory(response.replacementHistory ?? [], {
-            byteBudget: REPLACEMENT_BYTE_BUDGET,
-            tokenBudget: settings.replacementTokenBudget,
-          })
-        : buildReplacementHistory(response.compactedOutput?.slice(0, -1) ?? response.promptInput, response.item, {
-            tokenBudget: settings.replacementTokenBudget,
-          });
+    const validationStarted = performance.now();
+    let replacementHistory: ReturnType<typeof buildReplacementHistory>;
+    try {
+      replacementHistory =
+        route.protocol === "context-management"
+          ? validateContextManagementHistory(response.replacementHistory ?? [], {
+              byteBudget: REPLACEMENT_BYTE_BUDGET,
+              tokenBudget: settings.replacementTokenBudget,
+            })
+          : buildReplacementHistory(response.compactedOutput?.slice(0, -1) ?? response.promptInput, response.item, {
+              tokenBudget: settings.replacementTokenBudget,
+            });
+    } finally {
+      validationMs = performance.now() - validationStarted;
+    }
     const details = createCheckpointDetails({
       provider: model.provider,
       api: route.api,
@@ -350,6 +406,7 @@ export async function compactRemotely(
       replacementHistory,
       keptMessages: keptMessages(event),
     });
+    outcome = options.preparation ? "prepared" : "ready";
     return {
       compaction: {
         summary: fallbackSummary(details.checkpointId),
@@ -360,6 +417,8 @@ export async function compactRemotely(
       },
     };
   } catch (error) {
+    diagnostics.callerAbort ||= event.signal.aborted;
+    diagnostics.seal();
     if (!stillCurrent()) return { cancel: true };
     if (remoteAttempted && isOAuthOperationRejection(error))
       recordRejection(error instanceof Error ? error : new Error(String(error)));
@@ -395,13 +454,15 @@ export async function compactRemotely(
     if (settings.checkpointRecovery === "cancel") return { cancel: true };
     let nativeFallbackAllowed = false;
     const recoveryDiagnostics = new RequestDiagnostics();
+    recoveryDiagnostics.configure(settings.protocol, route.protocol, false, "recovery");
+    let recoveryOutcome: "failed" | "ready" = "failed";
     try {
       const current = projectedCurrentMessages(event, route);
       if (!current.prior) throw new Error("Checkpoint recovery lost its checkpoint");
       const messages = summaryPrefix(current.messages, keptMessages(event), fingerprintMessage);
       // Native fallback is intentionally lossy, but never bypass projection or ownership checks.
       nativeFallbackAllowed = true;
-      const auth = await ctx.modelRegistry.getApiKeyAndHeaders(model);
+      const auth = await recoveryDiagnostics.wait("authWait", () => ctx.modelRegistry.getApiKeyAndHeaders(model));
       if (!stillCurrent()) return { cancel: true };
       if (!auth.ok) throw new Error(auth.error);
       requestValues = [
@@ -453,6 +514,8 @@ export async function compactRemotely(
         event,
       );
       if (!stillCurrent()) return { cancel: true };
+      recoveryOutcome = "ready";
+      outcome = "recovered";
       return { compaction };
     } catch (recoveryError) {
       if (!stillCurrent()) return { cancel: true };
@@ -466,8 +529,22 @@ export async function compactRemotely(
         );
       }
       return nativeFallbackAllowed ? undefined : { cancel: true };
+    } finally {
+      if (ctx.hasUI && stillCurrent()) {
+        recoveryDiagnostics.seal();
+        ctx.ui.notify(`[codex-compact] Recovery outcome=${recoveryOutcome}; ${recoveryDiagnostics.summary()}`, "info");
+      }
     }
   } finally {
+    if (remoteAttempted && ctx.hasUI && stillCurrent()) {
+      diagnostics.callerAbort ||= event.signal.aborted;
+      diagnostics.seal();
+      ctx.ui.notify(
+        `[codex-compact] Compaction outcome=${outcome}; operationMs=${Math.floor(performance.now() - operationStarted)} validationMs=${Math.floor(validationMs)}; ${diagnostics.summary()}`,
+        "info",
+      );
+    }
+    for (const cleanup of diagnosticCleanups) cleanup();
     options.deadlineSignal?.removeEventListener("abort", markDeadline);
     remoteController.abort();
     if (!ownerSignal.aborted && ctx.sessionManager.getSessionId() === sessionId && ownsStatus()) {

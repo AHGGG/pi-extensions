@@ -195,8 +195,11 @@ for (const protocol of ["auto", "responses-compact", "remote-v2"] as const) {
     assert.deepEqual(h.mock.entries, []);
     assert.equal(h.statuses.get("codex-compact"), undefined);
     assert.equal(h.statuses.get("other-extension"), "keep me");
-    assert.equal(h.notifications.length, 1);
-    const notice = h.notifications[0];
+    assert.equal(h.notifications.length, 2);
+    const warnings = h.notifications.filter(({ level }) => level === "warning");
+    assert.equal(warnings.length, 1);
+    const notice = warnings[0];
+    assert.match(h.notifications.find(({ level }) => level === "info")?.message ?? "", /Compaction outcome=failed/);
     assert.equal(notice.level, "warning");
     assert.match(notice.message, /ChatGPT OAuth.*not authorized.*compaction operation/);
     assert.match(notice.message, /Without a checkpoint, using Pi compaction/);
@@ -273,7 +276,12 @@ for (const mode of ["tui", "rpc", "print", "json"] as const) {
     for (const notifyOnFallback of [true, false]) {
       const h = await harness({ mode, settings: { notifyOnFallback } });
       assert.equal(await h.run(), undefined);
-      assert.equal(h.notifications.length, notifyOnFallback && (mode === "tui" || mode === "rpc") ? 1 : 0);
+      const visible = mode === "tui" || mode === "rpc";
+      assert.equal(
+        h.notifications.filter(({ level }) => level === "warning").length,
+        notifyOnFallback && visible ? 1 : 0,
+      );
+      assert.equal(h.notifications.filter(({ level }) => level === "info").length, visible ? 1 : 0);
     }
   });
 }

@@ -3,13 +3,17 @@ import { constants } from "node:fs";
 import { mkdir, open, rename, rm, writeFile } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
+import { COMPACTION_MAINTENANCE_MESSAGE } from "./context-management.js";
 import type { RemoteCompactionProtocolSetting } from "./model-api.js";
 
 export const CODEX_COMPACT_SETTINGS_FILE = "pi-codex-compact.json";
 export const MAX_SETTINGS_BYTES = 64 * 1024;
+export const MAX_MAINTENANCE_MESSAGE_BYTES = 16 * 1024;
 
 export interface CodexCompactSettings {
   enabled: boolean;
+  appendMaintenanceMessage: boolean;
+  maintenanceMessage: string;
   protocol: RemoteCompactionProtocolSetting;
   apiProfiles: Record<string, "codex-responses-v1">;
   requestTimeoutMs: number;
@@ -30,6 +34,8 @@ export function compactionSettingsKey(settings: CodexCompactSettings): string {
 
 export const DEFAULT_CODEX_COMPACT_SETTINGS: Readonly<CodexCompactSettings> = Object.freeze({
   enabled: true,
+  appendMaintenanceMessage: true,
+  maintenanceMessage: COMPACTION_MAINTENANCE_MESSAGE,
   protocol: "auto",
   apiProfiles: {},
   requestTimeoutMs: 300_000,
@@ -118,6 +124,15 @@ function normalizeApiProfiles(value: unknown): Record<string, "codex-responses-v
 
 export function normalizeCodexCompactSettings(value: unknown): CodexCompactSettings | undefined {
   if (!isRecord(value)) return undefined;
+  if (Object.hasOwn(value, "appendMaintenanceMessage") && typeof value.appendMaintenanceMessage !== "boolean")
+    return undefined;
+  if (
+    Object.hasOwn(value, "maintenanceMessage") &&
+    (typeof value.maintenanceMessage !== "string" ||
+      value.maintenanceMessage.trim().length === 0 ||
+      Buffer.byteLength(value.maintenanceMessage, "utf8") > MAX_MAINTENANCE_MESSAGE_BYTES)
+  )
+    return undefined;
   if (Object.hasOwn(value, "enabled") && typeof value.enabled !== "boolean") return undefined;
   if (
     Object.hasOwn(value, "protocol") &&
@@ -147,6 +162,14 @@ export function normalizeCodexCompactSettings(value: unknown): CodexCompactSetti
     }
   }
   return {
+    appendMaintenanceMessage:
+      typeof value.appendMaintenanceMessage === "boolean"
+        ? value.appendMaintenanceMessage
+        : DEFAULT_CODEX_COMPACT_SETTINGS.appendMaintenanceMessage,
+    maintenanceMessage:
+      typeof value.maintenanceMessage === "string"
+        ? value.maintenanceMessage
+        : DEFAULT_CODEX_COMPACT_SETTINGS.maintenanceMessage,
     checkpointRecovery: value.checkpointRecovery === "cancel" ? "cancel" : "summarize",
     enabled: typeof value.enabled === "boolean" ? value.enabled : DEFAULT_CODEX_COMPACT_SETTINGS.enabled,
     protocol:
@@ -238,11 +261,15 @@ async function savePatch(
   const document = { ...latest.document, ...patch };
   const settings = normalizeCodexCompactSettings(document);
   if (!settings) throw new Error("Refusing to save invalid Codex compaction settings");
+  const serialized = `${JSON.stringify(document, null, 2)}\n`;
+  if (Buffer.byteLength(serialized, "utf8") > MAX_SETTINGS_BYTES) {
+    throw new Error("Refusing to save settings exceeding 64 KiB");
+  }
   const temporaryPath = join(dirname(path), `.${basename(path)}.${randomUUID()}.tmp`);
   await mkdir(dirname(path), { recursive: true });
   aborted(signal);
   try {
-    await writeFile(temporaryPath, `${JSON.stringify(document, null, 2)}\n`, {
+    await writeFile(temporaryPath, serialized, {
       encoding: "utf8",
       flag: "wx",
       mode: 0o600,
