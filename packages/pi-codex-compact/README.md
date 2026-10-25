@@ -277,3 +277,27 @@ Pi extension, OpenAI Codex, ChatGPT OAuth, Azure OpenAI, Responses API, remote c
 ## 📄 License
 
 [MIT](LICENSE)
+
+## Optional session scratchpad
+
+Enable **Scratchpad** in `/codex-compact` → Settings, or use `/scratchpad on`.
+`/scratchpad off` disables the tool without deleting notes; `/scratchpad` and
+`/scratchpad toggle` toggle it, and `/scratchpad status` reports the setting.
+This is one saved `scratchpadEnabled` preference (default `false`), shared by the
+menu and command and retained across sessions. Pi's explicit tool selection or
+exclusions still apply. It works independently of the remote-compaction toggle.
+
+The agent gets one `scratchpad` tool for session-specific items with stable IDs,
+text, and UTC creation/update timestamps. It supports reads and atomic add,
+update, and delete batches. Notes live under Pi's configured agent directory at
+`scratchpads/<session-id>.json`. Resume reuses that file; new/forked sessions get
+separate empty notes. `/tree` does **not** rewind notes.
+
+This feature does not inject note contents, run a summarizer, modify compaction
+instructions, or depend on the background-compaction extension. The agent must
+read notes when needed. Ordinary note edits do not rebuild the tool set.
+Enabling/disabling the tool does change the active tool inventory and can
+invalidate an in-flight prepared checkpoint, like any other tool-set change.
+
+See [Scratchpad tool contract](docs/scratchpad.md) for operations, limits, direct
+editing, and errors.

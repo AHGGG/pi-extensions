@@ -237,3 +237,17 @@ test("maintenance settings persist exact text and reject settings files beyond t
   await assert.rejects(runtime.update({ maintenanceMessage: "x".repeat(8 * 1024) }), /exceeding 64 KiB/);
   assert.equal(await readFile(path, "utf8"), before);
 });
+
+test("scratchpad defaults off, persists, validates, and is not a provider setting", async () => {
+  assert.equal(DEFAULT_CODEX_COMPACT_SETTINGS.scratchpadEnabled, false);
+  assert.equal(normalizeCodexCompactSettings({ scratchpadEnabled: true })?.scratchpadEnabled, true);
+  assert.equal(normalizeCodexCompactSettings({ scratchpadEnabled: "true" }), undefined);
+  assert.equal(
+    compactionSettingsKey({ ...DEFAULT_CODEX_COMPACT_SETTINGS, scratchpadEnabled: true }),
+    compactionSettingsKey({ ...DEFAULT_CODEX_COMPACT_SETTINGS }),
+  );
+  const path = await tempSettingsPath();
+  const runtime = createCodexCompactSettingsRuntime(path);
+  await runtime.update({ scratchpadEnabled: true });
+  assert.equal((await createCodexCompactSettingsRuntime(path).reload()).settings.scratchpadEnabled, true);
+});

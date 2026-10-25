@@ -15,6 +15,7 @@ type Screen = "main" | "settings" | "invalid";
 type Action =
   | "compact-now"
   | "set-enabled"
+  | "set-scratchpad"
   | "set-append-message"
   | "edit-maintenance-message"
   | "reset-maintenance-message"
@@ -173,6 +174,15 @@ export function createCodexCompactMenu(
             action: "set-enabled",
           },
           {
+            id: "scratchpadEnabled",
+            label: "Scratchpad",
+            description:
+              "Expose session-specific task notes. Saved across sessions; Off preserves notes. Also available through /scratchpad on or off.",
+            currentValue: state.settings.scratchpadEnabled ? "On" : "Off",
+            values: ["On", "Off"],
+            action: "set-scratchpad",
+          },
+          {
             id: "protocol",
             label: "Protocol",
             description:
@@ -267,6 +277,7 @@ export function createCodexCompactMenu(
         options.onCompactRequested?.();
         return { kind: "close" };
       },
+      "set-scratchpad": ({ ctx, value, signal }) => save(ctx, { scratchpadEnabled: value === "On" }, signal),
       "set-append-message": ({ ctx, value, signal }) => save(ctx, { appendMaintenanceMessage: value === "On" }, signal),
       "reset-maintenance-message": ({ ctx, signal }) =>
         save(ctx, { maintenanceMessage: DEFAULT_CODEX_COMPACT_SETTINGS.maintenanceMessage }, signal),

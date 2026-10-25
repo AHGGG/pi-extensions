@@ -12,6 +12,7 @@ export const MAX_MAINTENANCE_MESSAGE_BYTES = 16 * 1024;
 
 export interface CodexCompactSettings {
   enabled: boolean;
+  scratchpadEnabled: boolean;
   appendMaintenanceMessage: boolean;
   maintenanceMessage: string;
   protocol: RemoteCompactionProtocolSetting;
@@ -27,13 +28,16 @@ export interface CodexCompactSettings {
 export function compactionSettingsKey(settings: CodexCompactSettings): string {
   return JSON.stringify(
     Object.fromEntries(
-      Object.keys(DEFAULT_CODEX_COMPACT_SETTINGS).map((key) => [key, settings[key as keyof CodexCompactSettings]]),
+      Object.keys(DEFAULT_CODEX_COMPACT_SETTINGS)
+        .filter((key) => key !== "scratchpadEnabled")
+        .map((key) => [key, settings[key as keyof CodexCompactSettings]]),
     ),
   );
 }
 
 export const DEFAULT_CODEX_COMPACT_SETTINGS: Readonly<CodexCompactSettings> = Object.freeze({
   enabled: true,
+  scratchpadEnabled: false,
   appendMaintenanceMessage: true,
   maintenanceMessage: COMPACTION_MAINTENANCE_MESSAGE,
   protocol: "auto",
@@ -124,6 +128,7 @@ function normalizeApiProfiles(value: unknown): Record<string, "codex-responses-v
 
 export function normalizeCodexCompactSettings(value: unknown): CodexCompactSettings | undefined {
   if (!isRecord(value)) return undefined;
+  if (Object.hasOwn(value, "scratchpadEnabled") && typeof value.scratchpadEnabled !== "boolean") return undefined;
   if (Object.hasOwn(value, "appendMaintenanceMessage") && typeof value.appendMaintenanceMessage !== "boolean")
     return undefined;
   if (
@@ -162,6 +167,7 @@ export function normalizeCodexCompactSettings(value: unknown): CodexCompactSetti
     }
   }
   return {
+    scratchpadEnabled: typeof value.scratchpadEnabled === "boolean" ? value.scratchpadEnabled : false,
     appendMaintenanceMessage:
       typeof value.appendMaintenanceMessage === "boolean"
         ? value.appendMaintenanceMessage

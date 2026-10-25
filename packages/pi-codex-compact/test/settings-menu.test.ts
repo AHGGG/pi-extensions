@@ -121,6 +121,7 @@ test("settings screen exposes bounded controls and invalid files remain repairab
     screen.items.map((item) => [item.id, item.currentValue]),
     [
       ["enabled", "On"],
+      ["scratchpadEnabled", "Off"],
       ["protocol", "Auto"],
       ["appendMaintenanceMessage", "On"],
       ["maintenanceMessage", "Default"],

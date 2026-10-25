@@ -30,6 +30,7 @@ import {
 } from "./prepared-compaction-protocol.js";
 import { hasCheckpointMarker } from "./protocol.js";
 import { RejectedRoutes, rejectionRouteKey } from "./rejection-state.js";
+import { createScratchpadRuntime } from "./scratchpad.js";
 import {
   type CodexCompactSettings,
   type CodexCompactSettingsRuntime,
@@ -176,6 +177,8 @@ export function createCodexCompactExtension(
     installDiscovery();
     pi.events?.emit(COMPACTION_ENGINE_AVAILABLE, engine);
 
+    const scratchpad = createScratchpadRuntime(pi, settingsRuntime, { onToggle: cancelOperation });
+
     pi.registerCommand("codex-compact", {
       description: "Compact now or configure Responses compaction",
       handler: async (args, ctx) => {
@@ -203,6 +206,7 @@ export function createCodexCompactExtension(
               : undefined;
           },
           onSettingsChanged: () => {
+            scratchpad.sync(ctx);
             cancelOperation(ctx);
           },
           hasCheckpoint: () => hasActiveCheckpointClaim(ctx.sessionManager.getBranch()),
@@ -217,6 +221,7 @@ export function createCodexCompactExtension(
     });
 
     pi.on("session_start", async (_event, ctx) => {
+      scratchpad.beginSession(ctx);
       installDiscovery();
       pi.events?.emit(COMPACTION_ENGINE_AVAILABLE, engine);
       owners.get(ctx.sessionManager)?.controller.abort();
@@ -255,6 +260,7 @@ export function createCodexCompactExtension(
       ) {
         return;
       }
+      scratchpad.sync(ctx);
       if (ctx.hasUI && state.kind === "invalid") {
         ctx.ui.notify(
           `Invalid pi-codex-compact.json; using defaults without overwriting it. ${terminalText(state.issue ?? "unknown validation error")}`,
@@ -669,6 +675,7 @@ export function createCodexCompactExtension(
     });
 
     pi.on("session_shutdown", async (_event, ctx) => {
+      scratchpad.stopSession(ctx);
       activeManagers.delete(ctx.sessionManager);
       if (activeManagers.size === 0) {
         removeDiscovery?.();
