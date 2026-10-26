@@ -1052,6 +1052,10 @@ for (const mode of [
   "both",
   "summary",
   "summary-error-echo",
+  "summary-only",
+  "summary-only-error-echo",
+  "summary-only-quiet",
+  "omitted-only",
   "scratchpad-off",
   "append-off",
   "both-off",
@@ -1076,6 +1080,17 @@ for (const mode of [
         action: "add",
         texts: mode.startsWith("oversized") ? ["a".repeat(8000), "b".repeat(8000), "c".repeat(1000)] : [privateText],
       });
+      const summaryOnly = mode.startsWith("summary-only") || mode === "omitted-only";
+      if (mode.startsWith("oversized"))
+        await store.execute("session", {
+          action: "add",
+          items: Array.from({ length: 20 }, () => ({ text: "f".repeat(3000), summary: "s".repeat(1024) })),
+        });
+      if (summaryOnly) {
+        await store.execute("session", { action: "add", texts: ["a".repeat(8000), "b".repeat(8000)] });
+        if (mode !== "omitted-only")
+          await store.execute("session", { action: "update", items: [{ id: 1, summary: "PRIVATE semantic summary" }] });
+      }
       if (mode === "empty") await store.execute("session", { action: "delete", ids: [1] });
       if (mode === "store-oversized")
         await writeFile(join(directory, "scratchpads", "session.json"), "x".repeat(1024 * 1024 + 1));
@@ -1092,7 +1107,7 @@ for (const mode of [
         protocol: "context-management",
         scratchpadEnabled: mode !== "scratchpad-off" && mode !== "both-off" && mode !== "oversized-scratchpad-off",
         appendMaintenanceMessage: mode !== "append-off" && mode !== "both-off" && mode !== "oversized-append-off",
-        notifyOnFallback: mode !== "oversized-quiet",
+        notifyOnFallback: mode !== "oversized-quiet" && mode !== "summary-only-quiet",
         maintenanceMessage: "CUSTOM preserved instruction",
       });
       createCodexCompactExtension({ settingsRuntime: runtime, fetch: async () => serverResponse() })(mock.pi);
@@ -1132,9 +1147,16 @@ for (const mode of [
               model,
               (value) => {
                 payload ??= value;
-                if (mode === "error-echo" || mode === "summary-error-echo" || mode === "recovery-error-echo")
+                if (
+                  mode === "error-echo" ||
+                  mode === "summary-error-echo" ||
+                  mode === "summary-only-error-echo" ||
+                  mode === "recovery-error-echo"
+                )
                   throw new Error(
-                    useSummary ? "Provider echoed PRIVATE semantic summary" : "Provider echoed PRIVATE saved detail",
+                    useSummary || summaryOnly
+                      ? "Provider echoed PRIVATE semantic summary"
+                      : "Provider echoed PRIVATE saved detail",
                   );
               },
               "context-management",
@@ -1142,8 +1164,14 @@ for (const mode of [
         },
       });
       const result = await mock.events.get("session_before_compact")?.[0]?.(event(undefined, entries), ctx);
-      if (mode === "error-echo" || mode === "summary-error-echo" || mode === "recovery-error-echo") {
-        if (mode === "error-echo" || mode === "summary-error-echo") assert.equal(result, undefined);
+      if (
+        mode === "error-echo" ||
+        mode === "summary-error-echo" ||
+        mode === "summary-only-error-echo" ||
+        mode === "recovery-error-echo"
+      ) {
+        if (mode === "error-echo" || mode === "summary-error-echo" || mode === "summary-only-error-echo")
+          assert.equal(result, undefined);
         assert.match(JSON.stringify(notifications), /checkpoint preparation failed/);
         assert.doesNotMatch(JSON.stringify(notifications), /PRIVATE saved detail|PRIVATE semantic summary/);
         if (mode === "recovery-error-echo")
@@ -1153,7 +1181,7 @@ for (const mode of [
       const inputText = JSON.stringify(payload);
       assert.equal(
         inputText.includes("PI_SCRATCHPAD_SNAPSHOT_V1"),
-        mode === "both" || useSummary || mode === "error-echo" || mode === "recovery-error-echo",
+        mode === "both" || useSummary || summaryOnly || mode === "error-echo" || mode === "recovery-error-echo",
       );
       assert.equal(
         inputText.includes("CUSTOM preserved instruction"),
@@ -1163,6 +1191,13 @@ for (const mode of [
         inputText.includes("Persistent scratchpad notes exist"),
         mode === "oversized" || mode === "oversized-quiet",
       );
+      if (summaryOnly) {
+        assert.match(inputText, /Entries marked omitted supply only an item ID, not its contents/);
+        assert.doesNotMatch(inputText, /a{100}|b{100}|PRIVATE saved detail/);
+        assert.equal(inputText.includes("PRIVATE semantic summary"), mode !== "omitted-only");
+        assert.equal(JSON.stringify(notifications).includes("summary-only snapshot"), mode !== "summary-only-quiet");
+        assert.doesNotMatch(JSON.stringify(notifications), /PRIVATE semantic summary|PRIVATE saved detail/);
+      }
       if (useSummary) {
         assert.match(inputText, /PRIVATE semantic summary/);
         assert.doesNotMatch(inputText, /FULL unseen detail/);

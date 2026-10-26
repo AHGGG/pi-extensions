@@ -261,6 +261,11 @@ export async function compactRemotely(
         scratchpadSnapshot = snapshot.text;
         scratchpadIncluded = true;
         requestValues.push(...snapshot.redactionValues);
+        if (snapshot.mode === "summary-only" && ctx.hasUI && settings.notifyOnFallback)
+          ctx.ui.notify(
+            "[codex-compact] Normal scratchpad projection exceeded the size limit; appending a summary-only snapshot with explicit markers for items without valid summaries.",
+            "warning",
+          );
       } else if (snapshot.kind === "omitted") {
         scratchpadOmittedForSize = true;
         if (ctx.hasUI && settings.notifyOnFallback)

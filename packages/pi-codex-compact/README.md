@@ -304,10 +304,14 @@ Management compaction captures one projection of every item: full text through
 2 KiB, or its current semantic summary (at most 1 KiB) for longer notes. Missing or
 stale summaries fall back to full text; stored notes are never shortened. The JSON
 projection, up to 16 KiB total, goes before your unchanged maintenance instruction.
-Each entry is labeled full or summary; deduplication applies only to supplied facts,
+If that projection exceeds 16 KiB, compaction tries a summary-only snapshot using
+every valid saved summary, including summaries of short notes. Items without a
+current summary supply only their ID and an explicit omitted marker, never a
+truncated preview. The same 16 KiB budget includes all serialized entries and markers.
+Each entry is labeled full, summary, or omitted; deduplication applies only to supplied facts,
 not unseen details in full notes. Important missing facts, corrections, constraints,
 and the next action must still be preserved. Empty notes add nothing. If validated
-notes exceed the complete projection budget, their contents are omitted and a
+notes still exceed the summary-only projection budget, their contents are omitted and a
 content-free notice follows your unchanged maintenance message. It permits avoiding
 repetition only where the conversation clearly confirms a fact was saved and remains
 current; uncertain or unsaved details and later changes must still be preserved.

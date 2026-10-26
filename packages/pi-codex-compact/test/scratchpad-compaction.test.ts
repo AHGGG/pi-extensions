@@ -63,7 +63,7 @@ test("capture is queued behind pending writes and remains unchanged by later edi
   }
 });
 
-test("serialized-byte budget accepts the complete boundary and rejects one extra byte", async () => {
+test("mixed serialized-byte budget accepts the boundary and falls back on one extra byte", async () => {
   const { store, path } = await fixture();
   const empty = [1, 2].map((id) => ({ id, representation: "full", text: "", createdAt: time, updatedAt: time }));
   const overhead = Buffer.byteLength(JSON.stringify({ items: empty }), "utf8");
@@ -77,10 +77,14 @@ test("serialized-byte budget accepts the complete boundary and rejects one extra
   const document = JSON.parse(await readFile(path, "utf8"));
   document.items[1].text += "b";
   await writeFile(path, JSON.stringify(document));
-  assert.deepEqual(await captureScratchpadForCompaction("session-a", { store }), {
-    kind: "omitted",
-    reason: "oversized",
-  });
+  const fallback = await captureScratchpadForCompaction("session-a", { store });
+  assert.equal(fallback.kind, "ready");
+  if (fallback.kind !== "ready") return;
+  assert.equal(fallback.mode, "summary-only");
+  assert.deepEqual(
+    JSON.parse(fallback.text).items,
+    [1, 2].map((id) => ({ id, representation: "omitted" })),
+  );
 });
 
 test("malformed or oversized files produce only fixed safe fallback reasons", async () => {
@@ -190,6 +194,70 @@ test("summaries can make a complete snapshot fit, but total overflow returns onl
     action: "add",
     items: Array.from({ length: 20 }, () => ({ text: "x".repeat(8000), summary: "s".repeat(1024) })),
   });
+  assert.deepEqual(await captureScratchpadForCompaction("session-a", { store }), {
+    kind: "omitted",
+    reason: "oversized",
+  });
+});
+
+test("summary-only fallback includes short summaries and marks missing or stale content without mutation", async () => {
+  const { store, path } = await fixture();
+  const summary = 'Private "semantic"\n🙂 summary';
+  await store.execute("session-a", {
+    action: "add",
+    items: [
+      { text: "short", summary },
+      { text: "long".repeat(2000), summary: "stale secret" },
+      { text: "missing".repeat(1100) },
+      { text: "overflow".repeat(200) },
+    ],
+  });
+  const document = JSON.parse(await readFile(path, "utf8"));
+  document.items[1].text += "x";
+  const before = JSON.stringify(document);
+  await writeFile(path, before);
+  const snapshot = await captureScratchpadForCompaction("session-a", { store });
+  assert.equal(snapshot.kind, "ready");
+  if (snapshot.kind !== "ready") return;
+  assert.equal(snapshot.mode, "summary-only");
+  assert.equal(snapshot.itemCount, 4);
+  assert.deepEqual(JSON.parse(snapshot.text).items, [
+    { id: 1, representation: "summary", text: summary },
+    ...[2, 3, 4].map((id) => ({ id, representation: "omitted" })),
+  ]);
+  assert.doesNotMatch(snapshot.text, /stale secret|missing|overflow|createdAt|summaryTextHash/);
+  for (const value of [summary, document.items[1].text]) {
+    assert.ok(snapshot.redactionValues.includes(value));
+    assert.ok(snapshot.redactionValues.includes(JSON.stringify(value).slice(1, -1)));
+  }
+  assert.equal(await readFile(path, "utf8"), before);
+});
+
+test("summary-only serialized UTF-8 budget includes escaping and accepts exactly the boundary", async () => {
+  const { store } = await fixture();
+  const entries = Array.from({ length: 16 }, (_, index) => ({
+    id: index + 1,
+    representation: "summary",
+    text: "",
+  }));
+  const overhead = Buffer.byteLength(JSON.stringify({ items: entries }));
+  const summary = "🙂".repeat(240);
+  const remaining = SCRATCHPAD_COMPACTION_BYTE_BUDGET - overhead - 15 * Buffer.byteLength(summary);
+  // JSON escaping makes this summary's serialized length greater than its raw bytes.
+  const last = '"'.repeat(Math.floor(remaining / 2)) + "x".repeat(remaining % 2);
+  await store.execute("session-a", {
+    action: "add",
+    items: entries.map((_, index) => ({
+      text: "f".repeat(2048),
+      summary: index < 15 ? summary : last,
+    })),
+  });
+  const snapshot = await captureScratchpadForCompaction("session-a", { store });
+  assert.equal(snapshot.kind, "ready");
+  if (snapshot.kind !== "ready") return;
+  assert.equal(snapshot.mode, "summary-only");
+  assert.equal(Buffer.byteLength(snapshot.text), SCRATCHPAD_COMPACTION_BYTE_BUDGET);
+  await store.execute("session-a", { action: "update", items: [{ id: 16, summary: `${last}x` }] });
   assert.deepEqual(await captureScratchpadForCompaction("session-a", { store }), {
     kind: "omitted",
     reason: "oversized",

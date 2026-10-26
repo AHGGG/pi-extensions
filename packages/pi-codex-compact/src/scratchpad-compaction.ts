@@ -5,7 +5,7 @@ export const SCRATCHPAD_COMPACTION_BYTE_BUDGET = 16 * 1024;
 export const SCRATCHPAD_COMPACTION_FULL_TEXT_BYTES = 2 * 1024;
 
 export type ScratchpadCompactionSnapshot =
-  | { kind: "ready"; text: string; itemCount: number; redactionValues: string[] }
+  | { kind: "ready"; mode: "mixed" | "summary-only"; text: string; itemCount: number; redactionValues: string[] }
   | { kind: "empty" }
   | { kind: "omitted"; reason: "oversized" }
   | { kind: "unavailable"; reason: "oversized" | "unreadable" };
@@ -28,11 +28,23 @@ export async function captureScratchpadForCompaction(
         updatedAt,
       };
     });
-    const text = JSON.stringify({ items });
-    if (Buffer.byteLength(text, "utf8") > SCRATCHPAD_COMPACTION_BYTE_BUDGET)
-      return { kind: "omitted", reason: "oversized" };
+    let text = JSON.stringify({ items });
+    let mode: "mixed" | "summary-only" = "mixed";
+    if (Buffer.byteLength(text, "utf8") > SCRATCHPAD_COMPACTION_BYTE_BUDGET) {
+      mode = "summary-only";
+      // readSnapshot exposes only summaries bound to the current full text.
+      // Account for every item without inventing summaries or sending partial notes.
+      text = JSON.stringify({
+        items: notes.map(({ id, summary }) =>
+          summary === undefined ? { id, representation: "omitted" } : { id, representation: "summary", text: summary },
+        ),
+      });
+      if (Buffer.byteLength(text, "utf8") > SCRATCHPAD_COMPACTION_BYTE_BUDGET)
+        return { kind: "omitted", reason: "oversized" };
+    }
     return {
       kind: "ready",
+      mode,
       text,
       itemCount: items.length,
       // Cover both provider prose and JSON-escaped echoes without logging either.

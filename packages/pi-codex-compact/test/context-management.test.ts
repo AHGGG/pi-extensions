@@ -466,7 +466,10 @@ for (const mode of ["default", "custom", "off"] as const) {
 for (const appendMaintenanceMessage of [true, false]) {
   test(`scratchpad snapshot precedes preserved custom maintenance only when appended: ${appendMaintenanceMessage}`, async () => {
     const scratchpadSnapshot = JSON.stringify({
-      items: [{ id: 1, representation: "summary", text: "Saved task detail" }],
+      items: [
+        { id: 1, representation: "summary", text: "Saved task detail" },
+        { id: 2, representation: "omitted" },
+      ],
     });
     let payload: Record<string, unknown> | undefined;
     const result = await request(
@@ -491,6 +494,7 @@ for (const appendMaintenanceMessage of [true, false]) {
     assert.equal(payload?.tool_choice, "none");
     assert.match(SCRATCHPAD_COMPACTION_GUIDANCE, /only unchanged facts explicitly present/);
     assert.match(SCRATCHPAD_COMPACTION_GUIDANCE, /not the full notes/);
+    assert.match(SCRATCHPAD_COMPACTION_GUIDANCE, /Entries marked omitted supply only an item ID, not its contents/);
     assert.match(SCRATCHPAD_COMPACTION_GUIDANCE, /Do not omit details merely/);
     assert.doesNotMatch(JSON.stringify(result.promptInput), /Saved task detail|PI_SCRATCHPAD/);
   });
