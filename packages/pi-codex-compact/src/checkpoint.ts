@@ -65,8 +65,31 @@ export function checkpointMarker(checkpointId: string): string {
   ].join(" ");
 }
 
-export function fallbackSummary(checkpointId: string): string {
+interface CheckpointSummaryTiming {
+  preparationMs: number;
+  applicationMs?: number;
+}
+
+function displayDuration(ms: number): string | undefined {
+  if (!Number.isFinite(ms) || ms < 0) return undefined;
+  const tenths = Math.round(ms / 100);
+  if (tenths < 600) return `${(tenths / 10).toFixed(1)}s`;
+  const seconds = Math.round(ms / 1000);
+  return `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
+}
+
+export function fallbackSummary(checkpointId: string, timing?: CheckpointSummaryTiming): string {
+  const preparation = timing && displayDuration(timing.preparationMs);
+  const application = timing?.applicationMs === undefined ? undefined : displayDuration(timing.applicationMs);
+  const elapsed = !preparation
+    ? undefined
+    : timing?.applicationMs === undefined
+      ? `Checkpoint prepared in ${preparation}.`
+      : application
+        ? `Background checkpoint prepared in ${preparation}; apply checks ${application}.`
+        : undefined;
   return [
+    ...(elapsed ? [elapsed] : []),
     `Responses compaction checkpoint ${checkpointId} stores the older history opaquely.`,
     "Full replay requires @narumitw/pi-codex-compact and its issuing provider with a compatible Responses API and profile.",
     "Without them, only Pi's retained recent messages remain available.",

@@ -139,6 +139,7 @@ export function captureCheckpointPreparation(
           settings: { enabled: true, reserveTokens: 0, keepRecentTokens: 0 },
         },
       };
+      const preparationStarted = performance.now();
       const result = await compactRemotely(
         pi,
         event,
@@ -154,6 +155,7 @@ export function captureCheckpointPreparation(
       );
       const prepared = createPreparedCheckpoint(
         result,
+        performance.now() - preparationStarted,
         attempt,
         snapshotLeafId,
         Math.ceil((systemPrompt.length + toolsKey.length) / 4),
@@ -167,6 +169,7 @@ export function captureCheckpointPreparation(
 
 interface PreparedData {
   result: CompactionResult;
+  preparationMs: number;
   attempt: CompactionAttempt;
   snapshotLeafId: string;
   promptAndToolsTokens: number;
@@ -176,13 +179,14 @@ interface PreparedData {
 }
 function createPreparedCheckpoint(
   result: CompactionResult,
+  preparationMs: number,
   attempt: CompactionAttempt,
   snapshotLeafId: string,
   promptAndToolsTokens: number,
   isCurrent: () => boolean,
   runtime: CodexCompactSettingsRuntime,
 ): PreparedCheckpoint {
-  const data: PreparedData = { result, attempt, snapshotLeafId, promptAndToolsTokens, isCurrent };
+  const data: PreparedData = { result, preparationMs, attempt, snapshotLeafId, promptAndToolsTokens, isCurrent };
   const details = result && "compaction" in result ? parseCheckpointDetails(result.compaction?.details) : undefined;
   return {
     checkpointId: details?.checkpointId,
@@ -239,6 +243,7 @@ async function adoptPreparedCheckpoint(
   isCurrent: () => boolean,
   options: PreparedApplicationOptions = {},
 ): Promise<PreparedAdoption> {
+  const applicationStarted = performance.now();
   const signal = AbortSignal.any([event.signal, operationSignal]);
   // Exact equality is stronger than the foreground guard (which allows harmless
   // bookkeeping descendants). Reuse its captured digest, not an earlier verdict.
@@ -342,7 +347,10 @@ async function adoptPreparedCheckpoint(
           compaction: {
             ...result.compaction,
             details: adopted,
-            summary: fallbackSummary(adopted.checkpointId),
+            summary: fallbackSummary(adopted.checkpointId, {
+              preparationMs: prepared.preparationMs,
+              applicationMs: performance.now() - applicationStarted,
+            }),
             firstKeptEntryId,
             tokensBefore: event.preparation.tokensBefore,
           },
@@ -365,6 +373,7 @@ async function preparedCheckpointDraft(
   isCurrent: () => boolean,
   options: PreparedApplicationOptions = {},
 ): Promise<CompactionEntryDraft | undefined> {
+  const applicationStarted = performance.now();
   const reject = (reason: string, failure = false) => {
     prepared.validationFailure = reason;
     if (failure) prepared.applicationFailure = reason;
@@ -441,7 +450,16 @@ async function preparedCheckpointDraft(
       !projectSessionCheckpointContext(preview.buildSessionContext().messages, preview.getBranch(), checkpoint)
     )
       return reject("finalized checkpoint projection did not validate", true);
-    return { type: "compaction", summary, firstKeptEntryId, details, usage };
+    return {
+      type: "compaction",
+      summary: fallbackSummary(checkpoint.details.checkpointId, {
+        preparationMs: prepared.preparationMs,
+        applicationMs: performance.now() - applicationStarted,
+      }),
+      firstKeptEntryId,
+      details,
+      usage,
+    };
   } finally {
     options.timings?.record("preview", previewStarted);
   }

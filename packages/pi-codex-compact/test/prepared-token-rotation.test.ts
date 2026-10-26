@@ -7,8 +7,10 @@ import {
   type Provider,
 } from "@earendil-works/pi-ai";
 import { type ExtensionContext, type SessionBeforeCompactEvent, SessionManager } from "@earendil-works/pi-coding-agent";
-import { test } from "vitest";
+import { test, vi } from "vitest";
 import { createMockContext, createMockPi } from "../../../test/support.js";
+import { latestCheckpoint } from "../src/checkpoint.js";
+import { projectSessionCheckpointContext } from "../src/checkpoint-projection.js";
 import { createCodexCompactExtension } from "../src/codex-compact.js";
 import { COMPACTION_ENGINE_REQUEST, type CompactionEngineV1 } from "../src/prepared-compaction-protocol.js";
 import {
@@ -485,5 +487,92 @@ for (const patch of [
     const checkpoint = await pending;
     assert.equal(checkpoint.usable, false);
     assert.equal(h.fetches, 1);
+  });
+}
+
+test("foreground checkpoint summary reports preparation duration", async () => {
+  let now = 0;
+  const clock = vi.spyOn(performance, "now").mockImplementation(() => now);
+  try {
+    const h = fixture();
+    const pending = h.compact("manual");
+    await h.started;
+    now = 1234;
+    h.release();
+    const result = (await pending) as { compaction: { summary: string } };
+    assert.match(result.compaction.summary, /^Checkpoint prepared in 1.2s\. Responses compaction checkpoint /);
+  } finally {
+    clock.mockRestore();
+  }
+});
+
+for (const action of ["adopt", "draft"] as const) {
+  test(`background checkpoint ${action} freezes preparation time and measures only application checks`, async () => {
+    let now = 0;
+    const clock = vi.spyOn(performance, "now").mockImplementation(() => now);
+    const append = SessionManager.prototype.appendCompaction;
+    const preview = vi.spyOn(SessionManager.prototype, "appendCompaction").mockImplementation(function (
+      this: SessionManager,
+      ...args
+    ) {
+      now += 500;
+      return append.apply(this, args);
+    });
+    try {
+      const h = fixture();
+      const guard = { signal: new AbortController().signal, isCurrent: () => true, ownsStatus: () => true };
+      const preparation = h.engine().capture(h.ctx);
+      assert.ok(preparation);
+      const pending = preparation.start(guard);
+      await h.started;
+      now = 134000;
+      h.release();
+      const checkpoint = await pending;
+      now += 600000;
+      h.ctx.modelRegistry.getApiKeyAndHeaders = async () => {
+        now += 800;
+        return { ok: true, apiKey: "fixture-key" };
+      };
+      let summary: string | undefined;
+      if (action === "draft") {
+        const result = await checkpoint.draft(h.ctx, guard);
+        assert.ok(result.draft);
+        summary = result.draft.summary;
+        h.manager.appendCompaction(
+          summary,
+          result.draft.firstKeptEntryId,
+          65000,
+          result.draft.details,
+          true,
+          result.draft.usage,
+        );
+        const messages = h.manager.buildSessionContext().messages;
+        const saved = latestCheckpoint(h.manager.getBranch());
+        assert.ok(saved);
+        assert.ok(
+          projectSessionCheckpointContext(messages, h.manager.getBranch(), saved),
+          "decorated draft can still replay the opaque checkpoint",
+        );
+      } else {
+        h.engine().attachSource({
+          async beforeCompact(event, ctx, current) {
+            const result = await checkpoint.adopt(event, ctx, current);
+            return result.kind === "ready" ? result : { kind: "cancel" };
+          },
+        });
+        const result = (await h.compact()) as { compaction: { summary: string } };
+        summary = result.compaction.summary;
+      }
+      assert.match(
+        summary,
+        new RegExp(
+          `^Background checkpoint prepared in 2m 14s; apply checks ${action === "draft" ? "1.3" : "0.8"}s\\. Responses compaction checkpoint `,
+        ),
+      );
+      assert.equal(h.fetches, 1);
+    } finally {
+      preview.mockRestore();
+      clock.mockRestore();
+    }
   });
 }

@@ -440,7 +440,7 @@ export async function compactRemotely(
     outcome = options.preparation ? "prepared" : "ready";
     return {
       compaction: {
-        summary: fallbackSummary(details.checkpointId),
+        summary: fallbackSummary(details.checkpointId, { preparationMs: performance.now() - operationStarted }),
         firstKeptEntryId: event.preparation.firstKeptEntryId,
         tokensBefore: event.preparation.tokensBefore,
         usage: response.usage,

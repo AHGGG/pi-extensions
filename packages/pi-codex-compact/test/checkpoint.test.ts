@@ -326,3 +326,27 @@ test("selects the newest checkpoint on the active branch and ignores forks befor
   assert.equal(latestCheckpoint([...branch, native]), undefined);
   assert.equal(latestCheckpoint([]), undefined);
 });
+
+test("checkpoint timing formatting is optional, bounded to valid durations, and rounds across minutes", () => {
+  const legacy = fallbackSummary("id");
+  for (const [ms, text] of [
+    [0, "0.0s"],
+    [49, "0.0s"],
+    [50, "0.1s"],
+    [800, "0.8s"],
+    [59949, "59.9s"],
+    [59950, "1m 0s"],
+    [119600, "2m 0s"],
+    [134000, "2m 14s"],
+  ] as const) {
+    assert.equal(fallbackSummary("id", { preparationMs: ms }), `Checkpoint prepared in ${text}. ${legacy}`);
+  }
+  assert.equal(
+    fallbackSummary("id", { preparationMs: 134000, applicationMs: 800 }),
+    `Background checkpoint prepared in 2m 14s; apply checks 0.8s. ${legacy}`,
+  );
+  for (const ms of [-1, Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY]) {
+    assert.equal(fallbackSummary("id", { preparationMs: ms }), legacy);
+    assert.equal(fallbackSummary("id", { preparationMs: 1, applicationMs: ms }), legacy);
+  }
+});
