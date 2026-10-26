@@ -4,6 +4,7 @@ import {
   CONTEXT_MANAGEMENT_THRESHOLD,
   createContextManagementCollector,
   SCRATCHPAD_COMPACTION_GUIDANCE,
+  SCRATCHPAD_OMITTED_GUIDANCE,
   SCRATCHPAD_SNAPSHOT_LABEL,
 } from "./context-management.js";
 import { CodexCompactionProtocolError, expandRemoteCompactionPayload, MAX_SSE_BYTES } from "./protocol.js";
@@ -126,7 +127,11 @@ export async function requestContextManagement(request: RemoteCompactionRequest)
                         type: "input_text",
                         text:
                           (request.maintenanceMessage ?? COMPACTION_MAINTENANCE_MESSAGE) +
-                          (request.scratchpadSnapshot ? `\n\n${SCRATCHPAD_COMPACTION_GUIDANCE}` : ""),
+                          (request.scratchpadSnapshot
+                            ? `\n\n${SCRATCHPAD_COMPACTION_GUIDANCE}`
+                            : request.scratchpadOmittedForSize
+                              ? `\n\n${SCRATCHPAD_OMITTED_GUIDANCE}`
+                              : ""),
                       },
                     ],
                   },

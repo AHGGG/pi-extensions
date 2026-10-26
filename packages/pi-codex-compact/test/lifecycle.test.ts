@@ -1057,6 +1057,11 @@ for (const mode of [
   "both-off",
   "invalid",
   "oversized",
+  "oversized-scratchpad-off",
+  "oversized-append-off",
+  "oversized-quiet",
+  "store-oversized",
+  "empty",
   "error-echo",
   "recovery-error-echo",
 ] as const) {
@@ -1069,8 +1074,11 @@ for (const mode of [
       const privateText = 'PRIVATE saved detail with "quotes" and\nnew line';
       await store.execute("session", {
         action: "add",
-        texts: mode === "oversized" ? ["a".repeat(8000), "b".repeat(8000), "c".repeat(1000)] : [privateText],
+        texts: mode.startsWith("oversized") ? ["a".repeat(8000), "b".repeat(8000), "c".repeat(1000)] : [privateText],
       });
+      if (mode === "empty") await store.execute("session", { action: "delete", ids: [1] });
+      if (mode === "store-oversized")
+        await writeFile(join(directory, "scratchpads", "session.json"), "x".repeat(1024 * 1024 + 1));
       const useSummary = mode === "summary" || mode === "summary-error-echo";
       if (useSummary)
         await store.execute("session", {
@@ -1082,8 +1090,9 @@ for (const mode of [
       let payload: unknown;
       const runtime = settingsRuntime({
         protocol: "context-management",
-        scratchpadEnabled: mode !== "scratchpad-off" && mode !== "both-off",
-        appendMaintenanceMessage: mode !== "append-off" && mode !== "both-off",
+        scratchpadEnabled: mode !== "scratchpad-off" && mode !== "both-off" && mode !== "oversized-scratchpad-off",
+        appendMaintenanceMessage: mode !== "append-off" && mode !== "both-off" && mode !== "oversized-append-off",
+        notifyOnFallback: mode !== "oversized-quiet",
         maintenanceMessage: "CUSTOM preserved instruction",
       });
       createCodexCompactExtension({ settingsRuntime: runtime, fetch: async () => serverResponse() })(mock.pi);
@@ -1146,18 +1155,34 @@ for (const mode of [
         inputText.includes("PI_SCRATCHPAD_SNAPSHOT_V1"),
         mode === "both" || useSummary || mode === "error-echo" || mode === "recovery-error-echo",
       );
-      assert.equal(inputText.includes("CUSTOM preserved instruction"), mode !== "append-off" && mode !== "both-off");
+      assert.equal(
+        inputText.includes("CUSTOM preserved instruction"),
+        mode !== "append-off" && mode !== "both-off" && mode !== "oversized-append-off",
+      );
+      assert.equal(
+        inputText.includes("Persistent scratchpad notes exist"),
+        mode === "oversized" || mode === "oversized-quiet",
+      );
       if (useSummary) {
         assert.match(inputText, /PRIVATE semantic summary/);
         assert.doesNotMatch(inputText, /FULL unseen detail/);
         assert.match(inputText, /not the full notes/);
         assert.equal((await store.readSnapshot("session"))[0].text, "FULL unseen detail ".repeat(200));
       }
-      if (mode === "invalid" || mode === "oversized") {
+      if (mode === "invalid" || mode === "oversized" || mode === "store-oversized") {
         assert.match(JSON.stringify(notifications), /Scratchpad omitted/);
         assert.doesNotMatch(inputText, /avoid repeating only unchanged facts/);
       }
-      assert.doesNotMatch(JSON.stringify(entries), /PRIVATE saved detail|PI_SCRATCHPAD/);
+      if (mode.startsWith("oversized")) {
+        assert.doesNotMatch(inputText, /a{100}|b{100}|c{100}/);
+        if (mode === "oversized") {
+          assert.match(JSON.stringify(notifications), /conversation-evidence-only/);
+          assert.doesNotMatch(JSON.stringify(notifications), /without scratchpad deduplication/);
+        } else assert.doesNotMatch(JSON.stringify(notifications), /Scratchpad omitted/);
+      }
+      if (mode === "invalid" || mode === "store-oversized")
+        assert.match(JSON.stringify(notifications), /without scratchpad deduplication/);
+      assert.doesNotMatch(JSON.stringify(entries), /PRIVATE saved detail|PI_SCRATCHPAD|Persistent scratchpad/);
     } finally {
       if (oldAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
       else process.env.PI_CODING_AGENT_DIR = oldAgentDir;

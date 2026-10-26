@@ -304,9 +304,13 @@ stale summaries fall back to full text; stored notes are never shortened. The JS
 projection, up to 16 KiB total, goes before your unchanged maintenance instruction.
 Each entry is labeled full or summary; deduplication applies only to supplied facts,
 not unseen details in full notes. Important missing facts, corrections, constraints,
-and the next action must still be preserved. Empty notes add nothing. Unreadable or
-oversized projections use normal maintenance without truncation or deduplication,
-with a warning when fallback notifications are enabled.
+and the next action must still be preserved. Empty notes add nothing. If validated
+notes exceed the complete projection budget, their contents are omitted and a
+content-free notice follows your unchanged maintenance message. It permits avoiding
+repetition only where the conversation clearly confirms a fact was saved and remains
+current; uncertain or unsaved details and later changes must still be preserved.
+Unreadable notes or files rejected by storage limits use normal maintenance without
+this notice or deduplication guidance. Omission warnings respect fallback notifications.
 
 There is no extra summarizer, post-compaction note injection, or dependency on the
 background-compaction extension. The agent reads live notes when needed. A background

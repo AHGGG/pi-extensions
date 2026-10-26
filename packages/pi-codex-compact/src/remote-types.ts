@@ -22,6 +22,8 @@ export interface RemoteCompactionRequest {
   appendMaintenanceMessage?: boolean;
   maintenanceMessage?: string;
   scratchpadSnapshot?: string;
+  /** Set only after valid nonempty notes exceed the complete projection budget. */
+  scratchpadOmittedForSize?: boolean;
   requestTimeoutMs?: number;
   maxRetries?: number;
   fetch?: typeof globalThis.fetch;

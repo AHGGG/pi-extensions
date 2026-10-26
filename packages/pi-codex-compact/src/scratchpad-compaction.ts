@@ -1,12 +1,13 @@
 import { ScratchpadError, type ScratchpadExecutionOptions, ScratchpadStore } from "./scratchpad-store.js";
 
-/** Every item is represented; an oversized projection never enables omission. */
+/** Every item is represented, or only a content-free existence notice may be used. */
 export const SCRATCHPAD_COMPACTION_BYTE_BUDGET = 16 * 1024;
 export const SCRATCHPAD_COMPACTION_FULL_TEXT_BYTES = 2 * 1024;
 
 export type ScratchpadCompactionSnapshot =
   | { kind: "ready"; text: string; itemCount: number; redactionValues: string[] }
   | { kind: "empty" }
+  | { kind: "omitted"; reason: "oversized" }
   | { kind: "unavailable"; reason: "oversized" | "unreadable" };
 
 export async function captureScratchpadForCompaction(
@@ -29,7 +30,7 @@ export async function captureScratchpadForCompaction(
     });
     const text = JSON.stringify({ items });
     if (Buffer.byteLength(text, "utf8") > SCRATCHPAD_COMPACTION_BYTE_BUDGET)
-      return { kind: "unavailable", reason: "oversized" };
+      return { kind: "omitted", reason: "oversized" };
     return {
       kind: "ready",
       text,

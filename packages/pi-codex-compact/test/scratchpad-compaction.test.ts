@@ -78,7 +78,7 @@ test("serialized-byte budget accepts the complete boundary and rejects one extra
   document.items[1].text += "b";
   await writeFile(path, JSON.stringify(document));
   assert.deepEqual(await captureScratchpadForCompaction("session-a", { store }), {
-    kind: "unavailable",
+    kind: "omitted",
     reason: "oversized",
   });
 });
@@ -174,7 +174,7 @@ test("stale summaries fall back to full text without truncation or mutations", a
   assert.equal(await readFile(path, "utf8"), raw);
 });
 
-test("summaries can make a complete snapshot fit, but total overflow still disables deduplication", async () => {
+test("summaries can make a complete snapshot fit, but total overflow returns only an omission marker", async () => {
   const { store } = await fixture();
   await store.execute("session-a", {
     action: "add",
@@ -191,7 +191,7 @@ test("summaries can make a complete snapshot fit, but total overflow still disab
     items: Array.from({ length: 20 }, () => ({ text: "x".repeat(8000), summary: "s".repeat(1024) })),
   });
   assert.deepEqual(await captureScratchpadForCompaction("session-a", { store }), {
-    kind: "unavailable",
+    kind: "omitted",
     reason: "oversized",
   });
 });

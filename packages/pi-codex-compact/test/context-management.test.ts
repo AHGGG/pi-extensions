@@ -5,6 +5,7 @@ import { createCheckpointDetails, parseCheckpointDetails } from "../src/checkpoi
 import {
   COMPACTION_MAINTENANCE_MESSAGE,
   SCRATCHPAD_COMPACTION_GUIDANCE,
+  SCRATCHPAD_OMITTED_GUIDANCE,
   SCRATCHPAD_SNAPSHOT_LABEL,
 } from "../src/context-management.js";
 import type { RemoteCompactionProtocol } from "../src/model-api.js";
@@ -473,7 +474,12 @@ for (const appendMaintenanceMessage of [true, false]) {
         payload = JSON.parse(String(init?.body));
         return sse([latest]);
       },
-      { scratchpadSnapshot, maintenanceMessage: "CUSTOM maintenance unchanged", appendMaintenanceMessage },
+      {
+        scratchpadSnapshot,
+        scratchpadOmittedForSize: true,
+        maintenanceMessage: "CUSTOM maintenance unchanged",
+        appendMaintenanceMessage,
+      },
     );
     const input = payload?.input as { content: { type: string; text: string }[] }[];
     if (appendMaintenanceMessage) {
@@ -487,5 +493,39 @@ for (const appendMaintenanceMessage of [true, false]) {
     assert.match(SCRATCHPAD_COMPACTION_GUIDANCE, /not the full notes/);
     assert.match(SCRATCHPAD_COMPACTION_GUIDANCE, /Do not omit details merely/);
     assert.doesNotMatch(JSON.stringify(result.promptInput), /Saved task detail|PI_SCRATCHPAD/);
+  });
+}
+
+for (const mode of ["default", "custom", "off"] as const) {
+  test(`oversized scratchpad notice preserves maintenance and original input: ${mode}`, async () => {
+    let payload: Record<string, unknown> | undefined;
+    const result = await request(
+      async (_input, init) => {
+        payload = JSON.parse(String(init?.body));
+        return sse([latest]);
+      },
+      {
+        scratchpadOmittedForSize: true,
+        ...(mode === "default" ? {} : { maintenanceMessage: "CUSTOM unchanged\ntext" }),
+        appendMaintenanceMessage: mode !== "off",
+      },
+    );
+    const input = payload?.input as { content: { type: string; text: string }[] }[];
+    if (mode === "off") assert.doesNotMatch(JSON.stringify(input), /Persistent scratchpad|CUSTOM unchanged/);
+    else
+      assert.deepEqual(input.at(-1)?.content, [
+        {
+          type: "input_text",
+          text: `${mode === "default" ? COMPACTION_MAINTENANCE_MESSAGE : "CUSTOM unchanged\ntext"}\n\n${SCRATCHPAD_OMITTED_GUIDANCE}`,
+        },
+      ]);
+    assert.match(JSON.stringify(input), /original history/);
+    assert.doesNotMatch(JSON.stringify(input), /PI_SCRATCHPAD_SNAPSHOT_V1/);
+    assert.doesNotMatch(JSON.stringify(result.promptInput), /Persistent scratchpad/);
+    assert.equal(payload?.tool_choice, "none");
+    assert.match(SCRATCHPAD_OMITTED_GUIDANCE, /only when the conversation clearly confirms/);
+    assert.match(SCRATCHPAD_OMITTED_GUIDANCE, /successfully saved.*remains current/);
+    assert.match(SCRATCHPAD_OMITTED_GUIDANCE, /Preserve uncertain or unsaved details/);
+    assert.match(SCRATCHPAD_OMITTED_GUIDANCE, /Do not perform tasks or call tools/);
   });
 }

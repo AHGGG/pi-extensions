@@ -250,6 +250,7 @@ export async function compactRemotely(
     }
     const preparationStarted = performance.now();
     let scratchpadSnapshot: string | undefined;
+    let scratchpadOmittedForSize = false;
     if (route.protocol === "context-management" && settings.scratchpadEnabled && settings.appendMaintenanceMessage) {
       const snapshot = await abortable(
         captureScratchpadForCompaction(sessionId, { signal: remoteSignal, isCurrent: stillCurrent }),
@@ -260,6 +261,13 @@ export async function compactRemotely(
         scratchpadSnapshot = snapshot.text;
         scratchpadIncluded = true;
         requestValues.push(...snapshot.redactionValues);
+      } else if (snapshot.kind === "omitted") {
+        scratchpadOmittedForSize = true;
+        if (ctx.hasUI && settings.notifyOnFallback)
+          ctx.ui.notify(
+            "[codex-compact] Scratchpad omitted from this compaction request (oversized); appending a content-free notice with conversation-evidence-only deduplication guidance.",
+            "warning",
+          );
       } else if (snapshot.kind === "unavailable" && ctx.hasUI && settings.notifyOnFallback) {
         ctx.ui.notify(
           `[codex-compact] Scratchpad omitted from this compaction request (${snapshot.reason}); using the normal maintenance instruction without scratchpad deduplication.`,
@@ -300,6 +308,7 @@ export async function compactRemotely(
         appendMaintenanceMessage: settings.appendMaintenanceMessage,
         maintenanceMessage: settings.maintenanceMessage,
         scratchpadSnapshot,
+        scratchpadOmittedForSize,
         requestTimeoutMs: settings.requestTimeoutMs,
         maxRetries: settings.maxRetries,
         onProviderStreamEvent: (raw) => {
