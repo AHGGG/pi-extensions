@@ -1032,7 +1032,7 @@ test("foreground Context Management and recovery failures display separate safe 
   });
   const before = structuredClone(h.entries);
   assert.equal(await h.run(), undefined);
-  assert.equal(h.payloads.length, 2);
+  assert.equal(h.payloads.length, 3, "one fresh EOF retry precedes the separate readable recovery request");
   assert.deepEqual(h.entries, before);
   assert.equal(h.notifications.length, 4);
   const warnings = h.notifications.filter(({ level }) => level === "warning");
@@ -1040,7 +1040,7 @@ test("foreground Context Management and recovery failures display separate safe 
   assert.match(warnings[0].message, /applying checkpoint recovery.*\[diag phase=/);
   assert.match(warnings[1].message, /Checkpoint recovery could not complete.*\[diag phase=/);
   for (const { message } of h.notifications) {
-    assert.match(message, /attempts=1 headers=200@\d+s mime=sse body=eof/);
+    assert.match(message, /attempts=[12] headers=200@\d+s mime=sse body=eof/);
     assert.match(message, /terminal\(c\/d\/i\/f\/e\)=0\/0\/0\/0\/0 abort\(d\/c\/p\)=0\/0\/0/);
     assert.doesNotMatch(message, /secret-fixture|opaque-assistant-only-fact/);
   }

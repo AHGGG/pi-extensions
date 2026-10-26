@@ -22,7 +22,7 @@ import {
 import { checkpointIssuerRequest } from "./checkpoint-portability.js";
 import { projectedKeptMessages, projectSessionCheckpointContext } from "./checkpoint-projection.js";
 import { recoverCheckpoint, summaryPrefix } from "./checkpoint-recovery.js";
-import { type CompactionBinding, resolveCompactionBinding } from "./compaction-binding.js";
+import { type CompactionBinding, resolveCompactionBinding, sameCompactionBinding } from "./compaction-binding.js";
 import {
   compactionFailureDetail,
   compactionFailureMessage,
@@ -57,6 +57,7 @@ export interface CompactionOperationOptions {
     branchIsCurrent: (current: SessionBeforeCompactEvent["branchEntries"]) => boolean;
   };
   deadlineSignal?: AbortSignal;
+  onDiagnostics?: (diagnostics: RequestDiagnostics) => void;
 }
 
 function keptMessages(event: SessionBeforeCompactEvent): AgentMessage[] {
@@ -174,13 +175,20 @@ export async function compactRemotely(
   const operationStarted = performance.now();
   let outcome: "failed" | "prepared" | "ready" | "recovered" = "failed";
   let validationMs = 0;
+  let failureDetail = "none";
   const diagnostics = new RequestDiagnostics();
   diagnostics.configure(settings.protocol);
+  options.onDiagnostics?.(diagnostics);
   const markDeadline = () => {
     diagnostics.deadline = true;
   };
   options.deadlineSignal?.addEventListener("abort", markDeadline, { once: true });
   let requestValues: string[] = [settings.maintenanceMessage];
+  const privateAuthValues: string[] = [];
+  diagnostics.requestPolicy(settings.requestTimeoutMs, settings.maxRetries, () => [
+    ...requestValues,
+    ...privateAuthValues,
+  ]);
   let remoteAttempted = false;
   let scratchpadIncluded = false;
   const diagnosticCleanups: (() => void)[] = [];
@@ -253,6 +261,10 @@ export async function compactRemotely(
     const { auth, provider } = resolved;
     route = resolved.route;
     diagnostics.configure(settings.protocol, route.protocol, settings.appendMaintenanceMessage);
+    privateAuthValues.push(
+      resolved.auth.apiKey ?? "",
+      ...Object.values(resolved.auth.headers ?? {}).filter((value): value is string => typeof value === "string"),
+    );
     if (options.preparation) options.preparation.attempt.binding = resolved.binding;
     requestValues = [
       settings.maintenanceMessage,
@@ -332,6 +344,22 @@ export async function compactRemotely(
         scratchpadOmittedForSize,
         requestTimeoutMs: settings.requestTimeoutMs,
         maxRetries: settings.maxRetries,
+        beforeStreamRetry: async () => {
+          if (!stillCurrent() || remoteSignal.aborted) throw abortError();
+          const rebound = await abortable(
+            resolveCompactionBinding(ctx, model, settings, stillCurrent, diagnostics),
+            remoteSignal,
+          );
+          if (!stillCurrent() || remoteSignal.aborted) throw abortError();
+          if (!sameCompactionBinding(resolved.binding, rebound.binding))
+            throw new Error("Compaction retry binding changed");
+          privateAuthValues.push(
+            rebound.auth.apiKey ?? "",
+            ...Object.values(rebound.auth.headers ?? {}).filter((value): value is string => typeof value === "string"),
+            ...Object.values(rebound.auth.env ?? {}),
+          );
+          return { apiKey: rebound.auth.apiKey, headers: rebound.auth.headers, env: rebound.auth.env };
+        },
         onProviderStreamEvent: (raw) => {
           if (route.protocol !== "context-management") diagnostics.observe(raw);
           const error = streamOperationRejection(raw);
@@ -341,6 +369,7 @@ export async function compactRemotely(
           if (remoteSignal.aborted) throw remoteSignal.reason;
           if (!stillCurrent()) throw new Error("Compaction ownership changed before dispatch");
           const endpoint = input instanceof Request ? input.url : String(input);
+          diagnostics.endpoint(endpoint);
           routeKey = rejectionRouteKey(model, route, endpoint);
           endpointObserved = true;
           rejected.observe(publicRouteKey, routeKey);
@@ -469,6 +498,11 @@ export async function compactRemotely(
       },
     };
   } catch (error) {
+    failureDetail = preparationFailureDetail(error, {
+      timedOut: diagnostics.deadline,
+      httpStatus: lastHttpStatus,
+      remoteAttempted,
+    });
     diagnostics.callerAbort ||= event.signal.aborted;
     diagnostics.seal();
     if (!stillCurrent()) return { cancel: true };
@@ -510,6 +544,8 @@ export async function compactRemotely(
     let nativeFallbackAllowed = false;
     const recoveryDiagnostics = new RequestDiagnostics();
     recoveryDiagnostics.configure(settings.protocol, route.protocol, false, "recovery");
+    recoveryDiagnostics.requestPolicy(settings.requestTimeoutMs, settings.maxRetries, () => requestValues);
+    let recoveryFailure = "none";
     let recoveryOutcome: "failed" | "ready" = "failed";
     try {
       const current = projectedCurrentMessages(event, route);
@@ -555,6 +591,7 @@ export async function compactRemotely(
           fetch: async (input, init) => {
             if (!stillCurrent()) throw new Error("Checkpoint recovery ownership changed before dispatch");
             const endpoint = new URL(input instanceof Request ? input.url : String(input));
+            recoveryDiagnostics.endpoint(endpoint.toString());
             // Unary compaction derives /responses/compact from the provider's
             // inference endpoint. Compare that exact public dispatch identity.
             if (route.protocol === "responses-compact") endpoint.pathname += "/compact";
@@ -578,6 +615,10 @@ export async function compactRemotely(
       outcome = "recovered";
       return { compaction };
     } catch (recoveryError) {
+      recoveryFailure = preparationFailureDetail(recoveryError, {
+        timedOut: recoveryDiagnostics.deadline,
+        remoteAttempted: recoveryDiagnostics.currentAttempt > 0,
+      });
       if (!stillCurrent()) return { cancel: true };
       if (ctx.hasUI && settings.notifyOnFallback) {
         const outcome = nativeFallbackAllowed
@@ -592,18 +633,24 @@ export async function compactRemotely(
     } finally {
       if (ctx.hasUI && stillCurrent()) {
         recoveryDiagnostics.seal();
-        ctx.ui.notify(`[codex-compact] Recovery outcome=${recoveryOutcome}; ${recoveryDiagnostics.summary()}`, "info");
+        recoveryDiagnostics.finish(recoveryOutcome, recoveryFailure);
+        ctx.ui.notify(
+          `[codex-compact] Recovery outcome=${recoveryOutcome}; ${recoveryDiagnostics.summary()}${recoveryOutcome === "failed" ? `\n${recoveryDiagnostics.report()}` : ""}`,
+          "info",
+        );
       }
     }
   } finally {
-    if (remoteAttempted && ctx.hasUI && stillCurrent()) {
+    diagnostics.finish(outcome, failureDetail);
+    if ((remoteAttempted || (!paused && failureDetail !== "none")) && ctx.hasUI && stillCurrent()) {
       diagnostics.callerAbort ||= event.signal.aborted;
       diagnostics.seal();
       ctx.ui.notify(
-        `[codex-compact] Compaction outcome=${outcome}; operationMs=${Math.floor(performance.now() - operationStarted)} validationMs=${Math.floor(validationMs)}; ${diagnostics.summary()}`,
+        `[codex-compact] Compaction outcome=${outcome}; operationMs=${Math.floor(performance.now() - operationStarted)} validationMs=${Math.floor(validationMs)}; ${diagnostics.summary()}${failureDetail !== "none" || diagnostics.hadStreamRetry ? `\nstreamOutcome=${diagnostics.hadStreamRetry && (outcome === "prepared" || outcome === "ready") ? "recovered-after-retry" : outcome === "recovered" ? "failed-recovered-via-readable" : "failed"} failure=${failureDetail}\n${diagnostics.report()}` : ""}`,
         "info",
       );
     }
+    diagnostics.seal();
     for (const cleanup of diagnosticCleanups) cleanup();
     options.deadlineSignal?.removeEventListener("abort", markDeadline);
     remoteController.abort();

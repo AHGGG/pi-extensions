@@ -26,6 +26,8 @@ export interface RemoteCompactionRequest {
   scratchpadOmittedForSize?: boolean;
   requestTimeoutMs?: number;
   maxRetries?: number;
+  /** Revalidate captured ownership and route before replaying a truncated stream. */
+  beforeStreamRetry?: () => Promise<Pick<RemoteCompactionRequest, "apiKey" | "headers" | "env"> | undefined>;
   fetch?: typeof globalThis.fetch;
   diagnostics?: RequestDiagnostics;
   onProviderStreamEvent?: (event: unknown) => void;

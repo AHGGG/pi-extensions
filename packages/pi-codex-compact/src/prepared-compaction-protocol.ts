@@ -37,7 +37,15 @@ export interface PreparedCheckpoint {
   adopt(event: SessionBeforeCompactEvent, ctx: ExtensionContext, guard: ApplicationGuard): Promise<CheckpointAdoption>;
   draft(ctx: ExtensionContext, guard: ApplicationGuard): Promise<CheckpointDraft>;
 }
+/** Safe bounded UI-only metadata; no model-visible content or credentials. */
+export interface PreparationDiagnostics {
+  status: string;
+  report: string;
+  warning?: string;
+}
 export interface CheckpointPreparation {
+  /** Optional live/final snapshot. Reports are retained by the producer after settlement. */
+  diagnostics?(): PreparationDiagnostics;
   readonly requestTimeoutMs: number;
   readonly reason?: string;
   isCurrent(): boolean;

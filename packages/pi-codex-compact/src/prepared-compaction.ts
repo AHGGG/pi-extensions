@@ -24,6 +24,7 @@ import type { CompactionTimings } from "./compaction-timing.js";
 import { type RemoteCompactionProtocol, resolveCompactionRoute } from "./model-api.js";
 import type { CheckpointPreparation, PreparedCheckpoint } from "./prepared-compaction-protocol.js";
 import { type RejectedRoutes, rejectionRouteKey } from "./rejection-state.js";
+import type { RequestDiagnostics } from "./request-diagnostics.js";
 import { type CodexCompactSettingsRuntime, compactionSettingsKey } from "./settings.js";
 
 type CompactionResult = Awaited<ReturnType<typeof compactRemotely>>;
@@ -110,7 +111,10 @@ export function captureCheckpointPreparation(
                     : undefined;
     return reason === undefined;
   };
+  let diagnostics: RequestDiagnostics | undefined;
   return {
+    diagnostics: () =>
+      diagnostics?.snapshot() ?? { status: "Not started", report: "Checkpoint preparation has not started." },
     requestTimeoutMs: settings.requestTimeoutMs,
     get reason() {
       return reason;
@@ -151,7 +155,13 @@ export function captureCheckpointPreparation(
         guard.ownsStatus,
         onRouteResolved,
         fetch,
-        { preparation: { attempt, branchIsCurrent }, deadlineSignal: guard.deadlineSignal },
+        {
+          preparation: { attempt, branchIsCurrent },
+          deadlineSignal: guard.deadlineSignal,
+          onDiagnostics: (value) => {
+            diagnostics = value;
+          },
+        },
       );
       const prepared = createPreparedCheckpoint(
         result,

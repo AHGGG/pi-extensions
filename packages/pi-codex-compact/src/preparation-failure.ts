@@ -46,6 +46,8 @@ export function preparationFailureDetail(
     const cause = error.cause instanceof Error ? error.cause : error;
     const code = "code" in cause ? cause.code : undefined;
     if (typeof code === "string" && NETWORK_CODES.has(code)) return `network request failed (${code})`;
+    if (error.message === "Compaction retry binding changed")
+      return "local retry cancelled because provider or authentication binding changed";
     if (error.message === "OpenAI Responses stream ended before a terminal response event")
       return "provider stream ended before a terminal response event";
     if (error instanceof CodexCompactionProtocolError) return "invalid compaction response or checkpoint";

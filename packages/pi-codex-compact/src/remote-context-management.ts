@@ -1,4 +1,5 @@
 import { normalizeContext } from "@earendil-works/pi-ai";
+import { abortable } from "./abortable.js";
 import {
   COMPACTION_MAINTENANCE_MESSAGE,
   CONTEXT_MANAGEMENT_THRESHOLD,
@@ -14,19 +15,104 @@ import {
   type RemoteCompactionResponse,
 } from "./remote-types.js";
 
+const EOF_RETRY_DELAY_MS = 250;
+
+class PrematureCompactionEof extends Error {}
+
+function isTerminal(event: unknown): boolean {
+  return (
+    typeof event === "object" &&
+    event !== null &&
+    "type" in event &&
+    typeof event.type === "string" &&
+    ["response.completed", "response.done", "response.incomplete", "response.failed", "error"].includes(event.type)
+  );
+}
+
+/** One retry may replace an incomplete stream; both attempts share the original deadline. */
 export async function requestContextManagement(request: RemoteCompactionRequest): Promise<RemoteCompactionResponse> {
+  if (request.signal.aborted) throw abortError();
+  const timeoutMs = request.requestTimeoutMs ?? 300_000;
+  const deadline = performance.now() + timeoutMs;
+  const controller = new AbortController();
+  const signal = AbortSignal.any([request.signal, controller.signal]);
+  const timeout = setTimeout(() => {
+    if (request.diagnostics) request.diagnostics.deadline = true;
+    controller.abort(new Error("Context management request timed out"));
+  }, timeoutMs);
+  let retryAuth: Pick<RemoteCompactionRequest, "apiKey" | "headers" | "env"> | undefined;
+  const assertBudget = () => {
+    if (signal.aborted) throw signal.reason instanceof Error ? signal.reason : abortError();
+    // Timers can run late after a busy event loop or an adapter callback. Never dispatch on expired budget.
+    if (performance.now() >= deadline) {
+      if (request.diagnostics) request.diagnostics.deadline = true;
+      const error = new Error("Context management request timed out");
+      controller.abort(error);
+      throw error;
+    }
+  };
+  try {
+    for (let attempt = 0; ; attempt += 1) {
+      assertBudget();
+      try {
+        return await requestAttempt({
+          ...request,
+          ...(retryAuth ? { apiKey: retryAuth.apiKey, headers: retryAuth.headers, env: retryAuth.env } : {}),
+          signal,
+          requestTimeoutMs: Math.max(1, Math.floor(deadline - performance.now())),
+        });
+      } catch (error) {
+        // Do not turn protocol rejection, cancellation, or a provider-declared failure into a retry.
+        if (!(error instanceof PrematureCompactionEof) || attempt !== 0 || signal.aborted) throw error;
+        if (deadline - performance.now() <= EOF_RETRY_DELAY_MS) throw error;
+        request.diagnostics?.retryScheduled();
+        await retryDelay(signal);
+        assertBudget();
+        if (request.beforeStreamRetry) retryAuth = (await abortable(request.beforeStreamRetry(), signal)) ?? undefined;
+        assertBudget();
+      }
+    }
+  } finally {
+    if (request.diagnostics) {
+      request.diagnostics.callerAbort = request.signal.aborted;
+      request.diagnostics.seal();
+    }
+    clearTimeout(timeout);
+    controller.abort();
+  }
+}
+
+function retryDelay(signal: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal.aborted) {
+      reject(signal.reason instanceof Error ? signal.reason : abortError());
+      return;
+    }
+    const onAbort = () => {
+      clearTimeout(timer);
+      signal.removeEventListener("abort", onAbort);
+      reject(signal.reason instanceof Error ? signal.reason : abortError());
+    };
+    const timer = setTimeout(() => {
+      signal.removeEventListener("abort", onAbort);
+      resolve();
+    }, EOF_RETRY_DELAY_MS);
+    signal.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
+async function requestAttempt(request: RemoteCompactionRequest): Promise<RemoteCompactionResponse> {
   if (request.signal.aborted) throw abortError();
   const diagnostics = request.diagnostics;
   if (diagnostics) diagnostics.phase = "request";
   const controller = new AbortController();
   const signal = AbortSignal.any([request.signal, controller.signal]);
-  const timeout = setTimeout(() => {
-    if (diagnostics) diagnostics.deadline = true;
-    controller.abort(new Error("Context management request timed out"));
-  }, request.requestTimeoutMs ?? 300_000);
   const collector = createContextManagementCollector();
   let sentInput: ReturnType<typeof assertPreparedInput> | undefined;
   let successes = 0;
+  let cleanEof = false;
+  let terminalSeen = false;
+  let active = true;
   const baseFetch = request.fetch ?? globalThis.fetch;
   const cleanupSignals: (() => void)[] = [];
   let onAbort: (() => void) | undefined;
@@ -57,6 +143,7 @@ export async function requestContextManagement(request: RemoteCompactionRequest)
         if (providerSignal?.aborted) markProviderAbort();
         providerSignal?.addEventListener("abort", markProviderAbort, { once: true });
         cleanupSignals.push(() => providerSignal?.removeEventListener("abort", markProviderAbort));
+        cleanEof = false;
         const response = await baseFetch(input, {
           ...init,
           signal: AbortSignal.any([signal, ...(init?.signal ? [init.signal] : [])]),
@@ -79,6 +166,7 @@ export async function requestContextManagement(request: RemoteCompactionRequest)
             destination.enqueue(chunk);
           },
           flush() {
+            cleanEof = true;
             diagnostics?.end(attempt);
           },
         });
@@ -131,9 +219,12 @@ export async function requestContextManagement(request: RemoteCompactionRequest)
         };
         // Array replay never depends on server-side response state.
         delete (prepared as Record<string, unknown>).previous_response_id;
+        diagnostics?.payload(prepared);
         return prepared;
       },
       onProviderStreamEvent: (event) => {
+        if (!active || signal.aborted) return;
+        if (isTerminal(event)) terminalSeen = true;
         diagnostics?.observe(event);
         request.onProviderStreamEvent?.(event);
         collector.observe(event);
@@ -151,13 +242,20 @@ export async function requestContextManagement(request: RemoteCompactionRequest)
       ? diagnostics.measure("validation", () => collector.finish())
       : collector.finish();
     return { item: replacementHistory[0], replacementHistory, promptInput: sentInput, usage };
+  } catch (error) {
+    if (
+      !signal.aborted &&
+      successes === 1 &&
+      cleanEof &&
+      !terminalSeen &&
+      error instanceof Error &&
+      error.message === "OpenAI Responses stream ended before a terminal response event"
+    )
+      throw new PrematureCompactionEof(error.message);
+    throw error;
   } finally {
-    if (diagnostics) {
-      diagnostics.callerAbort = request.signal.aborted;
-      diagnostics.seal();
-    }
+    active = false;
     for (const cleanup of cleanupSignals) cleanup();
-    clearTimeout(timeout);
     if (onAbort) signal.removeEventListener("abort", onAbort);
     controller.abort();
   }

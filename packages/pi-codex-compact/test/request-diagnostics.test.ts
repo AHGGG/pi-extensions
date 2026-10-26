@@ -67,7 +67,10 @@ for (const kind of ["empty", "early-eof", "done", "completed"] as const) {
     if (kind === "completed") await result;
     else await assert.rejects(result, /terminal response event/);
     const summary = diagnostics.summary();
-    assert.match(summary, /attempts=1 headers=200@\d+s mime=sse body=eof/);
+    assert.match(
+      summary,
+      new RegExp(`attempts=${kind === "empty" || kind === "early-eof" ? 2 : 1} headers=200@\\d+s mime=sse body=eof`),
+    );
     assert.match(
       summary,
       kind === "done"
@@ -194,4 +197,104 @@ test("safe milestone and output-category diagnostics include successful checkpoi
     /milestones-ms\(firstByte\/firstEvent\/firstCompaction\/terminal\/lastByte\)=\d+\/\d+\/\d+\/\d+\/\d+/,
   );
   assert.ok(!d.summary().includes("SECRET"));
+});
+
+test("copyable failure report retains frozen prior attempts across retry backoff and binding wait", () => {
+  vi.useFakeTimers();
+  try {
+    const d = new RequestDiagnostics();
+    d.requestPolicy(1_800_000, 2);
+    d.endpoint("https://api.openai.com/v1/responses?secret=SECRET");
+    const first = d.beginAttempt();
+    d.headers(response([]), first);
+    d.chunk(9, first);
+    vi.advanceTimersByTime(1000);
+    d.end(first);
+    d.retryScheduled();
+    const firstReport = d.report().split("\n").slice(2, 4).join("\n");
+    vi.advanceTimersByTime(30_000);
+    const second = d.beginAttempt();
+    d.headers(response([]), second);
+    d.chunk(11, second);
+    d.seal();
+    assert.ok(d.report().includes(firstReport));
+    assert.match(d.report(), /schema=2 core=\S+ pi=\S+ node=\S+ utc=/);
+    assert.match(
+      d.report(),
+      /route=openai-api observedReasoningEffort=unobserved timeoutMs=1800000 openingRetries=2 eofRetriesScheduled=1\/1/,
+    );
+    assert.match(d.report(), /attempt=1 offsetMs=0 durationMs=1000/);
+    assert.match(d.report(), /attempt=2 offsetMs=31000 durationMs=0/);
+    const frozen = d.snapshot();
+    vi.advanceTimersByTime(300_000);
+    assert.deepEqual(d.snapshot(), frozen);
+    assert.ok(!d.report().includes("SECRET"));
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+test("diagnostic warnings distinguish byte silence from missing parsed events without aborting", () => {
+  vi.useFakeTimers();
+  try {
+    const d = new RequestDiagnostics();
+    const attempt = d.beginAttempt();
+    d.headers(response([]), attempt);
+    vi.advanceTimersByTime(300_000);
+    assert.match(d.snapshot().warning ?? "", /No response bytes.*no timeout triggered/);
+    d.chunk(3, attempt);
+    assert.match(d.snapshot().warning ?? "", /No parsed response events/);
+    d.observe({ type: "response.created" });
+    assert.equal(d.snapshot().warning, undefined);
+    assert.equal(d.deadline, false);
+    assert.match(d.snapshot().status, /compaction items 0/);
+    d.observe(checkpoint);
+    assert.match(d.snapshot().status, /compaction items 1/);
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+test("request IDs are strict allowlisted correlation metadata and known secrets are omitted", () => {
+  const valid = "req_0123456789abcdef0123456789abcdef";
+  for (const [id, secret, accepted] of [
+    [valid, "SECRET", true],
+    [valid, valid, false],
+    [valid, `prompt includes ${valid}`, false],
+    ["req_SECRET", "SECRET", false],
+    [`req_${"a".repeat(1000)}`, "", false],
+  ] as const) {
+    const d = new RequestDiagnostics();
+    d.requestPolicy(300_000, 0, () => [secret]);
+    d.endpoint("https://SECRET.example/path/SECRET");
+    d.headers(new Response(null, { headers: { "x-request-id": id, "x-secret": "SECRET" } }), d.beginAttempt());
+    const report = d.report();
+    assert.equal(report.includes(`requestId=${id}\n`), accepted);
+    assert.ok(!report.includes("SECRET"));
+    assert.match(report, /route=custom/);
+  }
+});
+
+test("long opening-retry histories stay bounded and record omissions", () => {
+  const d = new RequestDiagnostics();
+  for (let i = 0; i < 100; i += 1) {
+    const attempt = d.beginAttempt();
+    d.headers(new Response(null, { status: 503 }), attempt);
+    d.observe({ type: "arbitrary SECRET" });
+  }
+  d.seal();
+  assert.match(d.report(), /omittedAttempts=87/);
+  assert.ok(d.report().length < 16 * 1024);
+  assert.ok(!d.report().includes("SECRET"));
+});
+
+test("observed reasoning effort reports only fixed enums and never assumes the main agent level", () => {
+  const d = new RequestDiagnostics();
+  d.payload({ reasoning: { effort: "SECRET" }, model: "SECRET", input: "SECRET" });
+  assert.match(d.report(), /observedReasoningEffort=other/);
+  assert.ok(!d.report().includes("SECRET"));
+  d.payload({});
+  assert.match(d.report(), /observedReasoningEffort=omitted/);
+  d.payload({ reasoning: { effort: "max" } });
+  assert.match(d.report(), /observedReasoningEffort=max/);
 });

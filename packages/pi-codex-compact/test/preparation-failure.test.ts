@@ -96,6 +96,7 @@ const model: Model<"openai-responses"> = {
 async function preparation(fetch: typeof globalThis.fetch, maxRetries = 0, contextManagement = false) {
   const specifier = "@earendil-works/pi-ai/providers/openai";
   const { openaiProvider } = (await import(specifier)) as { openaiProvider(): Provider };
+  const provider = openaiProvider();
   const entries: SessionEntry[] = [
     {
       type: "message",
@@ -128,7 +129,7 @@ async function preparation(fetch: typeof globalThis.fetch, maxRetries = 0, conte
     sessionManager: { getSessionId: () => "session", getBranch: () => entries },
     modelRegistry: {
       getApiKeyAndHeaders: async () => ({ ok: true, apiKey: "secret" }),
-      getProvider: () => openaiProvider(),
+      getProvider: () => provider,
     },
   });
   const owner = new AbortController();
