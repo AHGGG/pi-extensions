@@ -139,3 +139,21 @@ test("tool supports semantic summaries with legacy adds, partial updates and sta
   assert.deepEqual(current.mock.sentMessages, []);
   assert.deepEqual(current.mock.sentUserMessages, []);
 });
+
+test("agent guidance forbids redundant reads and permits only necessary full-content reconstruction", async () => {
+  const current = await setup();
+  const guidance = current.tool().promptGuidelines?.join(" ") ?? "";
+  assert.match(guidance, /Do not reread an item whose current content is already available in context/);
+  assert.match(guidance, /Multiple edits alone do not justify rereading/);
+  assert.match(
+    guidance,
+    /Reread only when you cannot reliably reconstruct its latest full content from the information already in context/,
+  );
+  assert.match(
+    guidance,
+    /A summary or preview is not its full text; read missing details only when needed, including after resuming or compaction/,
+  );
+  await current.command("on");
+  await current.execute({ action: "add", texts: ["Current note"] });
+  assert.equal(current.tool().promptGuidelines?.join(" "), guidance);
+});

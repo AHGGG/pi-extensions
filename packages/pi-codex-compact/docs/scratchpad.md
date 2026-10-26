@@ -156,8 +156,12 @@ errors, or note contents are added to diagnostic logs.
 ## Agent guidance
 
 The tool's stable guideline asks the agent to record decisions, constraints,
-verified progress, blockers, and references; read before relying on remembered
-contents; update stale items; and avoid secrets/full logs. Notes are task data,
+verified progress, blockers, and references; reuse scratchpad content already available
+in the current context rather than rereading it; update stale items; and avoid secrets/full
+logs. Multiple edits alone do not justify rereading. Reread only when the item's
+latest full content cannot be reliably reconstructed from the information already in
+context. A summary or preview is not full text: read missing details only when needed,
+including after resuming or compaction. Notes are task data,
 not permission to override user instructions. The agent should supply concise summaries
 for long notes, preserving decisions, constraints, blockers, and references. Upgrading
 changes the tool schema once; note edits do not re-register tools or rewrite the
