@@ -2,7 +2,8 @@
 
 An optional, agent-managed notes file. No automatic memory extraction, global
 knowledge base, or extra model request. Ordinary task context does not automatically
-load notes; Context Management maintenance can include a bounded snapshot as described below.
+load notes; Context Management maintenance and extension-readable compaction recovery
+can include a bounded snapshot as described below.
 
 ## Enable and disable
 
@@ -170,7 +171,9 @@ ordinary model-request prefix.
 ## Compaction snapshot
 
 Only when both `scratchpadEnabled` and `appendMaintenanceMessage` are On, a
-Context Management compaction request reads the complete validated notes once.
+Context Management or extension-readable compaction recovery request reads the
+complete validated notes. Each operation captures at most once, reusing that capture
+if invisible compaction fails. Compaction-time issuer transfer also uses this path.
 For each item, full text at most 2 KiB is included unchanged. Longer text uses its
 current semantic summary if available; missing/stale summaries fall back to full
 text, never a truncated preview. Each entry is marked `representation: full` or
@@ -178,18 +181,23 @@ text, never a truncated preview. Each entry is marked `representation: full` or
 limits, not word or token estimates, and the stored full notes are never shortened.
 
 The JSON projection is inserted immediately before the unchanged custom maintenance
-instruction. Guidance permits deduplication only of facts explicitly present in
+instruction, or before the readable recovery instruction with its manual custom
+focus preserved. Guidance permits deduplication only of facts explicitly present in
 that projection. Important details absent from summaries, later changes,
 contradictions, constraints, and the next action must still be retained; a full
 note merely existing on disk is not grounds for omitting its unseen details.
 Tools remain disabled for maintenance; no automatic summarization request is made.
 
 The complete serialized projection is limited to 16 KiB, including metadata and
-JSON escaping. If it still exceeds that cap, normal maintenance runs without a
-partial snapshot or deduplication instruction. Empty notes add nothing; unreadable
-notes also use normal maintenance. A fixed warning explains omission when fallback
-notifications are enabled. Disabling either setting leaves existing maintenance
-behavior unchanged. Other protocols and recovery-summary prompts are not modified.
+JSON escaping. If it exceeds that cap, the same budget is applied to a summary-only
+projection: current summaries for all items, or explicit ID-only omitted markers.
+If that also exceeds the cap, a content-free notice permits deduplication only where
+conversation evidence confirms a fact was saved and remains current. Empty notes add
+nothing; unreadable notes add neither a snapshot nor deduplication guidance. Fixed
+warnings respect fallback notifications. Disabling either setting leaves the
+request instruction unchanged. Pi’s final native fallback and ordinary-turn issuer
+transfer do not receive a fresh snapshot; recovery never substitutes the maintenance
+instruction for its own readable-summary instruction.
 
 No notes are automatically loaded after compaction, written into session entries,
 or copied into a separate snapshot store. Background requests keep the captured

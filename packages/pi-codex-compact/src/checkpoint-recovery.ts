@@ -1,6 +1,7 @@
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import { type AssistantMessage, type AssistantMessageEventStream, normalizeContext } from "@earendil-works/pi-ai";
 import type { SessionBeforeCompactEvent } from "@earendil-works/pi-coding-agent";
+import { scratchpadInstructionContent } from "./context-management.js";
 import { expandRemoteCompactionPayload, MAX_COMPACTION_ITEM_BYTES, MAX_SSE_BYTES } from "./protocol.js";
 import { RecoveryOutput } from "./recovery-output.js";
 import { abortError, assertPreparedInput, isJsonObject, type RemoteCompactionRequest } from "./remote-types.js";
@@ -120,14 +121,11 @@ export async function summarizeCheckpoint(
             ...input,
             {
               role: "user",
-              content: [
-                {
-                  type: "input_text",
-                  text:
-                    RECOVERY_INSTRUCTION +
-                    (options.customInstructions ? `\nAdditional focus: ${options.customInstructions}` : ""),
-                },
-              ],
+              content: scratchpadInstructionContent(
+                RECOVERY_INSTRUCTION +
+                  (options.customInstructions ? `\nAdditional focus: ${options.customInstructions}` : ""),
+                request,
+              ),
             },
           ],
           tools: [],

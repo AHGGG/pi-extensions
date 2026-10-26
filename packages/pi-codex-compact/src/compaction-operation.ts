@@ -37,6 +37,7 @@ import { type CompactionRoute, type RemoteCompactionProtocol, resolveCompactionR
 import { preparationFailureDetail } from "./preparation-failure.js";
 import { type RejectedRoutes, rejectionRouteKey } from "./rejection-state.js";
 import { requestRemoteCompaction } from "./remote.js";
+import { abortError } from "./remote-types.js";
 import { RequestDiagnostics } from "./request-diagnostics.js";
 import { captureScratchpadForCompaction } from "./scratchpad-compaction.js";
 import type { CodexCompactSettings } from "./settings.js";
@@ -192,6 +193,45 @@ export async function compactRemotely(
     remoteController.signal,
     ...(options.deadlineSignal ? [options.deadlineSignal] : []),
   ]);
+  let scratchpadSnapshot: string | undefined;
+  let scratchpadOmittedForSize = false;
+  // Reuse even an empty/unavailable capture; recovery must not reread edited notes.
+  let scratchpadCapture: Promise<void> | undefined;
+  const captureScratchpad = (captureSignal: AbortSignal) => {
+    scratchpadCapture ??= (async () => {
+      if (!stillCurrent() || captureSignal.aborted) throw abortError();
+      if (settings.scratchpadEnabled && settings.appendMaintenanceMessage) {
+        const snapshot = await abortable(
+          captureScratchpadForCompaction(sessionId, { signal: captureSignal, isCurrent: stillCurrent }),
+          captureSignal,
+        );
+        if (!stillCurrent() || captureSignal.aborted) throw abortError();
+        if (snapshot.kind === "ready") {
+          scratchpadSnapshot = snapshot.text;
+          scratchpadIncluded = true;
+          requestValues.push(...snapshot.redactionValues);
+          if (snapshot.mode === "summary-only" && ctx.hasUI && settings.notifyOnFallback)
+            ctx.ui.notify(
+              "[codex-compact] Normal scratchpad projection exceeded the size limit; appending a summary-only snapshot with explicit markers for items without valid summaries.",
+              "warning",
+            );
+        } else if (snapshot.kind === "omitted") {
+          scratchpadOmittedForSize = true;
+          if (ctx.hasUI && settings.notifyOnFallback)
+            ctx.ui.notify(
+              "[codex-compact] Scratchpad omitted from this compaction request (oversized); appending a content-free notice with conversation-evidence-only deduplication guidance.",
+              "warning",
+            );
+        } else if (snapshot.kind === "unavailable" && ctx.hasUI && settings.notifyOnFallback) {
+          ctx.ui.notify(
+            `[codex-compact] Scratchpad omitted from this compaction request (${snapshot.reason}); using the normal compaction instruction without scratchpad deduplication.`,
+            "warning",
+          );
+        }
+      }
+    })();
+    return scratchpadCapture;
+  };
   const recordRejection = (error: Error) => {
     if (!remoteAttempted || !stillCurrent() || rejectionError) return;
     rejectionError = error;
@@ -242,44 +282,20 @@ export async function compactRemotely(
         remoteSignal,
       );
       if (!stillCurrent()) return { cancel: true };
-      const compaction = await abortable(recoverCheckpoint(request, event), remoteSignal).catch(() => {
+      await captureScratchpad(remoteSignal);
+      if (!stillCurrent()) return { cancel: true };
+      const compaction = await abortable(
+        recoverCheckpoint({ ...request, scratchpadSnapshot, scratchpadOmittedForSize }, event),
+        remoteSignal,
+      ).catch(() => {
         throw new Error("Checkpoint transfer through its issuing provider failed; history preserved");
       });
       if (!stillCurrent()) return { cancel: true };
       return { compaction };
     }
     const preparationStarted = performance.now();
-    let scratchpadSnapshot: string | undefined;
-    let scratchpadOmittedForSize = false;
-    if (route.protocol === "context-management" && settings.scratchpadEnabled && settings.appendMaintenanceMessage) {
-      const snapshot = await abortable(
-        captureScratchpadForCompaction(sessionId, { signal: remoteSignal, isCurrent: stillCurrent }),
-        remoteSignal,
-      );
-      if (!stillCurrent()) return { cancel: true };
-      if (snapshot.kind === "ready") {
-        scratchpadSnapshot = snapshot.text;
-        scratchpadIncluded = true;
-        requestValues.push(...snapshot.redactionValues);
-        if (snapshot.mode === "summary-only" && ctx.hasUI && settings.notifyOnFallback)
-          ctx.ui.notify(
-            "[codex-compact] Normal scratchpad projection exceeded the size limit; appending a summary-only snapshot with explicit markers for items without valid summaries.",
-            "warning",
-          );
-      } else if (snapshot.kind === "omitted") {
-        scratchpadOmittedForSize = true;
-        if (ctx.hasUI && settings.notifyOnFallback)
-          ctx.ui.notify(
-            "[codex-compact] Scratchpad omitted from this compaction request (oversized); appending a content-free notice with conversation-evidence-only deduplication guidance.",
-            "warning",
-          );
-      } else if (snapshot.kind === "unavailable" && ctx.hasUI && settings.notifyOnFallback) {
-        ctx.ui.notify(
-          `[codex-compact] Scratchpad omitted from this compaction request (${snapshot.reason}); using the normal maintenance instruction without scratchpad deduplication.`,
-          "warning",
-        );
-      }
-    }
+    if (route.protocol === "context-management") await captureScratchpad(remoteSignal);
+    if (!stillCurrent()) return { cancel: true };
     const context: Context = {
       systemPrompt: ctx.getSystemPrompt(),
       // Prepared operations borrow raw ancestry under persisted-value guards. Keep
@@ -513,8 +529,13 @@ export async function compactRemotely(
       const provider = ctx.modelRegistry.getProvider(model.provider);
       if (!provider) throw new Error("The active Responses provider is unavailable");
       if (ownsStatus()) ctx.ui.setStatus(STATUS_KEY, "Checkpoint recovery summary…");
+      // The failed remote attempt has been aborted; recovery belongs to the parent.
+      await captureScratchpad(signal);
+      if (!stillCurrent()) return { cancel: true };
       const compaction = await recoverCheckpoint(
         {
+          scratchpadSnapshot,
+          scratchpadOmittedForSize,
           diagnostics: recoveryDiagnostics,
           provider,
           model,

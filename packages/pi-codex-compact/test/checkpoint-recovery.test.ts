@@ -156,6 +156,52 @@ for (const api of ["openai-responses", "azure-openai-responses", "openai-codex-r
   });
 }
 
+for (const api of ["openai-responses", "azure-openai-responses", "openai-codex-responses"] as const) {
+  for (const mode of ["full", "summary-only", "omitted", "none"] as const) {
+    test(`${api}: readable recovery appends ${mode} scratchpad context without replacing recovery focus`, async () => {
+      const input = await request(api);
+      const snapshot = JSON.stringify({
+        items: [{ id: 1, representation: mode === "full" ? "full" : "summary", text: "saved task fact" }],
+      });
+      let payload: Record<string, unknown> | undefined;
+      input.fetch = async (_url, init) => {
+        payload = JSON.parse(
+          typeof init?.body === "string"
+            ? init.body
+            : zlib.zstdDecompressSync(init?.body as Uint8Array).toString("utf8"),
+        );
+        return sse(
+          [messageItem],
+          "completed",
+          api === "openai-codex-responses" ? "response.done" : "response.completed",
+        );
+      };
+      await recoverCheckpoint(input, event);
+      const baseline = payload;
+      if (mode === "full" || mode === "summary-only") input.scratchpadSnapshot = snapshot;
+      if (mode === "omitted") input.scratchpadOmittedForSize = true;
+      await recoverCheckpoint(input, event);
+      const before = baseline?.input as unknown[];
+      const after = payload?.input as unknown[];
+      assert.deepEqual(after.slice(0, -1), before.slice(0, -1));
+      const tail = JSON.stringify(after.at(-1));
+      assert.match(
+        tail,
+        /Summarize the preceding conversation and encrypted checkpoint into a plaintext continuation checkpoint/,
+      );
+      assert.match(tail, /Additional focus: Keep pending tasks/);
+      assert.equal(tail.includes("PI_SCRATCHPAD_SNAPSHOT_V1"), mode === "full" || mode === "summary-only");
+      assert.equal(tail.includes("Persistent scratchpad notes exist"), mode === "omitted");
+      if (mode === "full" || mode === "summary-only") {
+        assert.match(tail, /saved task fact/);
+        assert.match(tail, /Entries marked omitted supply only an item ID/);
+      }
+      if (mode === "none") assert.deepEqual(payload, baseline);
+      assert.deepEqual(input.context.messages, (await request(api)).context.messages);
+    });
+  }
+}
+
 function textItem(id: string, parts: string[]) {
   return {
     ...messageItem,

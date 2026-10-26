@@ -195,7 +195,7 @@ export function createCodexCompactMenu(
             id: "appendMaintenanceMessage",
             label: "Append maintenance message",
             description:
-              "Context Management only. Off omits the extra user message; checkpoint recovery instructions are unchanged.",
+              "Off omits the Context Management user message and scratchpad context in readable compaction recovery; recovery instructions are preserved.",
             currentValue: state.settings.appendMaintenanceMessage ? "On" : "Off",
             values: ["On", "Off"],
             action: "set-append-message",

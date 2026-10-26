@@ -1,4 +1,7 @@
 import assert from "node:assert/strict";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import { type Api, createAssistantMessageEventStream, type Model, type Provider } from "@earendil-works/pi-ai";
 import {
@@ -12,6 +15,7 @@ import { createMockContext, createMockPi } from "../../../test/support.js";
 import { createCheckpointDetails, fallbackSummary } from "../src/checkpoint.js";
 import { createCodexCompactExtension } from "../src/codex-compact.js";
 import { COMPACTION_ENGINE_REQUEST, type CompactionEngineV1 } from "../src/prepared-compaction-protocol.js";
+import { ScratchpadStore } from "../src/scratchpad-store.js";
 import { DEFAULT_CODEX_COMPACT_SETTINGS } from "../src/settings.js";
 
 const source: Model<Api> = {
@@ -36,7 +40,14 @@ const usage = {
   cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
 };
 
-function harness(options: { branch?: SessionEntry[]; cancelRecovery?: boolean } = {}) {
+function harness(
+  options: {
+    branch?: SessionEntry[];
+    cancelRecovery?: boolean;
+    scratchpadEnabled?: boolean;
+    appendMaintenanceMessage?: boolean;
+  } = {},
+) {
   const mock = createMockPi();
   const kept: AgentMessage = { role: "user", content: "recent work", timestamp: 2 };
   const details = createCheckpointDetails({
@@ -79,7 +90,12 @@ function harness(options: { branch?: SessionEntry[]; cancelRecovery?: boolean } 
   const state = {
     kind: "loaded" as const,
     path: "fixture",
-    settings: { ...DEFAULT_CODEX_COMPACT_SETTINGS, protocol: "remote-v2" as const },
+    settings: {
+      ...DEFAULT_CODEX_COMPACT_SETTINGS,
+      protocol: "remote-v2" as const,
+      scratchpadEnabled: options.scratchpadEnabled ?? false,
+      appendMaintenanceMessage: options.appendMaintenanceMessage ?? true,
+    },
     document: {},
   };
   if (options.cancelRecovery) state.settings.checkpointRecovery = "cancel";
@@ -487,5 +503,38 @@ for (const callback of ["appendEntry", "notify", "status"] as const) {
     assert.equal(h.aborted, true);
     assert.doesNotMatch(JSON.stringify(payload), /VIOLET-5831|opaque-only-issuer-can-decrypt/);
     assert.equal(h.calls.length, 1);
+  });
+}
+
+for (const mode of ["compact", "ordinary-turn", "scratchpad-off", "append-off"] as const) {
+  test(`issuer transfer scratchpad boundary: ${mode}`, async () => {
+    const directory = await mkdtemp(join(tmpdir(), "issuer-scratchpad-"));
+    const oldAgentDir = process.env.PI_CODING_AGENT_DIR;
+    process.env.PI_CODING_AGENT_DIR = directory;
+    try {
+      const store = new ScratchpadStore({ directory: join(directory, "scratchpads") });
+      await store.execute("session", { action: "add", texts: ["PRIVATE issuer saved fact"] });
+      const h = harness({
+        scratchpadEnabled: mode !== "scratchpad-off",
+        appendMaintenanceMessage: mode !== "append-off",
+      });
+      const before = structuredClone(h.entries);
+      if (mode === "ordinary-turn") await h.replay();
+      else {
+        const result = await h.compact();
+        assert.ok(result && typeof result === "object" && "compaction" in result);
+      }
+      assert.equal(h.calls.length, 1);
+      assert.equal(h.calls[0].provider, source.provider);
+      const body = JSON.stringify(h.calls[0].payload);
+      assert.equal(body.includes("PI_SCRATCHPAD_SNAPSHOT_V1"), mode === "compact");
+      assert.equal(body.includes("PRIVATE issuer saved fact"), mode === "compact");
+      assert.match(body, /Summarize the preceding conversation/);
+      assert.deepEqual(h.entries, before);
+    } finally {
+      if (oldAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+      else process.env.PI_CODING_AGENT_DIR = oldAgentDir;
+      await rm(directory, { recursive: true, force: true });
+    }
   });
 }

@@ -136,7 +136,7 @@ For a backend supporting [server-side compaction](https://developers.openai.com/
 
 This route was verified with Pi's **OpenAI → Sign in with ChatGPT**, `gpt-5.5`, and streaming `api.openai.com/v1/responses`: a checkpoint recovered an assistant-only synthetic fact without the original plaintext. This does not establish support for other accounts, models, Azure, Codex, or proxies.
 
-By default, compaction makes a separate inference request that asks for a concise work handoff, not a fixed `OK` reply. **Append maintenance message** can omit that user message, and **Maintenance message** can edit it or restore the built-in text. Both settings affect Context Management only; the server compaction field, 1,024-token threshold, tools-disabled policy, and strict completion validation stay unchanged. The separate fallback recovery summary prompt is unaffected. Disabling or customizing the message is experimental and is not a proven fix for long-running EOF failures. Tools are disabled only for that maintenance request. Safe generated output is saved with the checkpoint, not displayed as new assistant work. Missing or unsafe output follows the fallback/recovery policy; very short history may not meet the server's 1,024-token threshold. Both maintenance and recovery can consume quota.
+By default, compaction makes a separate inference request that asks for a concise work handoff, not a fixed `OK` reply. **Append maintenance message** can omit that user message, and **Maintenance message** can edit it or restore the built-in text. The maintenance text affects Context Management only; its append toggle also gates scratchpad context in extension-readable compaction recovery. The server compaction field, 1,024-token threshold, tools-disabled policy, and strict completion validation stay unchanged. The separate fallback recovery summary instruction and manual custom focus are preserved. Disabling or customizing the message is experimental and is not a proven fix for long-running EOF failures. Tools are disabled only for that maintenance request. Safe generated output is saved with the checkpoint, not displayed as new assistant work. Missing or unsafe output follows the fallback/recovery policy; very short history may not meet the server's 1,024-token threshold. Both maintenance and recovery can consume quota.
 
 After successful automatic compaction during a user run, work continues without another user message. Existing Pi retries and queued work are reused; otherwise, the extension can start one extra work request per user run, even if that request compacts again. Normal tools remain available, so the extra request can consume quota and execute actions. It asks the model not to repeat completed work, but cannot guarantee model compliance or task completion.
 
@@ -322,7 +322,12 @@ There is no extra summarizer, post-compaction note injection, or dependency on t
 background-compaction extension. The agent reads live notes when needed. A background
 request uses its captured notes; later edits do not restart it or get overwritten.
 Toggling scratchpad changes compaction identity and can invalidate prepared work.
-Other compaction protocols and recovery-summary prompts are unchanged. This guides
+Extension-readable compaction recovery (including issuer transfer during compaction)
+uses the same bounded projection and deduplication guidance when both toggles are On.
+Each compaction operation captures notes at most once and reuses that snapshot if
+invisible compaction fails; the readable recovery instruction and manual custom
+focus are preserved. Pi’s final native fallback and ordinary-turn provider transfer
+are unchanged and do not receive a fresh scratchpad snapshot. This guides
 the readable handoff, not the server-controlled opaque checkpoint's exact contents.
 
 See [Scratchpad tool contract](docs/scratchpad.md) for operations, limits, direct

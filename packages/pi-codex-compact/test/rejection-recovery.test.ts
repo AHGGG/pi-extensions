@@ -1,4 +1,7 @@
 import assert from "node:assert/strict";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import * as zlib from "node:zlib";
 import type { Api, Model, Provider } from "@earendil-works/pi-ai";
 import {
@@ -19,6 +22,7 @@ import { COMPACTION_WORK_REPLAY_MESSAGE } from "../src/checkpoint-replay.js";
 import { createCodexCompactExtension } from "../src/codex-compact.js";
 import { resolveCompactionRoute } from "../src/model-api.js";
 import { RejectedRoutes, rejectionRouteKey } from "../src/rejection-state.js";
+import { ScratchpadStore } from "../src/scratchpad-store.js";
 import {
   type CodexCompactSettings,
   type CodexCompactSettingsRuntime,
@@ -1052,4 +1056,145 @@ test("custom maintenance instructions are redacted if a provider echoes them in 
   await h.run();
   assert.ok(h.notifications.length > 0);
   assert.doesNotMatch(JSON.stringify(h.notifications), /PRIVATE_CUSTOM_MAINTENANCE_SENTINEL/);
+});
+
+async function withRecoveryScratchpad(run: (store: ScratchpadStore, path: string) => Promise<void>) {
+  const directory = await mkdtemp(join(tmpdir(), "pi-readable-scratchpad-"));
+  const previous = process.env.PI_CODING_AGENT_DIR;
+  process.env.PI_CODING_AGENT_DIR = directory;
+  try {
+    await run(new ScratchpadStore(), join(directory, "scratchpads", "session.json"));
+  } finally {
+    if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR;
+    else process.env.PI_CODING_AGENT_DIR = previous;
+    await rm(directory, { recursive: true, force: true });
+  }
+}
+
+for (const mode of ["full", "summary-only", "omitted", "empty", "unreadable"] as const) {
+  test(`readable checkpoint recovery uses the ${mode} scratchpad selection without changing notes`, async () => {
+    await withRecoveryScratchpad(async (store, path) => {
+      if (mode !== "empty") {
+        await store.execute("session", {
+          action: "add",
+          items:
+            mode === "full"
+              ? [{ text: "PRIVATE_FULL_RECOVERY_NOTE" }]
+              : Array.from({ length: mode === "omitted" ? 20 : 12 }, (_, index) => ({
+                  text: `PRIVATE_FULL_${index}_${"x".repeat(mode === "omitted" ? 3000 : 1800)}`,
+                  summary: mode === "omitted" ? "s".repeat(1000) : `SAVED_SUMMARY_${index}`,
+                })),
+        });
+        if (mode === "unreadable") await writeFile(path, "PRIVATE_MALFORMED_NOTES");
+      }
+      const before = mode === "empty" ? undefined : await readFile(path, "utf8");
+      const h = await harness({ checkpoint: true, settings: { scratchpadEnabled: true } });
+      const historyBefore = structuredClone(h.entries);
+      const result = (await h.run()) as { compaction?: unknown };
+      assert.ok(result?.compaction);
+      assert.equal(h.payloads.length, 2);
+      const recovery = JSON.stringify(h.payloads[1].payload);
+      assert.match(recovery, /Summarize the preceding conversation/);
+      if (mode === "full") {
+        assert.match(recovery, /PI_SCRATCHPAD_SNAPSHOT_V1/);
+        assert.match(recovery, /PRIVATE_FULL_RECOVERY_NOTE/);
+      } else if (mode === "summary-only") {
+        assert.match(recovery, /SAVED_SUMMARY_11/);
+        assert.doesNotMatch(recovery, /PRIVATE_FULL_/);
+        assert.match(JSON.stringify(h.notifications), /summary-only snapshot/);
+      } else if (mode === "omitted") {
+        assert.match(recovery, /Persistent scratchpad notes exist/);
+        assert.doesNotMatch(recovery, /PI_SCRATCHPAD_SNAPSHOT_V1|PRIVATE_FULL_|ssssssssss/);
+      } else {
+        assert.doesNotMatch(recovery, /PI_SCRATCHPAD_SNAPSHOT_V1|Persistent scratchpad notes exist|PRIVATE_MALFORMED/);
+      }
+      assert.deepEqual(h.entries, historyBefore);
+      if (before !== undefined) assert.equal(await readFile(path, "utf8"), before);
+    });
+  });
+}
+
+for (const settings of [{ scratchpadEnabled: false }, { appendMaintenanceMessage: false }]) {
+  test(`readable recovery respects scratchpad gates ${JSON.stringify(settings)}`, async () => {
+    await withRecoveryScratchpad(async (store) => {
+      await store.execute("session", { action: "add", texts: ["PRIVATE_DISABLED_RECOVERY_NOTE"] });
+      const h = await harness({ checkpoint: true, settings: { scratchpadEnabled: true, ...settings } });
+      assert.ok(await h.run());
+      assert.doesNotMatch(JSON.stringify(h.payloads), /PRIVATE_DISABLED_RECOVERY_NOTE|PI_SCRATCHPAD_SNAPSHOT_V1/);
+    });
+  });
+}
+
+test("readable recovery reuses the operation snapshot after notes change during the initial request", async () => {
+  await withRecoveryScratchpad(async (store) => {
+    await store.execute("session", { action: "add", texts: ["ORIGINAL_CAPTURED_NOTE"] });
+    let calls = 0;
+    const h = await harness({
+      checkpoint: true,
+      settings: { protocol: "context-management", scratchpadEnabled: true },
+      response: async () => {
+        if (++calls === 1) {
+          await store.execute("session", { action: "update", items: [{ id: 1, text: "LATER_UNCAPTURED_NOTE" }] });
+          return Response.json({ error: rejection }, { status: 401 });
+        }
+        return summaryResponse();
+      },
+    });
+    assert.ok(await h.run());
+    assert.equal(calls, 2);
+    for (const { payload } of h.payloads) {
+      assert.match(JSON.stringify(payload), /ORIGINAL_CAPTURED_NOTE/);
+      assert.doesNotMatch(JSON.stringify(payload), /LATER_UNCAPTURED_NOTE/);
+    }
+    const notes = await store.readSnapshot("session");
+    assert.equal(notes[0].text, "LATER_UNCAPTURED_NOTE");
+  });
+});
+
+test("readable scratchpad provider errors redact raw and escaped notes while native fallback remains unchanged", async () => {
+  await withRecoveryScratchpad(async (store, path) => {
+    const text = 'PRIVATE_RECOVERY_NOTE "quoted"\nnew line';
+    const summary = 'PRIVATE_RECOVERY_SUMMARY "quoted"\nnew line';
+    await store.execute("session", { action: "add", items: [{ text, summary }] });
+    const before = await readFile(path, "utf8");
+    let calls = 0;
+    const h = await harness({
+      checkpoint: true,
+      settings: { scratchpadEnabled: true },
+      response: async () => {
+        if (++calls === 1) return Response.json({ error: rejection }, { status: 401 });
+        return Response.json(
+          { error: { message: [text, summary, JSON.stringify(text), JSON.stringify(summary)].join(" ") } },
+          { status: 400 },
+        );
+      },
+    });
+    const historyBefore = structuredClone(h.entries);
+    assert.equal(await h.run(), undefined, "native fallback remains Pi-owned");
+    assert.equal(h.payloads.length, 2);
+    assert.match(JSON.stringify(h.payloads[1].payload), /PRIVATE_RECOVERY_NOTE/);
+    assert.doesNotMatch(JSON.stringify(h.notifications), /PRIVATE_RECOVERY_NOTE|PRIVATE_RECOVERY_SUMMARY/);
+    assert.match(JSON.stringify(h.notifications), /using Pi native compaction/);
+    assert.deepEqual(h.entries, historyBefore);
+    assert.equal(await readFile(path, "utf8"), before);
+  });
+});
+
+test("cancelling initial compaction does not inject scratchpad into a new recovery request", async () => {
+  await withRecoveryScratchpad(async (store, path) => {
+    await store.execute("session", { action: "add", texts: ["PRIVATE_CANCELLED_RECOVERY_NOTE"] });
+    const before = await readFile(path, "utf8");
+    const controller = new AbortController();
+    const h = await harness({
+      checkpoint: true,
+      settings: { scratchpadEnabled: true },
+      response: async () => {
+        controller.abort();
+        return Response.json({ error: rejection }, { status: 401 });
+      },
+    });
+    assert.deepEqual(await h.run(h.ctx, controller.signal), { cancel: true });
+    assert.equal(h.payloads.length, 1);
+    assert.equal(await readFile(path, "utf8"), before);
+  });
 });
