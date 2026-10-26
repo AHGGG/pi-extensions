@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { DefaultResourceLoader, SettingsManager } from "@earendil-works/pi-coding-agent";
+import { createTuiHarness } from "@narumitw/pi-tui-kit/testing";
 import { test } from "vitest";
 import { registerRuntimeBuilderContract } from "../../../test/runtime-builder-contract.js";
 import { createMockContext } from "../../../test/support.js";
@@ -49,7 +50,7 @@ test("generated runtime is loadable by Pi's Jiti resource loader", async () => {
   }
 });
 
-test("managed package layouts load the settings menu without physical Pi peers", async () => {
+test("managed package layouts load settings and the scratchpad viewer without physical Pi peers", async () => {
   const builder = await loadBuilder();
   const buildRoot = await mkdtemp(join(packageRoot, ".pi-codex-compact-build-test-"));
   const isolatedRoot = await mkdtemp(join(tmpdir(), "pi-codex-compact-isolated-"));
@@ -84,10 +85,30 @@ test("managed package layouts load the settings menu without physical Pi peers",
     assert.deepEqual(loaded.errors, []);
     assert.equal(loaded.extensions.length, 1);
     const extension = loaded.extensions[0];
-    const command = extension?.commands.get("codex-compact");
+    assert.ok(extension);
+    const command = extension.commands.get("codex-compact");
     assert.ok(command);
     const { ctx } = createMockContext({ cwd: isolatedRoot, mode: "tui" });
     await assert.doesNotReject(() => command.handler("", ctx));
+    loaded.runtime.getAllTools = () => [];
+    loaded.runtime.getActiveTools = () => [];
+    const tui = createTuiHarness();
+    const viewerContext = createMockContext({ cwd: isolatedRoot, mode: "tui", hasUI: true, custom: tui.custom });
+    for (const handler of extension.handlers.get("session_start") ?? []) {
+      await handler({ type: "session_start" }, viewerContext.ctx);
+    }
+    const scratchpad = extension.commands.get("scratchpad");
+    assert.ok(scratchpad);
+    const running = scratchpad.handler("show", viewerContext.ctx);
+    await tui.waitForOpen();
+    const frame = tui.render().join("\n");
+    tui.press("tui.select.cancel");
+    await running;
+    assert.match(frame, /No scratchpad notes/);
+    assert.deepEqual(viewerContext.notifications, []);
+    for (const handler of extension.handlers.get("session_shutdown") ?? []) {
+      await handler({ type: "session_shutdown" }, viewerContext.ctx);
+    }
   } finally {
     if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
     else process.env.PI_CODING_AGENT_DIR = previousAgentDir;

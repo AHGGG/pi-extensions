@@ -1,8 +1,7 @@
 import { join } from "node:path";
 import { stripVTControlCharacters } from "node:util";
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
-import { runDocumentReview } from "@narumitw/pi-tui-kit";
-import { ScratchpadError, type ScratchpadStore } from "./scratchpad-store.js";
+import { ScratchpadError, type ScratchpadItem, type ScratchpadStore } from "./scratchpad-store.js";
 import { terminalText } from "./terminal.js";
 
 /** Local, read-only UI: never publishes notes to the model or changes tool exposure. */
@@ -21,9 +20,31 @@ export async function showScratchpad(
     else throw new Error(message);
     return;
   }
+  let items: ScratchpadItem[];
   try {
-    const items = await store.readSnapshot(sessionId, owner);
+    items = await store.readSnapshot(sessionId, owner);
+  } catch (error) {
     if (!current()) return;
+    const detail = error instanceof ScratchpadError ? `${error.code}: ${error.message}` : "Unable to read notes.";
+    ctx.ui.notify(
+      `Could not read scratchpad: ${terminalText(detail)}\nNotes file: ${file}. No notes were changed.`,
+      "error",
+    );
+    return;
+  }
+  if (!current()) return;
+  // UI import, compatibility and rendering errors are not storage failures.
+  // Never include an arbitrary renderer exception: it may contain note text.
+  try {
+    const { runDocumentReview } = await import("@narumitw/pi-tui-kit");
+    if (!current()) return;
+    if (typeof runDocumentReview !== "function") {
+      ctx.ui.notify(
+        "Could not display scratchpad: the installed UI library is incompatible. Update the extension and restart Pi. Notes were not changed.",
+        "error",
+      );
+      return;
+    }
     const content = items.length
       ? items
           .map((item) => `#${item.id}\nCreated: ${item.createdAt}\nUpdated: ${item.updatedAt}\n\n${item.text}`)
@@ -45,12 +66,11 @@ export async function showScratchpad(
         if (current()) ctx.ui.notify("Could not display the scratchpad. Notes were not changed.", "error");
       },
     });
-  } catch (error) {
-    if (!current()) return;
-    const detail = error instanceof ScratchpadError ? `${error.code}: ${error.message}` : "Unable to read notes.";
-    ctx.ui.notify(
-      `Could not open scratchpad: ${terminalText(detail)}\nNotes file: ${file}. No notes were changed.`,
-      "error",
-    );
+  } catch {
+    if (current())
+      ctx.ui.notify(
+        "Could not display scratchpad: the viewer could not be loaded or rendered. Notes were not changed.",
+        "error",
+      );
   }
 }

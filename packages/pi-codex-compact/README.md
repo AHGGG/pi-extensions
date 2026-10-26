@@ -285,6 +285,8 @@ Enable **Scratchpad** in `/codex-compact` → Settings, or use `/scratchpad on`.
 `/scratchpad toggle` toggle it, and `/scratchpad status` reports the setting.
 Use `/scratchpad show` in TUI mode to view this session’s full notes, IDs, and
 timestamps in a read-only scrollable screen, even while the tool is Off.
+Storage-read failures and viewer/display failures are reported separately; neither
+changes notes. If the UI library is incompatible, update the extension and restart Pi.
 This is one saved `scratchpadEnabled` preference (default `false`), shared by the
 menu and command and retained across sessions. Pi's explicit tool selection or
 exclusions still apply. It works independently of the remote-compaction toggle.

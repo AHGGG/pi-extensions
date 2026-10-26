@@ -148,7 +148,7 @@ test("empty viewer does not create storage; malformed files remain unchanged", a
   const file = join(current.store.directory, "test-session.json");
   await writeFile(file, "invalid JSON");
   await current.command();
-  assert.match(current.context.notifications.at(-1)?.message ?? "", /Could not open scratchpad.*INVALID_FILE/);
+  assert.match(current.context.notifications.at(-1)?.message ?? "", /Could not read scratchpad.*INVALID_FILE/);
   assert.equal(await readFile(file, "utf8"), "invalid JSON");
 });
 
@@ -236,4 +236,25 @@ test("reopening reads fresh notes instead of retaining the previous snapshot", a
   await second;
   assert.match(text, /Second version/);
   assert.doesNotMatch(text, /First version/);
+});
+
+test("display failures are not reported as unreadable notes and do not expose renderer details", async () => {
+  const current = await setup();
+  await current.store.execute("test-session", { action: "add", texts: ["Private note"] });
+  const file = join(current.store.directory, "test-session.json");
+  const before = await readFile(file, "utf8");
+  const failing = createMockContext({
+    mode: "tui",
+    hasUI: true,
+    custom: async () => {
+      throw new Error("Private note in renderer exception");
+    },
+  });
+  current.runtime.beginSession(failing.ctx);
+  const command = current.mock.commands.get("scratchpad");
+  assert.ok(command);
+  await command.handler("show", failing.ctx);
+  assert.match(failing.notifications.at(-1)?.message ?? "", /Could not display/);
+  assert.doesNotMatch(failing.notifications.at(-1)?.message ?? "", /Unable to read|Private note/);
+  assert.equal(await readFile(file, "utf8"), before);
 });
