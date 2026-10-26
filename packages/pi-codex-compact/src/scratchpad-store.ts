@@ -6,6 +6,7 @@ import { getAgentDir } from "@earendil-works/pi-coding-agent";
 
 export const SCRATCHPAD_LIMITS = Object.freeze({
   itemBytes: 8 * 1024,
+  summaryBytes: 1024,
   fileBytes: 1024 * 1024,
   responseBytes: 64 * 1024,
   defaultPage: 20,
@@ -16,23 +17,25 @@ export type ScratchpadView = "full" | "summary" | "ids";
 export type ScratchpadItem = {
   id: number;
   text: string;
+  summary?: string;
   createdAt: string;
   updatedAt: string;
 };
+type StoredScratchpadItem = ScratchpadItem & { summaryTextHash?: string };
 export interface ScratchpadDocument {
   schemaVersion: 1;
   sessionId: string;
   nextId: number;
-  items: ScratchpadItem[];
+  items: StoredScratchpadItem[];
 }
 export type ScratchpadRequest =
   | { action: "read"; ids?: number[]; view?: ScratchpadView; cursor?: string; limit?: number }
-  | { action: "add"; texts: string[] }
-  | { action: "update"; items: { id: number; text: string }[] }
+  | { action: "add"; items: { text: string; summary?: string }[] }
+  | { action: "update"; items: { id: number; text?: string; summary?: string | null }[] }
   | { action: "delete"; ids: number[] };
 export type ScratchpadReadItem =
   | ScratchpadItem
-  | { id: number; preview: string; createdAt: string; updatedAt: string }
+  | { id: number; preview: string; summary?: string; createdAt: string; updatedAt: string }
   | { id: number };
 export type ScratchpadResult =
   | {
@@ -75,6 +78,24 @@ function validText(value: unknown): value is string {
     Buffer.byteLength(value, "utf8") <= SCRATCHPAD_LIMITS.itemBytes
   );
 }
+function validSummary(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    value.trim().length > 0 &&
+    Buffer.byteLength(value, "utf8") <= SCRATCHPAD_LIMITS.summaryBytes
+  );
+}
+function validateSummary(value: unknown): void {
+  if (typeof value === "string" && Buffer.byteLength(value, "utf8") > SCRATCHPAD_LIMITS.summaryBytes)
+    fail("LIMIT_EXCEEDED", "A summary exceeds the 1 KiB limit. Shorten it. No changes saved.");
+  if (!validSummary(value)) fail("INVALID_INPUT", "Summary must be a nonempty string. No changes saved.");
+}
+/** Hash binds a summary to exact text even when older clients preserve unknown fields. */
+function publicItem(item: StoredScratchpadItem): ScratchpadItem {
+  const { id, text, createdAt, updatedAt } = item;
+  const summary = item.summary !== undefined && item.summaryTextHash === digest(text) ? item.summary : undefined;
+  return { id, text, ...(summary !== undefined ? { summary } : {}), createdAt, updatedAt };
+}
 function timestamp(value: unknown): value is string {
   if (typeof value !== "string") return false;
   const parsed = new Date(value);
@@ -101,7 +122,7 @@ function parseRequest(value: unknown): ScratchpadRequest {
   if (!record(value)) fail("INVALID_INPUT", "Provide a scratchpad action.");
   const fields: Record<string, string[]> = {
     read: ["action", "ids", "view", "cursor", "limit"],
-    add: ["action", "texts"],
+    add: ["action", "texts", "items"],
     update: ["action", "items"],
     delete: ["action", "ids"],
   };
@@ -124,18 +145,42 @@ function parseRequest(value: unknown): ScratchpadRequest {
     return value as ScratchpadRequest;
   }
   if (value.action === "add") {
-    if (!Array.isArray(value.texts) || !value.texts.length || value.texts.length > SCRATCHPAD_LIMITS.maxPage)
-      fail("INVALID_INPUT", "Provide 1–100 item texts. No changes saved.");
-    validateTexts(value.texts);
+    if ((value.texts === undefined) === (value.items === undefined))
+      fail("INVALID_INPUT", "Add accepts items or legacy texts, not both. No changes saved.");
+    if (value.texts !== undefined) {
+      if (!Array.isArray(value.texts) || !value.texts.length || value.texts.length > SCRATCHPAD_LIMITS.maxPage)
+        fail("INVALID_INPUT", "Provide 1–100 item texts. No changes saved.");
+      validateTexts(value.texts);
+      return { action: "add", items: (value.texts as string[]).map((text) => ({ text })) };
+    }
+    if (
+      !Array.isArray(value.items) ||
+      !value.items.length ||
+      value.items.length > SCRATCHPAD_LIMITS.maxPage ||
+      !value.items.every(record)
+    )
+      fail("INVALID_INPUT", "Provide 1–100 items. No changes saved.");
+    for (const item of value.items) {
+      if (Object.keys(item).some((key) => key !== "text" && key !== "summary"))
+        fail("INVALID_INPUT", "Add entries accept only text and optional summary. No changes saved.");
+      validateTexts([item.text]);
+      if (item.summary !== undefined) validateSummary(item.summary);
+    }
     return value as ScratchpadRequest;
   }
   if (value.action === "update") {
     if (!Array.isArray(value.items) || !value.items.every(record))
-      fail("INVALID_INPUT", "Provide item ID/text pairs. No changes saved.");
-    if (value.items.some((item) => Object.keys(item).some((key) => key !== "id" && key !== "text")))
-      fail("INVALID_INPUT", "Update entries accept only id and text. No changes saved.");
+      fail("INVALID_INPUT", "Provide item changes. No changes saved.");
     validateIds(value.items.map((item) => item.id));
-    validateTexts(value.items.map((item) => item.text));
+    for (const item of value.items) {
+      if (
+        Object.keys(item).some((key) => !["id", "text", "summary"].includes(key)) ||
+        (item.text === undefined && item.summary === undefined)
+      )
+        fail("INVALID_INPUT", "Update entries require id and text or summary. No changes saved.");
+      if (item.text !== undefined) validateTexts([item.text]);
+      if (item.summary !== undefined && item.summary !== null) validateSummary(item.summary);
+    }
     return value as ScratchpadRequest;
   }
   if (value.action === "delete") {
@@ -170,6 +215,9 @@ function parseDocument(raw: string, sessionId: string): ScratchpadDocument {
       item.id >= value.nextId ||
       ids.has(item.id) ||
       !validText(item.text) ||
+      (item.summary !== undefined && !validSummary(item.summary)) ||
+      (item.summaryTextHash !== undefined &&
+        (typeof item.summaryTextHash !== "string" || !/^[a-f0-9]{64}$/.test(item.summaryTextHash))) ||
       !timestamp(item.createdAt) ||
       !timestamp(item.updatedAt) ||
       item.updatedAt < item.createdAt
@@ -222,9 +270,7 @@ export class ScratchpadStore {
       const raw = await this.readRaw(path);
       const items = raw === undefined ? [] : parseDocument(raw, sessionId).items;
       checkCurrent(options);
-      return items
-        .map(({ id, text, createdAt, updatedAt }) => ({ id, text, createdAt, updatedAt }))
-        .sort((a, b) => a.id - b.id);
+      return items.map(publicItem).sort((a, b) => a.id - b.id);
     });
   }
   private async enqueue<T>(sessionId: string, operation: (path: string) => Promise<T>): Promise<T> {
@@ -321,7 +367,8 @@ export class ScratchpadStore {
       nextCursor: null,
     };
     const limit = selected ? candidates.length : (request.limit ?? SCRATCHPAD_LIMITS.defaultPage);
-    for (const item of candidates) {
+    for (const stored of candidates) {
+      const item = publicItem(stored);
       if (result.items.length >= limit) break;
       const output: ScratchpadReadItem =
         view === "ids"
@@ -330,10 +377,11 @@ export class ScratchpadStore {
             ? {
                 id: item.id,
                 preview: [...item.text].slice(0, SCRATCHPAD_LIMITS.previewCharacters).join(""),
+                ...(item.summary !== undefined ? { summary: item.summary } : {}),
                 createdAt: item.createdAt,
                 updatedAt: item.updatedAt,
               }
-            : { id: item.id, text: item.text, createdAt: item.createdAt, updatedAt: item.updatedAt };
+            : item;
       // Leave room for cursor and result metadata; every maximum-sized item fits by itself.
       if (bytes({ ...result, items: [...result.items, output] }) > SCRATCHPAD_LIMITS.responseBytes - 1024) break;
       result.items.push(output);
@@ -374,20 +422,37 @@ export class ScratchpadStore {
       );
     const now = this.now().toISOString();
     if (request.action === "add") {
-      if (!Number.isSafeInteger(document.nextId + request.texts.length))
+      if (!Number.isSafeInteger(document.nextId + request.items.length))
         fail("LIMIT_EXCEEDED", "Scratchpad item IDs are exhausted. No changes saved.");
-      for (const text of request.texts) {
+      for (const { text, summary } of request.items) {
         const id = document.nextId++;
         ids.push(id);
-        document.items.push({ id, text, createdAt: now, updatedAt: now });
+        document.items.push({
+          id,
+          text,
+          ...(summary !== undefined ? { summary, summaryTextHash: digest(text) } : {}),
+          createdAt: now,
+          updatedAt: now,
+        });
       }
     } else if (request.action === "update") {
       for (const change of request.items) {
         const item = known.get(change.id);
-        if (item && item.text !== change.text) {
+        if (!item) continue;
+        const before = JSON.stringify(item);
+        if (change.text !== undefined && item.text !== change.text) {
           item.text = change.text;
-          item.updatedAt = now < item.updatedAt ? item.updatedAt : now;
+          delete item.summary;
+          delete item.summaryTextHash;
         }
+        if (change.summary === null) {
+          delete item.summary;
+          delete item.summaryTextHash;
+        } else if (change.summary !== undefined) {
+          item.summary = change.summary;
+          item.summaryTextHash = digest(item.text);
+        }
+        if (JSON.stringify(item) !== before) item.updatedAt = now < item.updatedAt ? item.updatedAt : now;
       }
     } else {
       const removed = new Set(ids);

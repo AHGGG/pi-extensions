@@ -258,3 +258,22 @@ test("display failures are not reported as unreadable notes and do not expose re
   assert.doesNotMatch(failing.notifications.at(-1)?.message ?? "", /Unable to read|Private note/);
   assert.equal(await readFile(file, "utf8"), before);
 });
+
+test("viewer labels semantic summaries and still displays full note text without writes", async () => {
+  const current = await setup({ rows: 30, width: 100 });
+  await current.store.execute("test-session", {
+    action: "add",
+    items: [{ text: "Full original details remain here.", summary: "A short overview." }],
+  });
+  const file = join(current.store.directory, "test-session.json");
+  const before = await readFile(file, "utf8");
+  const running = current.command();
+  await current.tui.waitForOpen();
+  const rendered = current.text();
+  current.tui.press("tui.select.cancel");
+  await running;
+  assert.match(rendered, /Summary: A short overview/);
+  assert.match(rendered, /Full note:\nFull original details remain here/);
+  assert.doesNotMatch(rendered, /summaryTextHash/);
+  assert.equal(await readFile(file, "utf8"), before);
+});

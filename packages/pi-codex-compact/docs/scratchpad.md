@@ -21,7 +21,7 @@ tool. Turn off/remove the conflicting extension before using this one.
 ## View your notes
 
 Use `/scratchpad show` in TUI mode to open a read-only, scrollable snapshot of the
-current session's notes: full text, stable IDs, and UTC creation/update timestamps.
+current session's notes: full text, any current semantic summary, stable IDs, and UTC creation/update timestamps.
 It works while Scratchpad is Off and does not enable the tool, call the model,
 change files, or add notes to conversation history. The bare `/scratchpad` command
 still toggles the tool; `/scratchpad status` still shows the notes-file path.
@@ -45,19 +45,28 @@ the extension, not accepted as tool input.
 | Action | Input | Result |
 | --- | --- | --- |
 | `read` | Optional `ids`, or optional `cursor`/`limit`; optional `view` | Items, total count, returned count, next cursor |
-| `add` | `texts: string[]` | Assigned IDs and count |
-| `update` | `items: { id: number, text: string }[]` | Updated IDs and count |
+| `add` | `items: { text: string, summary?: string }[]` or legacy `texts: string[]` | Assigned IDs and count |
+| `update` | `items: { id: number, text?: string, summary?: string \| null }[]` | Updated IDs and count |
 | `delete` | `ids: number[]` | Deleted IDs and count |
 
 Single and batch operations use the same arrays (1–100 entries). IDs are positive
 integers, remain stable, and are not reused by tool operations. Unknown or duplicate
-target IDs fail the whole batch. Updates replace text; unchanged text retains its
-previous `updatedAt` timestamp.
+target IDs fail the whole batch. Add accepts `items` or `texts`, never both. Update
+requires `text` and/or `summary`; omitted text stays unchanged. `summary: null`
+clears a summary. Unchanged values retain their previous `updatedAt` timestamp.
+
+Summaries are optional, agent-written semantic overviews, not truncated previews.
+Changing text without supplying a replacement summary clears the old summary;
+changing text and summary together saves them atomically. A summary-only update
+binds it to the current full text. The extension records an internal `summaryTextHash`
+to reject summaries left stale by older clients or direct text edits. Missing or
+mismatched hashes make a summary unavailable; full text remains readable. This
+checks which text the summary belongs to, not the summary's semantic accuracy.
 
 Read views:
 
-- `full` (default): complete text, ID, `createdAt`, and `updatedAt`.
-- `summary`: ID, explicitly named `preview` (first 200 Unicode characters), timestamps.
+- `full` (default): complete text, current `summary` when present, ID, `createdAt`, and `updatedAt`.
+- `summary`: ID, explicitly named `preview` (first 200 Unicode characters), current semantic `summary` when present, timestamps. A preview is not a semantic summary. Neither view exposes the internal hash.
 - `ids`: objects containing only `id`.
 
 Omitting `ids` lists by ascending ID. `limit` defaults to 20 and is at most 100.
@@ -71,9 +80,11 @@ Examples:
 
 ```json
 {"action":"add","texts":["Use pnpm for this repository.","Tests passed; device verification is pending."]}
+{"action":"add","items":[{"text":"Detailed experiment findings and references.","summary":"Experiment passed; physical-device validation is pending."}]}
 {"action":"read","view":"summary","limit":20}
 {"action":"read","ids":[1,2],"view":"full"}
 {"action":"update","items":[{"id":2,"text":"Tests and device verification passed."}]}
+{"action":"update","items":[{"id":3,"summary":"Physical-device validation passed."}]}
 {"action":"delete","ids":[2]}
 ```
 
@@ -107,7 +118,8 @@ scratchpads/<session-id>.json
 ```
 
 The extension generates UTC ISO timestamps on tool writes. `createdAt` stays
-fixed, `updatedAt` changes only when text changes. IDs must be unique and less
+fixed, `updatedAt` changes when text or summary metadata changes. Existing files without
+summaries remain valid and are not migrated or rewritten on read. IDs must be unique and less
 than `nextId`. Deleting all items retains `nextId`. Resume keeps the same file;
 new/forked sessions start empty files when first written. A `/tree` navigation
 keeps current session-wide notes, not a historical version. These local files do
@@ -115,14 +127,15 @@ not automatically travel with exported/shared session transcripts.
 
 Direct editing is supported **between tool operations**, while Pi is idle.
 Preserve valid JSON, session ID, unique IDs, timestamps, and `nextId`; update
-`updatedAt` yourself when editing text externally. The tool cannot guarantee
+`updatedAt` yourself when editing text externally. Use the tool to refresh summaries
+after direct text edits; do not fabricate the extension-owned hash. The tool cannot guarantee
 non-reused IDs if metadata is manually reset or the entire file is removed.
 Invalid files are reported and preserved, never silently repaired or replaced.
 Symbolic-link scratchpad directories/files are rejected.
 
 ## Bounds and consistency
 
-- Item text: 8 KiB UTF-8; whole serialized file: 1 MiB.
+- Item text: 8 KiB UTF-8; optional summary: 1 KiB UTF-8; whole serialized file: 1 MiB.
 - Read response: 64 KiB; a complete maximum-size item fits in one page.
 - Full text is never truncated. Oversized writes fail; use shorter notes and
   references to larger project artifacts instead.
@@ -145,24 +158,34 @@ errors, or note contents are added to diagnostic logs.
 The tool's stable guideline asks the agent to record decisions, constraints,
 verified progress, blockers, and references; read before relying on remembered
 contents; update stale items; and avoid secrets/full logs. Notes are task data,
-not permission to override user instructions.
+not permission to override user instructions. The agent should supply concise summaries
+for long notes, preserving decisions, constraints, blockers, and references. Upgrading
+changes the tool schema once; note edits do not re-register tools or rewrite the
+ordinary model-request prefix.
 
 ## Compaction snapshot
 
 Only when both `scratchpadEnabled` and `appendMaintenanceMessage` are On, a
 Context Management compaction request reads the complete validated notes once.
-It inserts a JSON data block immediately before the existing maintenance text in
-the final maintenance-only user message. A separate instruction asks for important
-context missing from those notes, later changes, contradictions, essential constraints,
-and the immediate next action, without duplicating unchanged saved details. Custom
-maintenance text is preserved verbatim. Tools remain disabled for maintenance.
+For each item, full text at most 2 KiB is included unchanged. Longer text uses its
+current semantic summary if available; missing/stale summaries fall back to full
+text, never a truncated preview. Each entry is marked `representation: full` or
+`representation: summary`, retaining its ID and timestamps. These are UTF-8 byte
+limits, not word or token estimates, and the stored full notes are never shortened.
 
-The complete serialized snapshot is limited to 16 KiB. Empty notes add nothing;
-unreadable or oversized notes fall back to normal maintenance without a partial
-snapshot or deduplication instruction. A fixed warning explains omission when
-fallback notifications are enabled. Disabling either setting leaves the existing
-maintenance behavior unchanged. Other protocols and recovery-summary prompts are
-not modified.
+The JSON projection is inserted immediately before the unchanged custom maintenance
+instruction. Guidance permits deduplication only of facts explicitly present in
+that projection. Important details absent from summaries, later changes,
+contradictions, constraints, and the next action must still be retained; a full
+note merely existing on disk is not grounds for omitting its unseen details.
+Tools remain disabled for maintenance; no automatic summarization request is made.
+
+The complete serialized projection is limited to 16 KiB, including metadata and
+JSON escaping. If it still exceeds that cap, normal maintenance runs without a
+partial snapshot or deduplication instruction. Empty notes add nothing; unreadable
+notes also use normal maintenance. A fixed warning explains omission when fallback
+notifications are enabled. Disabling either setting leaves existing maintenance
+behavior unchanged. Other protocols and recovery-summary prompts are not modified.
 
 No notes are automatically loaded after compaction, written into session entries,
 or copied into a separate snapshot store. Background requests keep the captured

@@ -292,18 +292,21 @@ menu and command and retained across sessions. Pi's explicit tool selection or
 exclusions still apply. It works independently of the remote-compaction toggle.
 
 The agent gets one `scratchpad` tool for session-specific items with stable IDs,
-text, and UTC creation/update timestamps. It supports reads and atomic add,
+text, optional agent-written summaries, and UTC creation/update timestamps. It supports reads and atomic add,
 update, and delete batches. Notes live under Pi's configured agent directory at
 `scratchpads/<session-id>.json`. Resume reuses that file; new/forked sessions get
 separate empty notes. `/tree` does **not** rewind notes.
 
 When both **Scratchpad** and **Append maintenance message** are On, Context
-Management compaction captures the current complete notes (up to 16 KiB of
-serialized JSON) and places them before the maintenance instruction. Your custom
-instruction is preserved, followed by guidance to avoid repeating unchanged saved
-details while retaining missing facts, corrections, constraints, and the next action.
-Empty notes add nothing. Unreadable or oversized notes are omitted without truncation,
-with a warning when fallback notifications are enabled; normal maintenance continues.
+Management compaction captures one projection of every item: full text through
+2 KiB, or its current semantic summary (at most 1 KiB) for longer notes. Missing or
+stale summaries fall back to full text; stored notes are never shortened. The JSON
+projection, up to 16 KiB total, goes before your unchanged maintenance instruction.
+Each entry is labeled full or summary; deduplication applies only to supplied facts,
+not unseen details in full notes. Important missing facts, corrections, constraints,
+and the next action must still be preserved. Empty notes add nothing. Unreadable or
+oversized projections use normal maintenance without truncation or deduplication,
+with a warning when fallback notifications are enabled.
 
 There is no extra summarizer, post-compaction note injection, or dependency on the
 background-compaction extension. The agent reads live notes when needed. A background

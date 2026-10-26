@@ -119,3 +119,23 @@ test("session switches and shutdown reject stale calls", async () => {
     true,
   );
 });
+
+test("tool supports semantic summaries with legacy adds, partial updates and stable definitions", async () => {
+  const current = await setup();
+  await current.command("on");
+  const count = current.mock.tools.length;
+  assert.equal(
+    (await current.execute({ action: "add", items: [{ text: "Full note", summary: "Summary" }] })).isError,
+    undefined,
+  );
+  assert.equal((await current.execute({ action: "add", texts: ["Legacy note"] })).isError, undefined);
+  await current.execute({ action: "update", items: [{ id: 1, summary: "Updated summary" }] });
+  const result = await current.execute({ action: "read" });
+  assert.match(JSON.stringify(result.structuredContent), /Updated summary/);
+  assert.doesNotMatch(JSON.stringify(result.structuredContent), /summaryTextHash/);
+  assert.equal(current.mock.tools.length, count);
+  await current.execute({ action: "update", items: [{ id: 1, text: "New full text" }] });
+  assert.doesNotMatch(JSON.stringify((await current.execute({ action: "read" })).structuredContent), /Updated summary/);
+  assert.deepEqual(current.mock.sentMessages, []);
+  assert.deepEqual(current.mock.sentUserMessages, []);
+});

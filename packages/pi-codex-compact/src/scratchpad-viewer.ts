@@ -47,7 +47,10 @@ export async function showScratchpad(
     }
     const content = items.length
       ? items
-          .map((item) => `#${item.id}\nCreated: ${item.createdAt}\nUpdated: ${item.updatedAt}\n\n${item.text}`)
+          .map(
+            (item) =>
+              `#${item.id}\nCreated: ${item.createdAt}\nUpdated: ${item.updatedAt}\n\n${item.summary !== undefined ? `Summary: ${item.summary}\n\nFull note:\n` : ""}${item.text}`,
+          )
           .join("\n\n────────────────────\n\n")
       : "No scratchpad notes for this session yet.";
     // Keep line breaks, but strip terminal sequences/control bytes before layout.

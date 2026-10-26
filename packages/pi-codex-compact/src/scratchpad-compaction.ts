@@ -1,7 +1,8 @@
 import { ScratchpadError, type ScratchpadExecutionOptions, ScratchpadStore } from "./scratchpad-store.js";
 
-/** The complete serialized snapshot must fit; partial snapshots never enable omission. */
+/** Every item is represented; an oversized projection never enables omission. */
 export const SCRATCHPAD_COMPACTION_BYTE_BUDGET = 16 * 1024;
+export const SCRATCHPAD_COMPACTION_FULL_TEXT_BYTES = 2 * 1024;
 
 export type ScratchpadCompactionSnapshot =
   | { kind: "ready"; text: string; itemCount: number; redactionValues: string[] }
@@ -13,8 +14,19 @@ export async function captureScratchpadForCompaction(
   options: ScratchpadExecutionOptions & { store?: ScratchpadStore } = {},
 ): Promise<ScratchpadCompactionSnapshot> {
   try {
-    const items = await (options.store ?? new ScratchpadStore()).readSnapshot(sessionId, options);
-    if (items.length === 0) return { kind: "empty" };
+    const notes = await (options.store ?? new ScratchpadStore()).readSnapshot(sessionId, options);
+    if (notes.length === 0) return { kind: "empty" };
+    const items = notes.map(({ id, text, summary, createdAt, updatedAt }) => {
+      const summarized =
+        Buffer.byteLength(text, "utf8") > SCRATCHPAD_COMPACTION_FULL_TEXT_BYTES && summary !== undefined;
+      return {
+        id,
+        representation: summarized ? "summary" : "full",
+        text: summarized ? summary : text,
+        createdAt,
+        updatedAt,
+      };
+    });
     const text = JSON.stringify({ items });
     if (Buffer.byteLength(text, "utf8") > SCRATCHPAD_COMPACTION_BYTE_BUDGET)
       return { kind: "unavailable", reason: "oversized" };
@@ -24,7 +36,14 @@ export async function captureScratchpadForCompaction(
       itemCount: items.length,
       // Cover both provider prose and JSON-escaped echoes without logging either.
       redactionValues: [
-        ...new Set([text, ...items.flatMap((item) => [item.text, JSON.stringify(item.text).slice(1, -1)])]),
+        ...new Set([
+          text,
+          ...notes.flatMap((item) =>
+            [item.text, item.summary]
+              .filter((value): value is string => value !== undefined)
+              .flatMap((value) => [value, JSON.stringify(value).slice(1, -1)]),
+          ),
+        ]),
       ],
     };
   } catch (error) {

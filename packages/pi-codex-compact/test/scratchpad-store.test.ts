@@ -284,3 +284,93 @@ test("rejects action-inapplicable fields rather than silently ignoring them", as
     await assert.rejects(store.execute("session-a", request), errorCode("INVALID_INPUT"));
   assert.deepEqual(await readdir(directory), []);
 });
+
+test("semantic summaries round-trip independently of previews, with stable IDs and timestamps", async () => {
+  const { store, path, advance } = await fixture();
+  const text = "Full details ".repeat(250);
+  await store.execute("session-a", { action: "add", items: [{ text, summary: "A concise semantic summary." }] });
+  const before = await readFile(path, "utf8");
+  for (const view of ["full", "summary"] as const) {
+    const result = await store.execute("session-a", { action: "read", view });
+    assert.equal(result.action, "read");
+    if (result.action !== "read") return;
+    const item = result.items[0];
+    assert.ok("summary" in item);
+    assert.equal(item.summary, "A concise semantic summary.");
+    assert.equal("summaryTextHash" in item, false);
+    if (view === "full") assert.equal((item as { text: string }).text, text);
+    else assert.equal((item as { preview: string }).preview, text.slice(0, 200));
+  }
+  assert.equal(await readFile(path, "utf8"), before);
+  advance();
+  await store.execute("session-a", { action: "update", items: [{ id: 1, summary: "Updated summary." }] });
+  let [item] = await store.readSnapshot("session-a");
+  assert.equal(item.text, text);
+  assert.equal(item.summary, "Updated summary.");
+  assert.equal(item.createdAt, "2026-10-25T09:00:00.000Z");
+  assert.equal(item.updatedAt, "2026-10-25T10:00:00.000Z");
+  await store.execute("session-a", { action: "update", items: [{ id: 1, summary: null }] });
+  [item] = await store.readSnapshot("session-a");
+  assert.equal(item.summary, undefined);
+  assert.equal(JSON.parse(await readFile(path, "utf8")).items[0].summaryTextHash, undefined);
+});
+
+test("text changes invalidate summaries, same-text updates preserve them, replacements bind atomically", async () => {
+  const { store, path } = await fixture();
+  await store.execute("session-a", { action: "add", items: [{ text: "Original", summary: "Summary" }] });
+  const before = await readFile(path, "utf8");
+  await store.execute("session-a", { action: "update", items: [{ id: 1, text: "Original" }] });
+  assert.equal(await readFile(path, "utf8"), before);
+  await store.execute("session-a", { action: "update", items: [{ id: 1, text: "Changed" }] });
+  assert.equal((await store.readSnapshot("session-a"))[0].summary, undefined);
+  await store.execute("session-a", { action: "update", items: [{ id: 1, text: "New", summary: "New summary" }] });
+  assert.equal((await store.readSnapshot("session-a"))[0].summary, "New summary");
+  const saved = JSON.parse(await readFile(path, "utf8"));
+  assert.match(saved.items[0].summaryTextHash, /^[a-f0-9]{64}$/);
+});
+
+test("older-client or direct text changes and unbound summaries cannot expose a stale summary", async () => {
+  const { store, path } = await fixture();
+  await store.execute("session-a", { action: "add", items: [{ text: "Original", summary: "Old summary" }] });
+  const saved = JSON.parse(await readFile(path, "utf8"));
+  saved.items[0].text = "Changed by an older client retaining unknown fields";
+  for (const hash of [saved.items[0].summaryTextHash, undefined]) {
+    saved.items[0].summaryTextHash = hash;
+    const raw = JSON.stringify(saved);
+    await writeFile(path, raw);
+    assert.equal((await store.readSnapshot("session-a"))[0].summary, undefined);
+    const read = await store.execute("session-a", { action: "read", view: "summary" });
+    assert.doesNotMatch(JSON.stringify(read), /Old summary/);
+    assert.equal(await readFile(path, "utf8"), raw);
+  }
+  await store.execute("session-a", { action: "update", items: [{ id: 1, summary: "Fresh summary" }] });
+  assert.equal((await store.readSnapshot("session-a"))[0].summary, "Fresh summary");
+});
+
+test("summary validation uses UTF-8 bytes and rejects an entire invalid mutation batch", async () => {
+  const { store, path } = await fixture();
+  await store.execute("session-a", { action: "add", items: [{ text: "Note", summary: "🙂".repeat(256) }] });
+  const before = await readFile(path, "utf8");
+  for (const request of [
+    { action: "add", items: [{ text: "Another", summary: "🙂".repeat(257) }] },
+    { action: "update", items: [{ id: 1, summary: "x".repeat(1025) }] },
+  ])
+    await assert.rejects(store.execute("session-a", request), errorCode("LIMIT_EXCEEDED"));
+  for (const request of [
+    { action: "add", texts: ["Legacy"], items: [{ text: "New" }] },
+    { action: "add", items: [{ text: "New", summary: null }] },
+    { action: "add", items: [{ id: 2, text: "New" }] },
+    { action: "add", items: [{ text: "New", summaryTextHash: "forged" }] },
+    { action: "update", items: [{ id: 1 }] },
+    {
+      action: "update",
+      items: [
+        { id: 1, text: "Valid" },
+        { id: 2, summary: " " },
+      ],
+    },
+    { action: "update", items: [{ id: 1, summary: 5 }] },
+  ])
+    await assert.rejects(store.execute("session-a", request), errorCode("INVALID_INPUT"));
+  assert.equal(await readFile(path, "utf8"), before);
+});

@@ -1050,6 +1050,8 @@ for (const protocol of ["remote-v2", "context-management"] as const) {
 
 for (const mode of [
   "both",
+  "summary",
+  "summary-error-echo",
   "scratchpad-off",
   "append-off",
   "both-off",
@@ -1069,6 +1071,12 @@ for (const mode of [
         action: "add",
         texts: mode === "oversized" ? ["a".repeat(8000), "b".repeat(8000), "c".repeat(1000)] : [privateText],
       });
+      const useSummary = mode === "summary" || mode === "summary-error-echo";
+      if (useSummary)
+        await store.execute("session", {
+          action: "update",
+          items: [{ id: 1, text: "FULL unseen detail ".repeat(200), summary: "PRIVATE semantic summary" }],
+        });
       if (mode === "invalid") await writeFile(join(directory, "scratchpads", "session.json"), "INVALID PRIVATE FILE");
       const mock = createMockPi();
       let payload: unknown;
@@ -1115,18 +1123,20 @@ for (const mode of [
               model,
               (value) => {
                 payload ??= value;
-                if (mode === "error-echo" || mode === "recovery-error-echo")
-                  throw new Error("Provider echoed PRIVATE saved detail");
+                if (mode === "error-echo" || mode === "summary-error-echo" || mode === "recovery-error-echo")
+                  throw new Error(
+                    useSummary ? "Provider echoed PRIVATE semantic summary" : "Provider echoed PRIVATE saved detail",
+                  );
               },
               "context-management",
             ),
         },
       });
       const result = await mock.events.get("session_before_compact")?.[0]?.(event(undefined, entries), ctx);
-      if (mode === "error-echo" || mode === "recovery-error-echo") {
-        if (mode === "error-echo") assert.equal(result, undefined);
+      if (mode === "error-echo" || mode === "summary-error-echo" || mode === "recovery-error-echo") {
+        if (mode === "error-echo" || mode === "summary-error-echo") assert.equal(result, undefined);
         assert.match(JSON.stringify(notifications), /checkpoint preparation failed/);
-        assert.doesNotMatch(JSON.stringify(notifications), /PRIVATE saved detail/);
+        assert.doesNotMatch(JSON.stringify(notifications), /PRIVATE saved detail|PRIVATE semantic summary/);
         if (mode === "recovery-error-echo")
           assert.match(JSON.stringify(notifications), /Checkpoint recovery could not complete/, JSON.stringify(result));
       } else assert.ok(result && typeof result === "object" && "compaction" in result, JSON.stringify(notifications));
@@ -1134,12 +1144,18 @@ for (const mode of [
       const inputText = JSON.stringify(payload);
       assert.equal(
         inputText.includes("PI_SCRATCHPAD_SNAPSHOT_V1"),
-        mode === "both" || mode === "error-echo" || mode === "recovery-error-echo",
+        mode === "both" || useSummary || mode === "error-echo" || mode === "recovery-error-echo",
       );
       assert.equal(inputText.includes("CUSTOM preserved instruction"), mode !== "append-off" && mode !== "both-off");
+      if (useSummary) {
+        assert.match(inputText, /PRIVATE semantic summary/);
+        assert.doesNotMatch(inputText, /FULL unseen detail/);
+        assert.match(inputText, /not the full notes/);
+        assert.equal((await store.readSnapshot("session"))[0].text, "FULL unseen detail ".repeat(200));
+      }
       if (mode === "invalid" || mode === "oversized") {
         assert.match(JSON.stringify(notifications), /Scratchpad omitted/);
-        assert.doesNotMatch(inputText, /avoid repeating unchanged details/);
+        assert.doesNotMatch(inputText, /avoid repeating only unchanged facts/);
       }
       assert.doesNotMatch(JSON.stringify(entries), /PRIVATE saved detail|PI_SCRATCHPAD/);
     } finally {

@@ -40,7 +40,7 @@ test("capture includes every item beyond the tool page limit without truncation"
   assert.equal(snapshot.itemCount, 110);
   const { items } = JSON.parse(snapshot.text);
   assert.equal(items.length, 110);
-  assert.deepEqual(items.at(-1), { id: 110, text: "more", createdAt: time, updatedAt: time });
+  assert.deepEqual(items.at(-1), { id: 110, representation: "full", text: "more", createdAt: time, updatedAt: time });
 });
 
 test("capture is queued behind pending writes and remains unchanged by later edits", async () => {
@@ -65,7 +65,7 @@ test("capture is queued behind pending writes and remains unchanged by later edi
 
 test("serialized-byte budget accepts the complete boundary and rejects one extra byte", async () => {
   const { store, path } = await fixture();
-  const empty = [1, 2].map((id) => ({ id, text: "", createdAt: time, updatedAt: time }));
+  const empty = [1, 2].map((id) => ({ id, representation: "full", text: "", createdAt: time, updatedAt: time }));
   const overhead = Buffer.byteLength(JSON.stringify({ items: empty }), "utf8");
   await store.execute("session-a", {
     action: "add",
@@ -125,4 +125,73 @@ test("cancellation and changed ownership propagate instead of enabling a fallbac
       (error: unknown) => error instanceof ScratchpadError && error.code === code,
     );
   }
+});
+
+test("compaction uses semantic summaries only beyond the 2 KiB UTF-8 boundary and preserves full notes", async () => {
+  const { store, path } = await fixture();
+  const entries = [
+    { text: "🙂".repeat(512), summary: "At threshold: keep full." },
+    { text: `${"🙂".repeat(512)}x`, summary: 'Compact "summary"\nwith reference.' },
+    { text: "l".repeat(3000) },
+  ] as const;
+  await store.execute("session-a", { action: "add", items: entries });
+  const before = await readFile(path, "utf8");
+  const snapshot = await captureScratchpadForCompaction("session-a", { store });
+  assert.equal(snapshot.kind, "ready");
+  if (snapshot.kind !== "ready") return;
+  const { items } = JSON.parse(snapshot.text);
+  assert.deepEqual(
+    items.map((item: { representation: string }) => item.representation),
+    ["full", "summary", "full"],
+  );
+  assert.deepEqual(
+    items.map((item: { text: string }) => item.text),
+    [entries[0].text, entries[1].summary, entries[2].text],
+  );
+  assert.equal(snapshot.text.includes("summaryTextHash"), false);
+  for (const value of [entries[1].text, entries[1].summary]) {
+    assert.ok(snapshot.redactionValues.includes(value));
+    assert.ok(snapshot.redactionValues.includes(JSON.stringify(value).slice(1, -1)));
+  }
+  assert.equal(await readFile(path, "utf8"), before);
+  assert.equal((await store.readSnapshot("session-a"))[1].text, entries[1].text);
+});
+
+test("stale summaries fall back to full text without truncation or mutations", async () => {
+  const { store, path } = await fixture();
+  await store.execute("session-a", { action: "add", items: [{ text: "a".repeat(3000), summary: "Old summary" }] });
+  const document = JSON.parse(await readFile(path, "utf8"));
+  document.items[0].text = "b".repeat(4000);
+  const raw = JSON.stringify(document);
+  await writeFile(path, raw);
+  const snapshot = await captureScratchpadForCompaction("session-a", { store });
+  assert.equal(snapshot.kind, "ready");
+  if (snapshot.kind !== "ready") return;
+  const [item] = JSON.parse(snapshot.text).items;
+  assert.equal(item.representation, "full");
+  assert.equal(item.text, document.items[0].text);
+  assert.equal(snapshot.text.includes("Old summary"), false);
+  assert.equal(await readFile(path, "utf8"), raw);
+});
+
+test("summaries can make a complete snapshot fit, but total overflow still disables deduplication", async () => {
+  const { store } = await fixture();
+  await store.execute("session-a", {
+    action: "add",
+    items: Array.from({ length: 8 }, () => ({
+      text: "x".repeat(8000),
+      summary: "Verified progress; remaining blocker.",
+    })),
+  });
+  const snapshot = await captureScratchpadForCompaction("session-a", { store });
+  assert.equal(snapshot.kind, "ready");
+  if (snapshot.kind === "ready") assert.equal(JSON.parse(snapshot.text).items.length, 8);
+  await store.execute("session-a", {
+    action: "add",
+    items: Array.from({ length: 20 }, () => ({ text: "x".repeat(8000), summary: "s".repeat(1024) })),
+  });
+  assert.deepEqual(await captureScratchpadForCompaction("session-a", { store }), {
+    kind: "unavailable",
+    reason: "oversized",
+  });
 });
