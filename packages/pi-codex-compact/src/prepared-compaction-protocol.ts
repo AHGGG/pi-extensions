@@ -49,7 +49,14 @@ export interface CheckpointPreparation {
   readonly requestTimeoutMs: number;
   readonly reason?: string;
   isCurrent(): boolean;
-  start(guard: ApplicationGuard & { ownsStatus(): boolean; deadlineSignal?: AbortSignal }): Promise<PreparedCheckpoint>;
+  start(
+    guard: ApplicationGuard & {
+      ownsStatus(): boolean;
+      deadlineSignal?: AbortSignal;
+      /** Consumer will display the final preparation failure and diagnostics together. */
+      failureReportOwner?: "consumer";
+    },
+  ): Promise<PreparedCheckpoint>;
 }
 export type PreparedSourceResult =
   | { kind: "absent" }

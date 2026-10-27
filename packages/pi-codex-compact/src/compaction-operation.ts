@@ -55,6 +55,7 @@ export interface CompactionOperationOptions {
   preparation?: {
     attempt: CompactionAttempt;
     branchIsCurrent: (current: SessionBeforeCompactEvent["branchEntries"]) => boolean;
+    failureReportOwner?: "consumer";
   };
   deadlineSignal?: AbortSignal;
   onDiagnostics?: (diagnostics: RequestDiagnostics) => void;
@@ -642,8 +643,14 @@ export async function compactRemotely(
     }
   } finally {
     diagnostics.finish(outcome, failureDetail);
-    if ((remoteAttempted || (!paused && failureDetail !== "none")) && ctx.hasUI && stillCurrent()) {
-      diagnostics.callerAbort ||= event.signal.aborted;
+    diagnostics.callerAbort ||= event.signal.aborted;
+    const consumerReportsFailure = options.preparation?.failureReportOwner === "consumer" && outcome === "failed";
+    if (
+      !consumerReportsFailure &&
+      (remoteAttempted || (!paused && failureDetail !== "none")) &&
+      ctx.hasUI &&
+      stillCurrent()
+    ) {
       diagnostics.seal();
       ctx.ui.notify(
         `[codex-compact] Compaction outcome=${outcome}; operationMs=${Math.floor(performance.now() - operationStarted)} validationMs=${Math.floor(validationMs)}; ${diagnostics.summary()}${failureDetail !== "none" || diagnostics.hadStreamRetry ? `\nstreamOutcome=${diagnostics.hadStreamRetry && (outcome === "prepared" || outcome === "ready") ? "recovered-after-retry" : outcome === "recovered" ? "failed-recovered-via-readable" : "failed"} failure=${failureDetail}\n${diagnostics.report()}` : ""}`,

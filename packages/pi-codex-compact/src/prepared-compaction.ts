@@ -156,7 +156,7 @@ export function captureCheckpointPreparation(
         onRouteResolved,
         fetch,
         {
-          preparation: { attempt, branchIsCurrent },
+          preparation: { attempt, branchIsCurrent, failureReportOwner: guard.failureReportOwner },
           deadlineSignal: guard.deadlineSignal,
           onDiagnostics: (value) => {
             diagnostics = value;

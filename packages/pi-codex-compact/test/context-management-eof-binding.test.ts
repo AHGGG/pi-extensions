@@ -193,32 +193,38 @@ for (const [mode, expectedUsable, expectedReports] of [
   ["always-eof", false, 1],
   ["healthy", true, 0],
 ] as const) {
-  test(`${mode} automatically prints the bounded full report exactly when needed`, async () => {
-    const h = await fixture(mode);
-    vi.useFakeTimers();
-    try {
-      const pending = h.preparation.start({
-        signal: h.controller.signal,
-        isCurrent: () => true,
-        ownsStatus: () => true,
-      });
-      await vi.advanceTimersByTimeAsync(300);
-      const result = await pending;
-      assert.equal(result.usable, expectedUsable);
-      const reports = h.mockCtx.notifications.filter(({ message }) =>
-        message.includes("Compaction diagnostics schema=2"),
-      );
-      assert.equal(reports.length, expectedReports);
-      if (mode === "retry-success") assert.match(reports[0].message, /streamOutcome=recovered-after-retry/);
-      if (mode === "always-eof") assert.match(reports[0].message, /streamOutcome=failed/);
-      if (expectedReports) {
-        assert.match(reports[0].message, /attempt=1[\s\S]*attempt=2/);
-        assert.doesNotMatch(reports[0].message, /fixture-initial-token|History to compact|complete-second-attempt/);
+  for (const owner of [undefined, "consumer"] as const)
+    test(`${mode} automatic reporting with owner ${owner ?? "producer"}`, async () => {
+      const h = await fixture(mode);
+      vi.useFakeTimers();
+      try {
+        const pending = h.preparation.start({
+          signal: h.controller.signal,
+          isCurrent: () => true,
+          ownsStatus: () => true,
+          failureReportOwner: owner,
+        });
+        await vi.advanceTimersByTimeAsync(300);
+        const result = await pending;
+        assert.equal(result.usable, expectedUsable);
+        const reports = h.mockCtx.notifications.filter(({ message }) =>
+          message.includes("Compaction diagnostics schema=2"),
+        );
+        const reportCount = owner === "consumer" && !expectedUsable ? 0 : expectedReports;
+        assert.equal(reports.length, reportCount);
+        const snapshot = h.preparation.diagnostics?.();
+        assert.ok(snapshot?.report);
+        if (!expectedUsable) assert.match(snapshot.report, /outcome=failed/);
+        if (mode === "retry-success") assert.match(reports[0].message, /streamOutcome=recovered-after-retry/);
+        if (mode === "always-eof" && reportCount) assert.match(reports[0].message, /streamOutcome=failed/);
+        if (reportCount) {
+          assert.match(reports[0].message, /attempt=1[\s\S]*attempt=2/);
+          assert.doesNotMatch(reports[0].message, /fixture-initial-token|History to compact|complete-second-attempt/);
+        }
+      } finally {
+        vi.useRealTimers();
       }
-    } finally {
-      vi.useRealTimers();
-    }
-  });
+    });
 }
 
 test("pre-dispatch authentication rejection automatically reports zero HTTP attempts without error prose", async () => {
@@ -264,3 +270,35 @@ test("background deadline is reported separately from caller cancellation", asyn
     vi.useRealTimers();
   }
 });
+
+for (const failure of ["auth", "deadline"] as const)
+  test(`consumer owns ${failure} preparation failure but receives finalized diagnostics`, async () => {
+    const h = await fixture(failure === "deadline" ? "hung" : "healthy");
+    const deadline = new AbortController();
+    if (failure === "auth") h.state.authError = "private-auth-error";
+    vi.useFakeTimers();
+    try {
+      const pending = h.preparation.start({
+        signal: h.controller.signal,
+        deadlineSignal: deadline.signal,
+        isCurrent: () => true,
+        ownsStatus: () => false,
+        failureReportOwner: "consumer",
+      });
+      await vi.advanceTimersByTimeAsync(1);
+      if (failure === "deadline") deadline.abort(new Error("deadline"));
+      await vi.advanceTimersByTimeAsync(1);
+      const result = await pending;
+      assert.equal(result.usable, false);
+      assert.equal(
+        h.mockCtx.notifications.filter(({ message }) => message.includes("Compaction diagnostics")).length,
+        0,
+      );
+      const report = h.preparation.diagnostics?.().report ?? "";
+      assert.match(report, /outcome=failed/);
+      assert.match(report, failure === "auth" ? /attempts=0/ : /abort\(d\/c\/p\)=1\/0\//);
+      assert.doesNotMatch(report, /private-auth-error|fixture-initial-token/);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
