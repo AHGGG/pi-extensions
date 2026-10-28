@@ -12,10 +12,25 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { abortable } from "./abortable.js";
 import type { AutoCompactionProtocols } from "./auto-protocol.js";
-import { createCheckpointDetails, fallbackSummary, latestCheckpoint, parseCheckpointDetails } from "./checkpoint.js";
-import { checkpointKeptMessages, projectSessionCheckpointContext } from "./checkpoint-projection.js";
+import {
+  createCheckpointDetails,
+  fallbackSummary,
+  fingerprintMessage,
+  latestCheckpoint,
+  parseCheckpointDetails,
+} from "./checkpoint.js";
+import {
+  checkpointKeptMessages,
+  projectedKeptMessages,
+  projectSessionCheckpointContext,
+} from "./checkpoint-projection.js";
 import { compactionBindingChanges, resolveCompactionBinding, sameCompactionBinding } from "./compaction-binding.js";
-import { activeTools, type CompactionAttempt, compactRemotely } from "./compaction-operation.js";
+import {
+  activeTools,
+  type CompactionAttempt,
+  compactRemotely,
+  projectedCurrentMessages,
+} from "./compaction-operation.js";
 import {
   captureCompactionBranch,
   captureExactCompactionBranch,
@@ -27,6 +42,7 @@ import type { CheckpointPreparation, PreparedCheckpoint } from "./prepared-compa
 import { type RejectedRoutes, rejectionRouteKey } from "./rejection-state.js";
 import type { RequestDiagnostics } from "./request-diagnostics.js";
 import { type CodexCompactSettingsRuntime, compactionSettingsKey } from "./settings.js";
+import { matchedToolPairs, parseTextSummaryDetails, textSummaryCut, textSummaryReserve } from "./text-summary.js";
 
 type CompactionResult = Awaited<ReturnType<typeof compactRemotely>>;
 
@@ -60,7 +76,7 @@ export function captureCheckpointPreparation(
     !model ||
     route.kind !== "remote" ||
     ownerSignal.aborted ||
-    rejected.hasObserved(rejectionRouteKey(model, route))
+    (settings.compactionMode !== "text-summary" && rejected.hasObserved(rejectionRouteKey(model, route)))
   )
     return undefined;
   const usage = ctx.getContextUsage();
@@ -86,7 +102,17 @@ export function captureCheckpointPreparation(
   const first = projection.entries.find(({ messages }) => messages.some((message) => message.role !== "system"));
   if (!snapshotLeafId || !first || !completeToolPairs(buildSessionContext(snapshot, snapshotLeafId).messages))
     return undefined;
-  const firstKeptEntryId = first.sourceEntry.id;
+  let firstKeptEntryId = first.sourceEntry.id;
+  if (settings.compactionMode === "text-summary") {
+    try {
+      const current = projectedCurrentMessages({ branchEntries: snapshot } as SessionBeforeCompactEvent, route);
+      const cut = textSummaryCut(snapshot, current.messages);
+      if (!cut) return undefined;
+      firstKeptEntryId = cut.firstKeptEntryId;
+    } catch {
+      return undefined;
+    }
+  }
   const settingsKey = compactionSettingsKey(settings);
   const modelKey = JSON.stringify(model);
   const systemPrompt = ctx.getSystemPrompt();
@@ -142,7 +168,11 @@ export function captureCheckpointPreparation(
           isSplitTurn: false,
           tokensBefore: usage.tokens ?? 0,
           fileOps: { read: new Set(), written: new Set(), edited: new Set() },
-          settings: { enabled: true, reserveTokens: 0, keepRecentTokens: 0 },
+          settings: {
+            enabled: true,
+            reserveTokens: settings.compactionMode === "text-summary" ? 16_000 : 0,
+            keepRecentTokens: 0,
+          },
         },
       };
       const preparationStarted = performance.now();
@@ -201,10 +231,13 @@ function createPreparedCheckpoint(
 ): PreparedCheckpoint {
   const data: PreparedData = { result, preparationMs, attempt, snapshotLeafId, promptAndToolsTokens, isCurrent };
   const details = result && "compaction" in result ? parseCheckpointDetails(result.compaction?.details) : undefined;
+  const textDetails =
+    result && "compaction" in result ? parseTextSummaryDetails(result.compaction?.details) : undefined;
+  const resultId = details?.checkpointId ?? textDetails?.resultId;
   return {
-    checkpointId: details?.checkpointId,
-    usable: !!details,
-    failure: details ? undefined : (attempt.failure?.diagnostic ?? "checkpoint preparation failed"),
+    checkpointId: resultId,
+    usable: !!resultId,
+    failure: resultId ? undefined : (attempt.failure?.diagnostic ?? "checkpoint preparation failed"),
     async adopt(event, ctx, guard) {
       data.validationFailure = undefined;
       data.applicationFailure = undefined;
@@ -227,7 +260,7 @@ function createPreparedCheckpoint(
       });
       return {
         draft,
-        checkpointId: details?.checkpointId,
+        checkpointId: resultId,
         reason: data.validationFailure,
         failure: !!data.applicationFailure,
       };
@@ -327,26 +360,50 @@ async function adoptPreparedCheckpoint(
       const nativeCutIndex = entries.findIndex((entry) => entry.id === event.preparation.firstKeptEntryId);
       if (nativeCutIndex < 0) return stale("retained-message cut point is absent from the session");
       const firstSuffix = suffix.find(({ messages }) => messages.length > 0);
-      const firstKeptEntryId =
-        firstSuffix && entries.findIndex((entry) => entry.id === firstSuffix.sourceEntry.id) < nativeCutIndex
+      const textDetails = parseTextSummaryDetails(result.compaction.details);
+      const firstKeptEntryId = textDetails
+        ? result.compaction.firstKeptEntryId
+        : firstSuffix && entries.findIndex((entry) => entry.id === firstSuffix.sourceEntry.id) < nativeCutIndex
           ? firstSuffix.sourceEntry.id
           : event.preparation.firstKeptEntryId;
       const details = parseCheckpointDetails(result.compaction.details);
-      if (!details) return stale("prepared checkpoint details are invalid", true);
+      if (!details && !textDetails) return stale("prepared compaction details are invalid", true);
       // A large untouched tail can erase the benefit. Use the current-history foreground
       // path instead of truncating it or immediately overflowing the adopted checkpoint.
-      const replacementTokens = Math.ceil(JSON.stringify(details.replacementHistory).length / 4);
-      const suffixTokens = suffix
-        .flatMap(({ messages }) => messages)
-        .reduce((sum, message) => sum + estimateTokens(message), 0);
+      const replacementTokens = Math.ceil(
+        (details ? JSON.stringify(details.replacementHistory) : result.compaction.summary).length / 4,
+      );
+      const retained = textDetails
+        ? projectedKeptMessages(entries, leafId, firstKeptEntryId)
+        : suffix.flatMap(({ messages }) => messages);
+      const suffixTokens = retained.reduce((sum, message) => sum + estimateTokens(message), 0);
       const estimatedTokens = replacementTokens + suffixTokens + prepared.promptAndToolsTokens;
-      if (estimatedTokens >= ctx.model.contextWindow - event.preparation.settings.reserveTokens) {
+      const reserveTokens = textDetails
+        ? textSummaryReserve(ctx.model.contextWindow, event.preparation.settings.reserveTokens)
+        : event.preparation.settings.reserveTokens;
+      if (estimatedTokens >= ctx.model.contextWindow - reserveTokens) {
         const number = (value: number) => (Number.isFinite(value) ? String(value) : "unknown");
         return stale(
-          `token budget exceeded (estimated=${number(estimatedTokens)}, replacement=${number(replacementTokens)}, suffix=${number(suffixTokens)}, prompt/tools=${number(prepared.promptAndToolsTokens)}, context=${number(ctx.model.contextWindow)}, reserve=${number(event.preparation.settings.reserveTokens)})`,
+          `token budget exceeded (estimated=${number(estimatedTokens)}, replacement=${number(replacementTokens)}, suffix=${number(suffixTokens)}, prompt/tools=${number(prepared.promptAndToolsTokens)}, context=${number(ctx.model.contextWindow)}, reserve=${number(reserveTokens)})`,
           true,
         );
       }
+      if (textDetails) {
+        // The captured text summary excludes its fixed raw tail. Never move that
+        // cut later: all captured retained messages and every new suffix survive.
+        if (
+          !matchedToolPairs(retained) ||
+          !validateTextSummaryProjection(ctx, entries, result.compaction.summary, firstKeptEntryId, textDetails)
+        )
+          return stale("finalized text summary projection did not validate", true);
+        return {
+          kind: "ready",
+          result: {
+            compaction: { ...result.compaction, firstKeptEntryId, tokensBefore: event.preparation.tokensBefore },
+          },
+        };
+      }
+      if (!details) return stale("prepared checkpoint details are invalid", true);
       let keptMessages: AgentMessage[];
       try {
         keptMessages = checkpointKeptMessages(entries, leafId, firstKeptEntryId, prepared.snapshotLeafId);
@@ -457,6 +514,12 @@ async function preparedCheckpointDraft(
     if (!header) return reject("session header is unavailable");
     const preview = SessionManager.inMemory(ctx.cwd, undefined, [header, ...entries]);
     preview.appendCompaction(summary, firstKeptEntryId, 0, details, true, usage);
+    const textDetails = parseTextSummaryDetails(details);
+    if (textDetails) {
+      if (!validateTextSummaryProjection(ctx, entries, summary, firstKeptEntryId, textDetails))
+        return reject("finalized text summary projection did not validate", true);
+      return { type: "compaction", summary, firstKeptEntryId, details, usage };
+    }
     const checkpoint = latestCheckpoint(preview.getBranch());
     if (
       !checkpoint ||
@@ -476,4 +539,28 @@ async function preparedCheckpointDraft(
   } finally {
     options.timings?.record("preview", previewStarted);
   }
+}
+
+/** Check the actual Pi projection, not an approximation of its compaction semantics. */
+function validateTextSummaryProjection(
+  ctx: ExtensionContext,
+  entries: SessionEntry[],
+  summary: string,
+  firstKeptEntryId: string,
+  details: unknown,
+): boolean {
+  const header = ctx.sessionManager.getHeader();
+  if (!header) return false;
+  const expected = projectedKeptMessages(entries, entries.at(-1)?.id ?? null, firstKeptEntryId);
+  const preview = SessionManager.inMemory(ctx.cwd, undefined, [header, ...entries]);
+  preview.appendCompaction(summary, firstKeptEntryId, 0, details, true);
+  const projected = preview.buildSessionContext().messages;
+  const summaries = projected.filter((message) => message.role === "compactionSummary");
+  const actual = projected.filter((message) => message.role !== "system" && message.role !== "compactionSummary");
+  return (
+    summaries.length === 1 &&
+    summaries[0].summary === summary &&
+    actual.length === expected.length &&
+    actual.every((message, index) => fingerprintMessage(message) === fingerprintMessage(expected[index]))
+  );
 }

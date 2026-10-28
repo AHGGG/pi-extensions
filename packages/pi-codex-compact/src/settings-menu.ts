@@ -15,6 +15,7 @@ type Screen = "main" | "settings" | "invalid";
 type Action =
   | "compact-now"
   | "set-enabled"
+  | "set-mode"
   | "set-scratchpad"
   | "set-append-message"
   | "edit-maintenance-message"
@@ -60,6 +61,10 @@ function protocolLabel(protocol: CodexCompactSettings["protocol"]): string {
     case "context-management":
       return "Context Management (experimental)";
   }
+}
+
+function modeLabel(mode: CodexCompactSettings["compactionMode"]): string {
+  return mode === "text-summary" ? "Text summary" : "Provider checkpoint";
 }
 
 function lastProtocolLines(protocol: RemoteCompactionProtocol | undefined): string[] {
@@ -113,22 +118,29 @@ export function createCodexCompactMenu(
         kind: "actions",
         title: "Responses Compaction",
         lines: [
-          `Remote compaction: ${state.settings.enabled ? "On" : "Off"}`,
-          `Protocol setting: ${protocolLabel(state.settings.protocol)}`,
+          `Compaction and replay: ${state.settings.enabled ? "On" : "Off"}`,
+          `Compaction mode: ${modeLabel(state.settings.compactionMode)}`,
+          ...(state.settings.compactionMode === "provider-checkpoint"
+            ? [`Protocol setting: ${protocolLabel(state.settings.protocol)}`]
+            : ["Text summaries use normal Responses inference; the provider checkpoint protocol setting is unused."]),
           `Active model: ${safeText(options.status?.model ?? "none")}`,
           `Preferred route: ${safeText(compactRoute(state, options.status))}`,
-          ...(state.settings.enabled && options.status?.api === "openai-responses"
+          ...(state.settings.enabled &&
+          state.settings.compactionMode === "provider-checkpoint" &&
+          options.status?.api === "openai-responses"
             ? [
                 "For official OpenAI ChatGPT OAuth subscription-sharing, Remote V2 is unsupported. The effective route is Context Management (experimental), regardless of the preferred protocol.",
               ]
             : []),
-          ...lastProtocolLines(options.lastProtocol?.()),
+          ...(state.settings.compactionMode === "provider-checkpoint"
+            ? lastProtocolLines(options.lastProtocol?.())
+            : []),
           ...(state.settings.enabled && options.hasCheckpoint?.() && options.canReplayCheckpoint?.() === false
             ? [
                 "Direct opaque replay is unavailable. Compatible provider changes require issuer summary recovery; incompatible routes cancel.",
               ]
             : []),
-          ...(options.isPaused?.()
+          ...(state.settings.compactionMode === "provider-checkpoint" && options.isPaused?.()
             ? [
                 "Last observed remote operation paused after OAuth rejection; /reload retries it.",
                 options.hasCheckpoint?.()
@@ -167,11 +179,20 @@ export function createCodexCompactMenu(
         items: [
           {
             id: "enabled",
-            label: "Remote compaction",
-            description: "Use a supported Responses compaction protocol.",
+            label: "Compaction and replay",
+            description: "Enable the selected compaction mode and replay existing compatible provider checkpoints.",
             currentValue: state.settings.enabled ? "On" : "Off",
             values: ["On", "Off"],
             action: "set-enabled",
+          },
+          {
+            id: "compactionMode",
+            label: "Compaction mode",
+            description:
+              "Provider checkpoint preserves the existing behavior. Text summary (experimental) directly requests a readable summary; existing checkpoint replay stays enabled.",
+            currentValue: modeLabel(state.settings.compactionMode),
+            values: ["Provider checkpoint", "Text summary"],
+            action: "set-mode",
           },
           {
             id: "scratchpadEnabled",
@@ -186,7 +207,7 @@ export function createCodexCompactMenu(
             id: "protocol",
             label: "Protocol",
             description:
-              "Auto can try Context Management after a third-party Compact endpoint rejects the request; this can consume quota. Explicit proxy protocols stay fixed. Official OpenAI ChatGPT OAuth uses Context Management for every preference.",
+              "Used only in Provider checkpoint mode. Auto can try Context Management after a third-party Compact endpoint rejects the request; this can consume quota. Explicit proxy protocols stay fixed. Official OpenAI ChatGPT OAuth uses Context Management for every preference.",
             currentValue: protocolLabel(state.settings.protocol),
             values: ["Auto", "Remote V2", "Responses Compact", "Context Management (experimental)"],
             action: "set-protocol",
@@ -195,7 +216,7 @@ export function createCodexCompactMenu(
             id: "appendMaintenanceMessage",
             label: "Append maintenance message",
             description:
-              "Off omits the Context Management user message and scratchpad context in readable compaction recovery; recovery instructions are preserved.",
+              "Off omits the Context Management user message and scratchpad context in Text summary and recovery; summary instructions are preserved.",
             currentValue: state.settings.appendMaintenanceMessage ? "On" : "Off",
             values: ["On", "Off"],
             action: "set-append-message",
@@ -222,7 +243,7 @@ export function createCodexCompactMenu(
             id: "checkpointRecovery",
             label: "Checkpoint recovery",
             description:
-              "Summarize uses inference quota; on failure, Pi native may lose older context. Integrity failures cancel. Cancel preserves history without a summary request.",
+              "After Provider checkpoint failure, Summarize uses inference quota; on failure, Pi native may lose older context. Integrity failures cancel. Cancel preserves history without a summary request.",
             currentValue: state.settings.checkpointRecovery === "cancel" ? "Cancel" : "Summarize",
             values: ["Summarize", "Cancel"],
             action: "set-recovery",
@@ -230,7 +251,7 @@ export function createCodexCompactMenu(
           {
             id: "requestTimeoutMs",
             label: "Request timeout",
-            description: "Maximum time for the extension-owned remote compaction request.",
+            description: "Maximum time for the extension-owned checkpoint or text-summary request.",
             currentValue: timeoutLabel(state.settings.requestTimeoutMs),
             values: ["5 min", "10 min", "15 min", "20 min", "25 min", "30 min"],
             action: "set-timeout",
@@ -238,7 +259,7 @@ export function createCodexCompactMenu(
           {
             id: "maxRetries",
             label: "Transport retries",
-            description: "Retry transient provider failures before falling back to Pi.",
+            description: "Bound provider-opening retries. Text summary failure preserves history.",
             currentValue: String(state.settings.maxRetries),
             values: ["0", "1", "2"],
             action: "set-retries",
@@ -246,15 +267,16 @@ export function createCodexCompactMenu(
           {
             id: "replacementTokenBudget",
             label: "Replacement text budget",
-            description: "Approximate user-history budget, or a hard limit for Context Management output.",
+            description:
+              "Upper bound for replacement text, including text summaries; Context Management applies it to output.",
             currentValue: retentionLabel(state.settings.replacementTokenBudget),
             values: ["32K tokens", "64K tokens", "96K tokens", "128K tokens"],
             action: "set-retention",
           },
           {
             id: "notifyOnFallback",
-            label: "Fallback notifications",
-            description: "Warn when remote compaction fails and Pi native takes over.",
+            label: "Failure notifications",
+            description: "Warn on failed compaction and recovery; Text summary failure preserves history.",
             currentValue: state.settings.notifyOnFallback ? "On" : "Off",
             values: ["On", "Off"],
             action: "set-notify",
@@ -286,6 +308,8 @@ export function createCodexCompactMenu(
         return { kind: "close" };
       },
       "set-enabled": ({ ctx, value, signal }) => save(ctx, { enabled: value === "On" }, signal),
+      "set-mode": ({ ctx, value, signal }) =>
+        save(ctx, { compactionMode: value === "Text summary" ? "text-summary" : "provider-checkpoint" }, signal),
       "set-protocol": ({ ctx, value, signal }) =>
         save(
           ctx,
@@ -416,6 +440,7 @@ export function compactMenuStatus(ctx: ExtensionCommandContext): CompactMenuStat
 function compactRoute(state: Readonly<CodexCompactSettingsState>, status: CompactMenuStatus | undefined): string {
   const route = resolveCompactionRouteForApi(status?.api, state.settings);
   if (route.kind === "native") return `Pi native (${route.reason})`;
+  if (state.settings.compactionMode === "text-summary") return "Text summary through normal Responses inference";
   return route.protocol === "context-management"
     ? "Responses Context Management (experimental)"
     : route.protocol === "remote-v2"

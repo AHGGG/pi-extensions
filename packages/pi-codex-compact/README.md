@@ -2,17 +2,18 @@
 
 [![npm](https://img.shields.io/npm/v/@narumitw/pi-codex-compact)](https://www.npmjs.com/package/@narumitw/pi-codex-compact) [![Pi extension](https://img.shields.io/badge/Pi-extension-blue)](https://pi.dev) [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](./LICENSE)
 
-Use Responses compaction in Pi to replace older conversation context with an opaque server-generated checkpoint.
-The extension replays that checkpoint in later compatible requests. Pi still controls when conversation history is compacted.
+Replace older conversation context with a provider checkpoint or a text summary, including optional background preparation.
+Provider checkpoints replay through compatible Responses backends; text summaries become ordinary conversation context. Pi still controls foreground compaction, while an optional companion can prepare and apply results at safe boundaries.
 
 ## ✨ Features
 
 - Supports built-in Codex, OpenAI, and Azure OpenAI Responses APIs, plus explicitly configured custom APIs.
-- Offers Remote Compaction V2, unary `responses/compact`, and experimental streaming Context Management.
+- Offers Provider checkpoint mode with Remote Compaction V2, unary `responses/compact`, and experimental streaming Context Management.
+- Offers experimental Text summary mode through normal Responses inference, without a failed checkpoint request first.
 - Adapts verified official OpenAI ChatGPT OAuth requests to Context Management before dispatch, including Auto and V2 preferences.
 - Automatically tries Context Management when a third-party Responses Compact endpoint rejects Auto, and remembers validated success for the session.
 - Handles manual, threshold, and overflow compaction through Pi's normal lifecycle.
-- Exposes an optional prepared-checkpoint engine without scheduling speculative work itself.
+- Exposes an optional preparation engine for either mode without scheduling speculative work itself.
 - Preserves compatible checkpoints across repeated compaction, protocol changes, reloads, resumes, and forks.
 - Uses Pi-native fallback before the first checkpoint; afterward, tries checkpoint-aware recovery with lossy native fallback on recovery failure.
 - Pauses an operation rejected by OAuth without disabling compatible checkpoint replay.
@@ -82,15 +83,19 @@ Pi's built-in `/compact` uses the same compaction routing.
 Use `/codex-compact` → **Settings**, or edit the global JSON file at `<getAgentDir()>/pi-codex-compact.json` (normally `~/.pi/agent/pi-codex-compact.json`).
 There are no project or extension-specific environment-variable overrides. Missing fields use defaults.
 
-For example, select Remote V2 explicitly on a compatible backend:
+Provider checkpoint is the default mode. To request text summaries directly, select **Compaction mode → Text summary**, or save:
 
 ```json
 {
-  "protocol": "remote-v2"
+  "compactionMode": "text-summary"
 }
 ```
 
-With `auto`, verified official OpenAI ChatGPT OAuth uses Context Management; API-key OpenAI and Azure start with unary `responses/compact`, and legacy Codex uses Remote V2. Third-party `openai-responses` endpoints can automatically try Context Management after a Compact rejection; see [automatic proxy compatibility](#automatic-proxy-compatibility). The OAuth adaptation also applies to explicit V2 and Compact preferences. Remote V2 is unsupported on the current official `openai` ChatGPT OAuth subscription-sharing route: its `compaction_trigger` input is rejected. This is not a universal restriction on V2, API-key routes, or the separate Codex backend. Other APIs remain Pi-native unless explicitly configured. The menu reports the last resolved protocol after a compaction attempt without refreshing OAuth merely to display it.
+Keep **Compaction and replay** On when switching modes; this preserves access to existing opaque history. The `protocol` setting applies only to Provider checkpoint mode. Text summary is experimental and requires a supported Responses adapter, not a provider compaction endpoint.
+
+Background Text summary retains a minimal complete recent raw message group as Pi's compaction anchor, including any matching tool calls and results. The generated summary excludes that retained group. Application keeps it and all messages added after capture; no newer messages are silently dropped. If no safe nonempty prefix exists, preparation does not start.
+
+In Provider checkpoint mode, with `auto`, verified official OpenAI ChatGPT OAuth uses Context Management; API-key OpenAI and Azure start with unary `responses/compact`, and legacy Codex uses Remote V2. Third-party `openai-responses` endpoints can automatically try Context Management after a Compact rejection; see [automatic proxy compatibility](#automatic-proxy-compatibility). The OAuth adaptation also applies to explicit V2 and Compact preferences. Remote V2 is unsupported on the current official `openai` ChatGPT OAuth subscription-sharing route: its `compaction_trigger` input is rejected. This is not a universal restriction on V2, API-key routes, or the separate Codex backend. Other APIs remain Pi-native unless explicitly configured. The menu reports the last resolved protocol after a compaction attempt without refreshing OAuth merely to display it.
 
 New checkpoint summaries show preparation duration. Background checkpoints show preparation and apply-check durations separately, excluding the idle wait before adoption. Apply checks include draft preview validation, not Pi's persistence or UI work; these numbers are not the total user-visible pause. Existing checkpoint summaries are unchanged.
 
@@ -104,9 +109,9 @@ See the [settings reference](./docs/settings.md) for all fields, defaults, accep
 
 ## ✅ Requirements and compatibility
 
-You need compatible Pi peer APIs, working provider credentials, and a backend that supports both the selected compaction protocol and opaque checkpoint replay.
+You need compatible Pi peer APIs and working provider credentials. Provider checkpoint mode requires the selected compaction protocol and opaque checkpoint replay; Text summary mode requires normal Responses inference. Converting existing opaque history still requires its compatible issuing route.
 The model must use a built-in Responses API or a custom API explicitly mapped through `apiProfiles`.
-The provider adapter must honor Pi's public `onPayload` and injected `fetch` options; Context Management and summary recovery also need ordered `onProviderStreamEvent` callbacks.
+The provider adapter must honor Pi's public `onPayload` and injected `fetch` options; Context Management, Text summary, and summary recovery also need ordered `onProviderStreamEvent` callbacks.
 
 | Model API | `auto` route | Other selectable route |
 | --- | --- | --- |
@@ -126,11 +131,21 @@ For a third-party endpoint using `openai-responses` and `protocol: "auto"`, Comp
 
 A completed, validated checkpoint allows later Auto compactions in that session to use Context Management directly. The bounded in-memory observation is tied to the model, authentication, provider functions, maintenance settings, and exact dispatch URL digest. It clears on session start or reload, is not saved to settings, and is removed when Context Management fails. A backend changing during negotiation or cached dispatch cancels that operation and preserves history.
 
-If Context Management is rejected or produces no valid checkpoint, foreground compaction uses the existing native-summary or checkpoint-recovery policy. Background preparation remains checkpoint-only and pauses after failure; it does not publish ordinary assistant text as a checkpoint. A service supporting only ordinary Responses inference therefore uses foreground Pi summaries. No separate capability probes or Remote V2 guesses are made.
+In Provider checkpoint mode, if Context Management is rejected or produces no valid checkpoint, foreground compaction uses the existing native-summary or checkpoint-recovery policy. Background preparation pauses after failure; ordinary assistant text is never accepted as an opaque checkpoint. For a service supporting only ordinary Responses inference, select Text summary mode to prepare a summary directly. No separate capability probes or Remote V2 guesses are made.
 
 ### Prepared-compaction interface
 
-The engine exposes a documented, versioned [prepared-compaction protocol](./docs/prepared-compaction-protocol.md) over Pi's public event bus. Any compatible consumer can prepare a checkpoint and request safe application without private imports or package identity checks. No consumer is required for ordinary compaction, and this engine alone performs no speculative requests.
+The engine exposes a documented, versioned [prepared-compaction protocol](./docs/prepared-compaction-protocol.md) over Pi's public event bus. Any compatible consumer can prepare a provider checkpoint or text summary and request safe application without private imports or package identity checks. No consumer is required for ordinary compaction, and this engine alone performs no speculative requests.
+
+### Text summary mode
+
+Text summary uses a separate normal Responses request with a continuation-summary instruction and optional scratchpad context. It does not call a compaction endpoint or send `context_management`. Tool definitions remain available to the request, but tool execution is disabled. A completed, nonempty, bounded summary is required; failure or cancellation leaves current history unchanged rather than trying another compaction mode.
+
+With a compatible background companion, preparation captures the current history while the agent keeps working. **Apply when ready** can remain On: the companion applies the validated result at its next safe boundary. Only captured history is replaced; newer messages and tool results remain. Branch, model, settings, ownership, or captured-history changes invalidate stale work. The engine does not change the companion's saved threshold or auto-apply preference.
+
+The text is stored as a Pi compaction entry, not as a message the user typed. Pi presents it as summary context before retained messages. Existing provider checkpoints still need compatible replay for the first conversion, so leave **Compaction and replay** enabled. Summary generation is lossy and consumes quota; validation cannot prove every fact was preserved.
+
+Preparing does not rewrite the active conversation. Applying a summary intentionally starts a new conversation prefix, so the first subsequent request may reuse less cached input. Later requests can reuse the new summary prefix. Stable request fields help but do not guarantee cache hits. Provider checkpoints can also change cache reuse.
 
 ### Experimental Context Management
 
@@ -144,7 +159,7 @@ For a backend supporting [server-side compaction](https://developers.openai.com/
 
 This route was verified with Pi's **OpenAI → Sign in with ChatGPT**, `gpt-5.5`, and streaming `api.openai.com/v1/responses`: a checkpoint recovered an assistant-only synthetic fact without the original plaintext. This does not establish support for other accounts, models, Azure, Codex, or proxies.
 
-By default, compaction makes a separate inference request that asks for a concise work handoff, not a fixed `OK` reply. **Append maintenance message** can omit that user message, and **Maintenance message** can edit it or restore the built-in text. The maintenance text affects Context Management only; its append toggle also gates scratchpad context in extension-readable compaction recovery. The server compaction field, 1,024-token threshold, tools-disabled policy, and strict completion validation stay unchanged. The separate fallback recovery summary instruction and manual custom focus are preserved. Disabling or customizing the message is experimental and is not a proven fix for long-running EOF failures. Tools are disabled only for that maintenance request. Safe generated output is saved with the checkpoint, not displayed as new assistant work. Missing or unsafe output follows the fallback/recovery policy; very short history may not meet the server's 1,024-token threshold. Both maintenance and recovery can consume quota.
+By default, compaction makes a separate inference request that asks for a concise work handoff, not a fixed `OK` reply. **Append maintenance message** can omit that user message, and **Maintenance message** can edit it or restore the built-in text. The maintenance text affects Context Management only; its append toggle also gates scratchpad context in Text summary mode and extension-readable compaction recovery. The server compaction field, 1,024-token threshold, tools-disabled policy, and strict completion validation stay unchanged. The separate fallback recovery summary instruction and manual custom focus are preserved. Disabling or customizing the message is experimental and is not a proven fix for long-running EOF failures. Tools are disabled only for that maintenance request. Safe generated output is saved with the checkpoint, not displayed as new assistant work. Missing or unsafe output follows the fallback/recovery policy; very short history may not meet the server's 1,024-token threshold. Both maintenance and recovery can consume quota.
 
 After successful automatic compaction during a user run, work continues without another user message. Existing Pi retries and queued work are reused; otherwise, the extension can start one extra work request per user run, even if that request compacts again. Normal tools remain available, so the extra request can consume quota and execute actions. It asks the model not to repeat completed work, but cannot guarantee model compliance or task completion.
 
@@ -172,13 +187,13 @@ The extension reports the rejection and pauses that operation for the session ro
 
 Changing the protocol or backend can permit a new attempt; switching back to the rejected route remains paused. `/reload` or a new session clears the pause. Re-login or upgrading Pi is not a guaranteed remedy. See OpenAI's [inference](https://developers.openai.com/siwc/token-sharing-open-source/models-and-inference) and [errors and recovery](https://developers.openai.com/siwc/token-sharing-open-source/errors-and-recovery) guidance, plus the [route-pause details](./docs/implementation.md#oauth-rejection-state).
 
-**Turning Remote compaction off also disables opaque checkpoint replay.** Do this only for sessions that do not need an existing checkpoint. Otherwise, leave the extension enabled and use recovery; disabling it exposes only the fallback marker and recent messages.
+**Turning Compaction and replay off also disables opaque checkpoint replay.** Do this only for sessions that do not need an existing checkpoint. Otherwise, leave the extension enabled and use recovery; disabling it exposes only the fallback marker and recent messages.
 
 ### Checkpoint recovery
 
 Pi's native summary generator cannot read encrypted checkpoint history. Direct native fallback after a checkpoint can therefore lose older context.
 
-If a speculative preparation fails, the next actual compaction first makes **one fresh invisible checkpoint attempt** with current credentials and its own timeout. Configured bounded provider retries still apply. Only if this foreground attempt also fails does recovery below begin. A cancelled automatic-application claim starts no new inference, and OAuth-rejected routes remain paused.
+In Provider checkpoint mode, if a speculative preparation fails, the next actual compaction first makes **one fresh provider checkpoint attempt** with current credentials and its own timeout. Configured bounded provider retries still apply. Only if this foreground attempt also fails does recovery below begin. A cancelled automatic-application claim starts no new inference, and OAuth-rejected routes remain paused.
 
 After remote failure with a checkpoint, **Checkpoint recovery → Summarize** (the default) makes a normal inference request through the same compatible provider/model and Pi-managed credentials. It replays the checkpoint, disables tools, and replaces it with a bounded plaintext summary while retaining the recent tail and file metadata. This consumes quota and is lossy; successful validation cannot prove that every fact was preserved. Ordinary work requests do not receive recovery instructions.
 
@@ -192,20 +207,24 @@ Keep the extension enabled while the active session needs its checkpoint; recove
 
 ## 🧭 How it works
 
-Pi chooses when to compact and which recent messages to keep. The extension requests a checkpoint for older context, saves it in the session, and replays it alongside the retained messages on compatible requests. An optional companion may supply a previously prepared checkpoint through the [versioned engine protocol](./docs/prepared-compaction-protocol.md).
+Pi chooses when to compact and which recent messages to keep. The extension produces the selected result, saves it in the session, and uses it alongside retained messages. An optional companion may prepare either result in advance and apply it at a safe boundary through the [versioned engine protocol](./docs/prepared-compaction-protocol.md).
 
 ```mermaid
 flowchart LR
-    A[Pi starts compaction] --> B[Backend produces checkpoint]
-    B --> C[Save checkpoint and retain recent messages]
-    C --> D[Replay on compatible work requests]
+    A[Pi or companion requests compaction] --> B{Selected mode}
+    B --> C[Provider checkpoint]
+    B --> D[Text summary]
+    C --> E[Validate result and history]
+    D --> E
+    E --> F[Apply at a safe boundary and retain newer messages]
+    E --> G[On failure preserve history or follow checkpoint recovery policy]
 ```
 
-If a request fails, the extension uses native fallback before the first checkpoint or checkpoint-aware recovery afterward, with lossy native fallback if the recovery request fails. See the [implementation reference](./docs/implementation.md) for protocol fields, checkpoint validation, continuation, and legacy format handling.
+In Provider checkpoint mode, a request failure uses native fallback before the first checkpoint or checkpoint-aware recovery afterward, with lossy native fallback if the recovery request fails. Text summary failures preserve history. See the [implementation reference](./docs/implementation.md) for protocol fields, checkpoint validation, continuation, and legacy format handling.
 
 ## 🔒 Security and privacy
 
-Remote compaction sends conversation context and the system prompt to the configured Responses backend. Remote V2 and Context Management also send active tool schemas; Codex-profile unary requests retain provider-supported tools.
+Both modes send conversation context and the system prompt to the configured Responses backend. Remote V2 and Context Management also send active tool schemas; Codex-profile unary requests retain provider-supported tools.
 New checkpoints use format v4, including the snapshot cutoff for prepared checkpoints; v1–v3 checkpoints remain readable. Keep a v4-capable extension installed when resuming these sessions, because older versions cannot replay the new format.
 
 The session stores the provider ID, encrypted checkpoint, and bounded retained user items or Context Management output. It does not store credentials or authorization/request headers in checkpoint details.
@@ -229,14 +248,14 @@ Every dispatched compaction operation emits one bounded safe diagnostic summary 
 
 `terminal(c/d/i/f/e)` counts observed `response.completed`, `response.done`, `response.incomplete`, `response.failed`, and `error` events. `abort(d/c/p)` reports whether the extension deadline, caller signal, or provider-supplied fetch signal was observed aborted; overlapping flags are possible and do not identify a root cause. The caller signal can represent a prepared deadline or route cancellation, not just user cancellation. `body=eof` means the observed byte stream ended, not that a valid checkpoint completed; `pipe-error` can also mean downstream cancellation. `open` at the failure snapshot does not prove the socket is still open: asynchronous pipe teardown may not yet have settled. Counts describe the existing bounded stream observer, not network packets, and provider hooks may omit events rejected internally by the SDK. Per-attempt counters reset on retry; elapsed time and the attempt count cover the operation. A `-` means no observation was available.
 
-Prepared failure handles carry a shorter summary (`t` elapsed seconds, `n` attempts, `http` status, `term` and `abort` use the same order) so diagnostics survive bounded caller displays. The detailed stream milestones are available for Context Management and recovery; other protocols report the observations their provider exposes (unary Compact has no streamed output items). `kind=recovery` means ordinary summary inference, with `resolved` describing the originating compaction route, not a second server compaction. `milestones-ms(firstByte/firstEvent/firstCompaction/terminal/lastByte)` records offsets from the final HTTP attempt's dispatch. `items(compaction/reasoning/message/other)` counts only observed `response.output_item.done` categories, not terminal-array items. Stage milliseconds report binding (including auth), auth wait, context preparation, and collector validation; these overlap and must not be summed. The operation line separately reports total time (including recovery when used) and checkpoint replacement validation. `ready` means returned to Pi for application, and `prepared` means prepared for a caller; neither claims the checkpoint has been persisted. Consumer-owned adoption, Pi-native fallback, and separate cross-provider transfer timings are outside these summaries. Prompt text, including custom maintenance instructions, is never included in these summaries. The short summary describes the last HTTP attempt; the automatic failure report retains bounded prior-attempt snapshots, including event idle time. It does not create a persistent log file. The optional prepared-engine diagnostics snapshot supports live status and retained failure details in compatible consumers. A consumer that sets `failureReportOwner: "consumer"` receives a finalized snapshot without a separate engine notification for failed preparation; foreground reporting and recovered EOF reports are unchanged.
+Prepared failure handles carry a shorter summary (`t` elapsed seconds, `n` attempts, `http` status, `term` and `abort` use the same order) so diagnostics survive bounded caller displays. The detailed stream milestones are available for Context Management and recovery; other protocols report the observations their provider exposes (unary Compact has no streamed output items). `kind=text-summary` means direct summary inference; `kind=recovery` means fallback summary inference, with `resolved` describing the originating compaction route, not a second server compaction. `milestones-ms(firstByte/firstEvent/firstCompaction/terminal/lastByte)` records offsets from the final HTTP attempt's dispatch. `items(compaction/reasoning/message/other)` counts only observed `response.output_item.done` categories, not terminal-array items. Stage milliseconds report binding (including auth), auth wait, context preparation, and collector validation; these overlap and must not be summed. The operation line separately reports total time (including recovery when used) and checkpoint replacement validation. `ready` means returned to Pi for application, and `prepared` means prepared for a caller; neither claims the checkpoint has been persisted. Consumer-owned adoption, Pi-native fallback, and separate cross-provider transfer timings are outside these summaries. Prompt text, including custom maintenance instructions, is never included in these summaries. The short summary describes the last HTTP attempt; the automatic failure report retains bounded prior-attempt snapshots, including event idle time. It does not create a persistent log file. The optional prepared-engine diagnostics snapshot supports live status and retained failure details in compatible consumers. A consumer that sets `failureReportOwner: "consumer"` receives a finalized snapshot without a separate engine notification for failed preparation; foreground reporting and recovered EOF reports are unchanged.
 
 Long periods without bytes or parsed events produce an advisory snapshot after five minutes, not a new hard timeout: opaque compaction may legitimately be silent. Context Management retries a clean premature EOF once with a fresh collector after a short delay, sharing the original whole-request deadline. Provider-opening retries are separate; the normal agent retry setting does not govern this replay. Cancellation, changed ownership/provider binding, authentication errors, terminal failures, and invalid checkpoints are not retried. A failed retry preserves the existing foreground recovery path. Additional attempts may use provider quota. Diagnostics cannot determine which upstream component closed a stream by themselves.
 
 ## 🚧 Limitations
 
 - Backend compaction contracts and OAuth restrictions can change independently; keep backups of important sessions.
-- Older history requires this extension, a matching API/profile/model, and a backend that accepts the checkpoint. Removing the extension exposes only the fallback marker and recent messages.
+- Older opaque history requires this extension, a matching API/profile/model, and a backend that accepts the checkpoint. Removing the extension exposes only the fallback marker and recent messages.
 - The package does not reproduce Codex core's context-window lineage, previous-model fallback, exact pre-turn ordering, or exact mid-turn model-session ownership.
 - Pi's public tool metadata omits `constrainedSampling`; Remote V2 preserves active tool order, names, descriptions, and schemas but cannot reproduce that optional field.
 - Successful recovery replaces active opaque history with a lossy summary; native fallback after recovery failure cannot read opaque-only history. Raw session entries remain available, but rolling back the extension does not restore the active context. Use `/tree` before the required checkpoint or restore a transcript backup.
@@ -282,7 +301,7 @@ The generated runtime does not import back into `src`.
 
 ## 🔎 Keywords
 
-Pi extension, OpenAI Codex, ChatGPT OAuth, Azure OpenAI, Responses API, remote compaction, context management, opaque checkpoint.
+Pi extension, OpenAI Codex, ChatGPT OAuth, Azure OpenAI, Responses API, remote compaction, text summary, background preparation, context management, opaque checkpoint.
 
 ## 📄 License
 
@@ -308,7 +327,7 @@ update, and delete batches. Notes live under Pi's configured agent directory at
 separate empty notes. `/tree` does **not** rewind notes.
 
 When both **Scratchpad** and **Append maintenance message** are On, Context
-Management compaction captures one projection of every item: full text through
+Management compaction and Text summary capture one projection of every item: full text through
 2 KiB, or its current semantic summary (at most 1 KiB) for longer notes. Missing or
 stale summaries fall back to full text; stored notes are never shortened. The JSON
 projection, up to 16 KiB total, goes before your unchanged maintenance instruction.
@@ -330,8 +349,8 @@ There is no extra summarizer, post-compaction note injection, or dependency on t
 background-compaction extension. The agent reads live notes when needed. A background
 request uses its captured notes; later edits do not restart it or get overwritten.
 Toggling scratchpad changes compaction identity and can invalidate prepared work.
-Extension-readable compaction recovery (including issuer transfer during compaction)
-uses the same bounded projection and deduplication guidance when both toggles are On.
+Text summary mode and extension-readable compaction recovery (including issuer transfer during compaction)
+use the same bounded projection and deduplication guidance when both toggles are On.
 Each compaction operation captures notes at most once and reuses that snapshot if
 invisible compaction fails; the readable recovery instruction and manual custom
 focus are preserved. Pi’s final native fallback and ordinary-turn provider transfer

@@ -88,7 +88,7 @@ export class RequestDiagnostics {
   private terminalAt: number | undefined;
   private items = [0, 0, 0, 0];
   private readonly stages: Partial<Record<Stage, number>> = {};
-  private kind: "compaction" | "recovery" = "compaction";
+  private kind: "compaction" | "recovery" | "text-summary" = "compaction";
   private requested: RemoteCompactionProtocolSetting = "auto";
   private resolved: RemoteCompactionProtocol | "unresolved" = "unresolved";
   private append: "on" | "off" | "not-applicable" = "not-applicable";
@@ -99,7 +99,7 @@ export class RequestDiagnostics {
     requested: RemoteCompactionProtocolSetting,
     resolved?: RemoteCompactionProtocol,
     append = true,
-    kind: "compaction" | "recovery" = "compaction",
+    kind: "compaction" | "recovery" | "text-summary" = "compaction",
   ): void {
     this.kind = kind;
     this.requested = requested;
@@ -277,7 +277,7 @@ export class RequestDiagnostics {
   private statusText(): string {
     const age = (at: number | undefined) =>
       at === undefined ? "none yet" : `${Math.floor((performance.now() - at) / 1000)}s ago`;
-    return `${this.phase}; ${Math.floor((performance.now() - this.started) / 1000)}s elapsed; attempt ${this.attempts}; last byte ${age(this.lastByteAt)}; last event ${age(this.lastEventAt)}; compaction items ${this.items[0]}`;
+    return `${this.phase}; ${Math.floor((performance.now() - this.started) / 1000)}s elapsed; attempt ${this.attempts}; last byte ${age(this.lastByteAt)}; last event ${age(this.lastEventAt)}; ${this.kind === "text-summary" ? `summary messages ${this.items[2]}` : `compaction items ${this.items[0]}`}`;
   }
 
   snapshot(): { status: string; report: string; warning?: string } {

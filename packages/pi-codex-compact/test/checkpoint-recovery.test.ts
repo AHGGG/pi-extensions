@@ -425,3 +425,44 @@ test("recovery rejects multiple successful HTTP attempts even with matching empt
   await assert.rejects(recoverCheckpoint(input, event), /without validated completion/);
   assert.equal(bridgeFailure, undefined);
 });
+
+for (const api of ["openai-responses", "azure-openai-responses", "openai-codex-responses"] as const) {
+  test(`${api}: direct text summary needs no previous checkpoint and preserves tools without executing them`, async () => {
+    const input = await request(api);
+    input.priorCheckpoint = undefined;
+    input.sessionId = "text-summary-session";
+    input.context.messages = [{ role: "user", content: "Summarize this existing task history", timestamp: 1 }];
+    input.context.tools = [
+      {
+        name: "read",
+        description: "Read a file",
+        parameters: { type: "object", properties: { path: { type: "string" } } } as never,
+      },
+    ];
+    let payload: Record<string, unknown> | undefined;
+    let endpoint = "";
+    input.fetch = async (url, init) => {
+      endpoint = String(url);
+      payload = JSON.parse(
+        typeof init?.body === "string" ? init.body : zlib.zstdDecompressSync(init?.body as Uint8Array).toString("utf8"),
+      );
+      return sse([messageItem], "completed", api === "openai-codex-responses" ? "response.done" : "response.completed");
+    };
+    const result = await recoverCheckpoint(
+      input,
+      {
+        ...event,
+        preparation: { ...event.preparation, settings: { ...event.preparation.settings, reserveTokens: 0 } },
+      },
+      true,
+    );
+    assert.match(result.summary, /sapphire/);
+    assert.equal(payload?.tool_choice, "none");
+    assert.ok(Array.isArray(payload?.tools) && payload.tools.length === 1);
+    assert.match(JSON.stringify(payload?.tools), /read/);
+    assert.doesNotMatch(endpoint, /\/compact/);
+    assert.doesNotMatch(JSON.stringify(payload), /context_management|compaction_trigger|previous_response_id/);
+    assert.match(JSON.stringify(payload?.input), /Summarize this existing task history/);
+    if (typeof payload?.max_output_tokens === "number") assert.ok(payload.max_output_tokens > 1);
+  });
+}

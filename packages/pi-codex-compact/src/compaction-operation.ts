@@ -157,6 +157,10 @@ export async function compactRemotely(
   fetch?: typeof globalThis.fetch,
   options: CompactionOperationOptions = {},
 ) {
+  if (settings.compactionMode === "text-summary") {
+    const { compactToText } = await import("./text-summary-operation.js");
+    return compactToText(pi, event, ctx, settings, ownerSignal, isCurrent, ownsStatus, fetch, options);
+  }
   const model = ctx.model;
   const configuredRoute = resolveCompactionRoute(model, settings);
   const signal = AbortSignal.any([event.signal, ownerSignal]);

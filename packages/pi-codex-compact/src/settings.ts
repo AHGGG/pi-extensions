@@ -12,6 +12,7 @@ export const MAX_MAINTENANCE_MESSAGE_BYTES = 16 * 1024;
 
 export interface CodexCompactSettings {
   enabled: boolean;
+  compactionMode: "provider-checkpoint" | "text-summary";
   scratchpadEnabled: boolean;
   appendMaintenanceMessage: boolean;
   maintenanceMessage: string;
@@ -35,6 +36,7 @@ export function compactionSettingsKey(settings: CodexCompactSettings): string {
 
 export const DEFAULT_CODEX_COMPACT_SETTINGS: Readonly<CodexCompactSettings> = Object.freeze({
   enabled: true,
+  compactionMode: "provider-checkpoint",
   scratchpadEnabled: false,
   appendMaintenanceMessage: true,
   maintenanceMessage: COMPACTION_MAINTENANCE_MESSAGE,
@@ -138,6 +140,12 @@ export function normalizeCodexCompactSettings(value: unknown): CodexCompactSetti
     return undefined;
   if (Object.hasOwn(value, "enabled") && typeof value.enabled !== "boolean") return undefined;
   if (
+    Object.hasOwn(value, "compactionMode") &&
+    value.compactionMode !== "provider-checkpoint" &&
+    value.compactionMode !== "text-summary"
+  )
+    return undefined;
+  if (
     Object.hasOwn(value, "protocol") &&
     value.protocol !== "auto" &&
     value.protocol !== "remote-v2" &&
@@ -176,6 +184,7 @@ export function normalizeCodexCompactSettings(value: unknown): CodexCompactSetti
         : DEFAULT_CODEX_COMPACT_SETTINGS.maintenanceMessage,
     checkpointRecovery: value.checkpointRecovery === "cancel" ? "cancel" : "summarize",
     enabled: typeof value.enabled === "boolean" ? value.enabled : DEFAULT_CODEX_COMPACT_SETTINGS.enabled,
+    compactionMode: value.compactionMode === "text-summary" ? "text-summary" : "provider-checkpoint",
     protocol:
       value.protocol === "remote-v2" ||
       value.protocol === "responses-compact" ||

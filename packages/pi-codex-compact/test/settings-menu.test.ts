@@ -121,6 +121,7 @@ test("settings screen exposes bounded controls and invalid files remain repairab
     screen.items.map((item) => [item.id, item.currentValue]),
     [
       ["enabled", "On"],
+      ["compactionMode", "Provider checkpoint"],
       ["scratchpadEnabled", "Off"],
       ["protocol", "Auto"],
       ["appendMaintenanceMessage", "On"],
@@ -665,4 +666,58 @@ test("show menu hands off to native editor after selecting the maintenance row",
   assert.equal(selections.length, 2);
   assert.equal(editorOpened, true);
   assert.deepEqual(memory.patches, [{ maintenanceMessage: "handoff after menu close" }]);
+});
+
+test("text summary menu changes only mode and hides unused provider checkpoint routing", async () => {
+  const memory = memoryRuntime();
+  const menu = createCodexCompactMenu(memory.runtime, {
+    status: { model: "openai/model", api: "openai-responses" },
+    lastProtocol: () => "context-management",
+    isPaused: () => true,
+  });
+  const context = createMockContext({ mode: "tui" });
+  const action = {
+    ctx: context.ctx,
+    state: memory.runtime.get(),
+    signal: new AbortController().signal,
+    itemId: "compactionMode",
+  };
+  assert.deepEqual(await menu.actions["set-mode"]({ ...action, value: "Text summary" }), { kind: "stay" });
+  assert.deepEqual(memory.patches, [{ compactionMode: "text-summary" }]);
+  assert.equal(memory.runtime.get().settings.enabled, true);
+  assert.equal(memory.runtime.get().settings.protocol, "auto");
+  const main = resolveMenuScreen(menu, "main", memory.runtime.get());
+  const lines = main.lines?.join("\n") ?? "";
+  assert.match(lines, /Compaction mode: Text summary/);
+  assert.match(lines, /Text summary through normal Responses inference/);
+  assert.doesNotMatch(lines, /Last resolved protocol|V2 is unsupported|operation paused|Recovery:/);
+  const settings = resolveMenuScreen(menu, "settings", memory.runtime.get());
+  assert.equal(settings.kind, "settings");
+  if (settings.kind !== "settings") assert.fail("Expected settings screen");
+  assert.equal(settings.items.find((item) => item.id === "compactionMode")?.currentValue, "Text summary");
+  assert.match(settings.items.find((item) => item.id === "protocol")?.description ?? "", /only in Provider checkpoint/);
+  await menu.actions["set-mode"]({ ...action, value: "Provider checkpoint" });
+  assert.equal(memory.runtime.get().settings.compactionMode, "provider-checkpoint");
+});
+
+test("failed compaction mode save preserves the effective mode", async () => {
+  const memory = memoryRuntime();
+  const runtime = {
+    ...memory.runtime,
+    update: async () => {
+      throw new Error("mode write failed");
+    },
+  };
+  const menu = createCodexCompactMenu(runtime);
+  const context = createMockContext({ mode: "tui" });
+  const result = await menu.actions["set-mode"]({
+    ctx: context.ctx,
+    state: runtime.get(),
+    signal: new AbortController().signal,
+    itemId: "compactionMode",
+    value: "Text summary",
+  });
+  assert.deepEqual(result, { kind: "rejected" });
+  assert.equal(runtime.get().settings.compactionMode, "provider-checkpoint");
+  assert.match(context.notifications[0]?.message ?? "", /mode write failed/);
 });

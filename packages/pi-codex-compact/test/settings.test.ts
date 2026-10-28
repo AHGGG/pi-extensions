@@ -251,3 +251,35 @@ test("scratchpad defaults off, persists, validates, and changes compaction ident
   await runtime.update({ scratchpadEnabled: true });
   assert.equal((await createCodexCompactSettingsRuntime(path).reload()).settings.scratchpadEnabled, true);
 });
+
+test("compaction mode defaults to provider checkpoints and persists without disabling replay", async () => {
+  assert.equal(DEFAULT_CODEX_COMPACT_SETTINGS.compactionMode, "provider-checkpoint");
+  for (const compactionMode of ["provider-checkpoint", "text-summary"] as const) {
+    const normalized = normalizeCodexCompactSettings({ compactionMode });
+    assert.equal(normalized?.compactionMode, compactionMode);
+    assert.equal(normalized?.enabled, true);
+  }
+  for (const compactionMode of [null, false, 0, "readable", {}, []])
+    assert.equal(normalizeCodexCompactSettings({ compactionMode }), undefined);
+  assert.notEqual(
+    compactionSettingsKey({ ...DEFAULT_CODEX_COMPACT_SETTINGS, compactionMode: "text-summary" }),
+    compactionSettingsKey({ ...DEFAULT_CODEX_COMPACT_SETTINGS }),
+  );
+  const path = await tempSettingsPath();
+  await writeFile(path, JSON.stringify({ protocol: "remote-v2", future: "preserved" }));
+  const runtime = createCodexCompactSettingsRuntime(path);
+  await runtime.reload();
+  await runtime.update({ compactionMode: "text-summary" });
+  const loaded = await createCodexCompactSettingsRuntime(path).reload();
+  assert.equal(loaded.settings.compactionMode, "text-summary");
+  assert.equal(loaded.settings.enabled, true);
+  assert.equal(loaded.settings.protocol, "remote-v2");
+  assert.equal(loaded.document?.future, "preserved");
+  const before = await readFile(path, "utf8");
+  await assert.rejects(runtime.update({ compactionMode: "unknown" as "text-summary" }), /Refusing to save invalid/);
+  assert.equal(runtime.get().settings.compactionMode, "text-summary");
+  assert.equal(await readFile(path, "utf8"), before);
+  await writeFile(path, '{"compactionMode":"unknown"}');
+  assert.equal((await runtime.reload()).kind, "invalid");
+  await assert.rejects(runtime.update({ compactionMode: "text-summary" }), /Cannot overwrite/);
+});

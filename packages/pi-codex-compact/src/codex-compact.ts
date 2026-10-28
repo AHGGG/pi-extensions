@@ -40,6 +40,7 @@ import {
   createCodexCompactSettingsRuntime,
 } from "./settings.js";
 import { terminalText } from "./terminal.js";
+import { activeCompactionId } from "./text-summary.js";
 
 const STATUS_KEY = "codex-compact";
 const CONTINUATION_TYPE = "codex-compact:continue-v1";
@@ -134,7 +135,8 @@ export function createCodexCompactExtension(
           settingsRuntime.get().settings.enabled &&
           !!ctx.model &&
           route.kind === "remote" &&
-          !owner.rejected.hasObserved(rejectionRouteKey(ctx.model, route))
+          (settingsRuntime.get().settings.compactionMode === "text-summary" ||
+            !owner.rejected.hasObserved(rejectionRouteKey(ctx.model, route)))
         );
       },
       capture(ctx) {
@@ -156,7 +158,7 @@ export function createCodexCompactExtension(
           owner.autoProtocols,
         );
       },
-      checkpointId: (ctx) => activeCheckpoint(ctx)?.details.checkpointId,
+      checkpointId: (ctx) => activeCompactionId(ctx.sessionManager.getBranch()),
       captureBoundary(ctx) {
         const owner = ownerFor(ctx);
         const branchIsCurrent = captureExactCompactionBranch(ctx.sessionManager.getBranch());

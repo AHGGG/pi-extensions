@@ -26,9 +26,10 @@ export function summaryPrefix(
 // owns the lossy native-fallback policy after this request releases its resources.
 export async function summarizeCheckpoint(
   request: RemoteCompactionRequest,
-  options: { maxTokens: number; customInstructions?: string },
+  options: { maxTokens: number; customInstructions?: string; textSummary?: boolean },
 ) {
-  if (!request.priorCheckpoint) throw new Error("Checkpoint recovery requires a compatible checkpoint");
+  if (!request.priorCheckpoint && !options.textSummary)
+    throw new Error("Checkpoint recovery requires a compatible checkpoint");
   if (request.signal.aborted) throw abortError();
   const diagnostics = request.diagnostics;
   if (diagnostics) diagnostics.phase = "request";
@@ -54,11 +55,12 @@ export async function summarizeCheckpoint(
   try {
     stream = request.provider.stream(request.model, normalizeContext(request.context), {
       apiKey: request.apiKey,
+      ...(options.textSummary ? { sessionId: request.sessionId } : {}),
       headers: request.headers,
       env: request.env,
       signal,
       transport: "sse",
-      cacheRetention: "none",
+      ...(options.textSummary ? {} : { cacheRetention: "none" as const }),
       maxTokens: options.maxTokens,
       maxRetries: request.maxRetries,
       timeoutMs: request.requestTimeoutMs,
@@ -122,13 +124,15 @@ export async function summarizeCheckpoint(
             {
               role: "user",
               content: scratchpadInstructionContent(
-                RECOVERY_INSTRUCTION +
+                (options.textSummary
+                  ? RECOVERY_INSTRUCTION.replace(" and encrypted checkpoint", "")
+                  : RECOVERY_INSTRUCTION) +
                   (options.customInstructions ? `\nAdditional focus: ${options.customInstructions}` : ""),
                 request,
               ),
             },
           ],
-          tools: [],
+          ...(options.textSummary ? {} : { tools: [] }),
           tool_choice: "none",
           store: false,
           stream: true,
@@ -137,6 +141,7 @@ export async function summarizeCheckpoint(
         delete prepared.previous_response_id;
         if (Buffer.byteLength(JSON.stringify(prepared)) > MAX_SSE_BYTES)
           throw new Error("Checkpoint recovery request exceeded the size limit");
+        diagnostics?.payload(prepared);
         payloadSeen = true;
         return prepared;
       },
@@ -187,16 +192,22 @@ export async function summarizeCheckpoint(
   }
 }
 
-export async function recoverCheckpoint(request: RemoteCompactionRequest, event: SessionBeforeCompactEvent) {
+export async function recoverCheckpoint(
+  request: RemoteCompactionRequest,
+  event: SessionBeforeCompactEvent,
+  textSummary = false,
+) {
   const result = await summarizeCheckpoint(request, {
     maxTokens: Math.max(
       1,
       Math.min(
-        Math.floor(event.preparation.settings.reserveTokens * 0.8),
+        Math.floor((event.preparation.settings.reserveTokens || (textSummary ? 16_000 : 0)) * 0.8),
+        ...(textSummary ? [Math.floor(request.model.contextWindow / 4)] : []),
         request.model.maxTokens > 0 ? request.model.maxTokens : Number.POSITIVE_INFINITY,
       ),
     ),
     customInstructions: event.customInstructions,
+    textSummary,
   });
   const modifiedFiles = [
     ...new Set([...event.preparation.fileOps.written, ...event.preparation.fileOps.edited]),

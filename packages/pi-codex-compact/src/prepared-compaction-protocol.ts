@@ -74,6 +74,7 @@ export interface CompactionEngineV1 {
   readonly version: 1;
   available(ctx: ExtensionContext): boolean;
   capture(ctx: ExtensionContext): CheckpointPreparation | undefined;
+  /** Stable ID of the latest committed result, whether provider checkpoint or text summary. */
   checkpointId(ctx: ExtensionContext): string | undefined;
   captureBoundary(ctx: ExtensionContext): () => boolean;
   /** Exactly one optional source; throws on a competing registration. Cleanup is idempotent. */

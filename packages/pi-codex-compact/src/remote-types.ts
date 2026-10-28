@@ -14,6 +14,7 @@ export interface RemoteCompactionRequest {
   profile: ResponsesCompactionProfile;
   context: Context;
   protocol: RemoteCompactionProtocol;
+  sessionId?: string;
   apiKey?: string;
   headers?: ProviderHeaders;
   env?: Record<string, string>;
