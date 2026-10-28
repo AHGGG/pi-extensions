@@ -1,11 +1,11 @@
-# 🗜️ pi-codex-compact — Use Codex Remote Compaction in Pi
+# pi-codex-compact — Use Codex Remote Compaction in Pi
 
 [![npm](https://img.shields.io/npm/v/@narumitw/pi-codex-compact)](https://www.npmjs.com/package/@narumitw/pi-codex-compact) [![Pi extension](https://img.shields.io/badge/Pi-extension-blue)](https://pi.dev) [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](./LICENSE)
 
 Replace older conversation context with a provider checkpoint or a text summary, including optional background preparation.
 Provider checkpoints replay through compatible Responses backends; text summaries become ordinary conversation context. Pi still controls foreground compaction, while an optional companion can prepare and apply results at safe boundaries.
 
-## ✨ Features
+## Features
 
 - Supports built-in Codex, OpenAI, and Azure OpenAI Responses APIs, plus explicitly configured custom APIs.
 - Offers Provider checkpoint mode with Remote Compaction V2, unary `responses/compact`, and experimental streaming Context Management.
@@ -20,7 +20,7 @@ Provider checkpoints replay through compatible Responses backends; text summarie
 
 **Context Management is experimental.** This fork selects it for verified official OpenAI ChatGPT OAuth requests and can try it automatically after a third-party Compact endpoint rejects Auto. Other routes require explicit selection. It consumes the active route's quota or API usage; support depends on the backend, model, and account.
 
-## 📦 Install
+## Install
 
 To use this fork, replace the upstream compact entry in Pi's `settings.json` packages array with:
 
@@ -61,7 +61,7 @@ Do not load a global npm installation and the local workspace at the same time.
 
 Pi extensions run with your user permissions. Review third-party extension source before installing it.
 
-## 🚀 Quick start
+## Quick start
 
 1. Sign in through Pi's built-in OpenAI, OpenAI Codex, or Azure OpenAI provider.
 2. Select a model using `openai-codex-responses`, `openai-responses`, or `azure-openai-responses`.
@@ -70,7 +70,7 @@ Pi extensions run with your user permissions. Review third-party extension sourc
 After successful remote compaction, compatible requests replay the checkpoint automatically.
 Signing in does not guarantee compaction permission; see [ChatGPT OAuth rejection](#chatgpt-oauth-rejection) if the backend refuses the operation.
 
-## 💬 Commands
+## Commands
 
 Run `/codex-compact` without arguments to inspect the effective route, change settings, or select **Compact now** in TUI mode.
 Closing the menu with Escape or Ctrl+C does not compact the session; settings changes already saved remain applied.
@@ -78,12 +78,26 @@ The no-argument command reports the manual settings path in RPC and is rejected 
 Arguments are rejected. The former `/codex-compact resume` migration route has been removed; this engine does not own scheduling controls.
 Pi's built-in `/compact` uses the same compaction routing.
 
-## ⚙️ Settings
+## Settings
 
 Use `/codex-compact` → **Settings**, or edit the global JSON file at `<getAgentDir()>/pi-codex-compact.json` (normally `~/.pi/agent/pi-codex-compact.json`).
 There are no project or extension-specific environment-variable overrides. Missing fields use defaults.
 
-Provider checkpoint is the default mode. To request text summaries directly, select **Compaction mode → Text summary**, or save:
+Settings opens with **Settings scope → This provider**. Changes to **Compaction mode** and **Protocol** are saved for the displayed provider ID; all other controls stay global. Switch to **Global defaults** to change the fallback for providers without an override. **Use global defaults** removes this provider’s mode and protocol choices. Inherited and custom values are labeled.
+
+For example, keep Provider checkpoint as the global default and use Text summary only for a custom provider named `my-proxy`:
+
+```json
+{
+  "providerOverrides": {
+    "my-proxy": { "compactionMode": "text-summary" }
+  }
+}
+```
+
+Use the exact provider ID from Pi, not its model ID or API type. Switching providers automatically selects its saved choices. This does not change credentials, background preparation, or Apply when ready. Existing opaque history still requires a compatible issuing provider for replay.
+
+Provider checkpoint is the default mode. To request text summaries directly, select **Compaction mode → Text summary** for this provider. To make it the global default, choose **Settings scope → Global defaults**, or save:
 
 ```json
 {
@@ -107,7 +121,7 @@ Menu changes apply immediately. Manual file edits take effect on `/reload` or th
 
 See the [settings reference](./docs/settings.md) for all fields, defaults, accepted values, custom API configuration, and save/reload behavior. This extension does not read `~/.codex/config.toml`.
 
-## ✅ Requirements and compatibility
+## Requirements and compatibility
 
 You need compatible Pi peer APIs and working provider credentials. Provider checkpoint mode requires the selected compaction protocol and opaque checkpoint replay; Text summary mode requires normal Responses inference. Converting existing opaque history still requires its compatible issuing route.
 The model must use a built-in Responses API or a custom API explicitly mapped through `apiProfiles`.
@@ -205,7 +219,7 @@ If checkpoint projection cannot be verified, another recovery attempt cannot rep
 
 Keep the extension enabled while the active session needs its checkpoint; recovery does not override `enabled: false`. Hosted checkpoint-to-text recovery remains unverified. Adapter tests establish safe request/publication behavior, not hosted recall.
 
-## 🧭 How it works
+## How it works
 
 Pi chooses when to compact and which recent messages to keep. The extension produces the selected result, saves it in the session, and uses it alongside retained messages. An optional companion may prepare either result in advance and apply it at a safe boundary through the [versioned engine protocol](./docs/prepared-compaction-protocol.md).
 
@@ -222,7 +236,7 @@ flowchart LR
 
 In Provider checkpoint mode, a request failure uses native fallback before the first checkpoint or checkpoint-aware recovery afterward, with lossy native fallback if the recovery request fails. Text summary failures preserve history. See the [implementation reference](./docs/implementation.md) for protocol fields, checkpoint validation, continuation, and legacy format handling.
 
-## 🔒 Security and privacy
+## Security and privacy
 
 Both modes send conversation context and the system prompt to the configured Responses backend. Remote V2 and Context Management also send active tool schemas; Codex-profile unary requests retain provider-supported tools.
 New checkpoints use format v4, including the snapshot cutoff for prepared checkpoints; v1–v3 checkpoints remain readable. Keep a v4-capable extension installed when resuming these sessions, because older versions cannot replay the new format.
@@ -252,7 +266,7 @@ Prepared failure handles carry a shorter summary (`t` elapsed seconds, `n` attem
 
 Long periods without bytes or parsed events produce an advisory snapshot after five minutes, not a new hard timeout: opaque compaction may legitimately be silent. Context Management retries a clean premature EOF once with a fresh collector after a short delay, sharing the original whole-request deadline. Provider-opening retries are separate; the normal agent retry setting does not govern this replay. Cancellation, changed ownership/provider binding, authentication errors, terminal failures, and invalid checkpoints are not retried. A failed retry preserves the existing foreground recovery path. Additional attempts may use provider quota. Diagnostics cannot determine which upstream component closed a stream by themselves.
 
-## 🚧 Limitations
+## Limitations
 
 - Backend compaction contracts and OAuth restrictions can change independently; keep backups of important sessions.
 - Older opaque history requires this extension, a matching API/profile/model, and a backend that accepts the checkpoint. Removing the extension exposes only the fallback marker and recent messages.
@@ -261,7 +275,7 @@ Long periods without bytes or parsed events produce an advisory snapshot after f
 - Successful recovery replaces active opaque history with a lossy summary; native fallback after recovery failure cannot read opaque-only history. Raw session entries remain available, but rolling back the extension does not restore the active context. Use `/tree` before the required checkpoint or restore a transcript backup.
 - Settings saves are ordered within one Pi process, not locked across processes; a detected concurrent edit is rejected.
 
-## 📊 Benchmark
+## Benchmark
 
 The repository benchmark compares full context, Pi-native summaries, and Remote V2 using seeded histories. Its v3 protocol uses repeated artifacts, isolated probes, paired seed statistics, and committed manifests. It does not treat equal nominal token settings as equal information capacity or claim that exploratory evidence is held out.
 
@@ -273,7 +287,7 @@ npm run benchmark:codex-compact
 
 Live runs require `--live`, cost/privacy review, OpenAI Codex OAuth, and Remote V2 entitlement. See the [benchmark guide](https://github.com/narumiruna/pi-extensions/tree/main/packages/pi-codex-compact/benchmark) for methodology, archived v2/v3 evidence, and consumed seeds that cannot be reused for confirmation.
 
-## 🧪 Development
+## Development
 
 From the repository root:
 
@@ -285,7 +299,7 @@ npm run package:pack -- codex-compact
 
 See the bundled [implementation reference](./docs/implementation.md) and repository [Codex mechanism notes](https://github.com/narumiruna/pi-extensions/blob/main/docs/implementation-notes/codex-compaction-mechanism.md).
 
-## 🗂️ Package layout
+## Package layout
 
 ```text
 packages/pi-codex-compact/
@@ -299,11 +313,11 @@ packages/pi-codex-compact/
 
 The generated runtime does not import back into `src`.
 
-## 🔎 Keywords
+## Keywords
 
 Pi extension, OpenAI Codex, ChatGPT OAuth, Azure OpenAI, Responses API, remote compaction, text summary, background preparation, context management, opaque checkpoint.
 
-## 📄 License
+## License
 
 [MIT](LICENSE)
 

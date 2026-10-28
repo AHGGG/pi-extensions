@@ -1,6 +1,6 @@
 # Codex Compact settings reference
 
-Use `/codex-compact` → **Settings** in TUI mode, or edit `<getAgentDir()>/pi-codex-compact.json` manually and reload Pi. The normal path is `~/.pi/agent/pi-codex-compact.json`. This file is global-only: there are no project overrides or extension-specific environment-variable overrides. Effective settings are defaults with recognized user-file fields applied. Pi and the selected provider own credentials.
+Use `/codex-compact` → **Settings** in TUI mode, or edit `<getAgentDir()>/pi-codex-compact.json` manually and reload Pi. The normal path is `~/.pi/agent/pi-codex-compact.json`. This user-wide file holds global defaults and provider-specific choices; there are no project overrides or extension-specific environment-variable overrides. Effective settings apply built-in defaults, then recognized global fields, then the selected provider’s mode and protocol overrides. Pi and the selected provider own credentials.
 
 An absent file uses defaults without creating a file. Save only the fields you need to change. For example, this opts a compatible custom API into Responses compaction:
 
@@ -19,6 +19,7 @@ An absent file uses defaults without creating a file. Save only the fields you n
 | `enabled` | `true` | Boolean | Use the selected compaction mode and replay compatible opaque checkpoints. | Keep enabled when a session needs an existing checkpoint; disabling it also disables replay. |
 | `compactionMode` | `"provider-checkpoint"` | `"provider-checkpoint"` or `"text-summary"` | Select a provider-generated opaque checkpoint or an experimental text summary through normal Responses inference. Applies to foreground and prepared results. | Select Text summary without disabling `enabled`; existing opaque history still needs compatible replay for conversion. |
 | `protocol` | `"auto"` | `"auto"`, `"remote-v2"`, `"responses-compact"`, or `"context-management"` | Used only in Provider checkpoint mode. Auto permits one same-provider Context Management attempt after a third-party Compact endpoint returns 403/404/405/501; verified official OpenAI ChatGPT OAuth resolves to Context Management for every preference. | Keep `auto` for automatic proxy compatibility; choose an explicit protocol to prevent negotiation. |
+| `providerOverrides` | `{}` | Object keyed by the exact Pi provider ID, with optional `compactionMode` and `protocol` fields | Override only mode and protocol for that provider; missing fields inherit global values. | Use the menu’s This provider scope to avoid changing other providers. |
 | `apiProfiles` | `{}` | Object mapping a custom API id to `"codex-responses-v1"` | Explicitly opts a non-built-in API into Codex-compatible request fields and replay. | Leave empty unless the provider documents Codex Responses compatibility. |
 | `requestTimeoutMs` | `300000` | Integer from 30,000 to 1,800,000 ms | Bound one extension-owned checkpoint or text-summary request; prepared requests expose this deadline to their caller. | The menu offers 5–30 minutes in five-minute steps. Longer limits also permit longer foreground and recovery waits; separate server and network timeouts still apply. |
 | `maxRetries` | `2` | Integer from 0 to 2 | Bound transient provider-opening retries. Text summary failure preserves history. | Keep two; use zero when diagnosing the first failure. |
@@ -40,9 +41,31 @@ Separate Pi processes do not share a mutation lock; a detected concurrent edit i
 API profile keys must be non-empty custom API IDs of at most 256 characters, with no whitespace or control characters. Built-in API IDs and `__proto__`, `constructor`, or `prototype` are not accepted. The only profile value is `"codex-responses-v1"`.
 
 
+## Provider-specific choices
+
+The Settings menu defaults to **Settings scope → This provider** and shows the captured provider ID. Only **Compaction mode** and **Protocol** use that scope; all other controls remain global. Values are labeled as inherited or custom. Choose **Global defaults** to edit the fallback, or **Use global defaults** to remove this provider’s two overrides. A provider switch closes the old menu rather than applying its choices to a different provider.
+
+```json
+{
+  "compactionMode": "provider-checkpoint",
+  "protocol": "auto",
+  "providerOverrides": {
+    "my-proxy": {
+      "compactionMode": "text-summary"
+    }
+  }
+}
+```
+
+Keys are actual `model.provider` IDs, not model names, API types, or authentication methods. Use distinct provider IDs if two configurations need different choices. Nothing is automatically added for official or custom providers, and credentials do not change.
+
+The map accepts at most 128 providers. IDs must be nonempty, at most 256 characters, without leading/trailing whitespace or control characters. `__proto__`, `constructor`, and `prototype` are rejected. Known fields must contain the values in the table above; unknown fields are ignored and preserved during menu saves and resets. The existing 64 KiB file limit still applies.
+
+Foreground and background preparation use the same effective settings. Changing another provider’s overrides does not invalidate active work. Changing effective settings for the current provider does invalidate it; provider/model switches retain the existing cancellation checks. Resetting an override resumes inheritance. Existing checkpoints retain their issuing provider and protocol safety checks.
+
 ## Text summaries and background preparation
 
-Choose **Compaction mode → Text summary** in the menu, or save `"compactionMode": "text-summary"`. This mode directly requests a bounded continuation summary using a supported Responses adapter. It does not try provider checkpoint protocols first. The `protocol` preference is retained for switching back, but does not choose the summary request route. Keep `enabled: true`: turning it off also disables replay of existing opaque checkpoints.
+Choose **Compaction mode → Text summary** in the menu for this provider, or set the global default with `"compactionMode": "text-summary"`. This mode directly requests a bounded continuation summary using a supported Responses adapter. It does not try provider checkpoint protocols first. The `protocol` preference is retained for switching back, but does not choose the summary request route. Keep `enabled: true`: turning it off also disables replay of existing opaque checkpoints.
 
 A compatible companion controls background preparation, threshold, and **Apply when ready**. Those settings are not changed here. With auto-apply On, a ready summary can replace its captured prefix at the next safe boundary while preserving later messages and tool results. A mode change invalidates preparations from the previous mode. Summary failure or cancellation preserves the current conversation.
 
@@ -60,6 +83,6 @@ This extension does **not** read `~/.codex/config.toml`.
 | `compact_prompt` / `experimental_compact_prompt_file` | Not imported; opaque checkpoints are generated by the server. |
 | `features.token_budget` | Not supported; token-budget context reset is a different experimental strategy. |
 
-See the [README](../README.md#-settings) for first-use instructions and [implementation reference](./implementation.md) for protocol and replay details.
+See the [README](../README.md#settings) for first-use instructions and [implementation reference](./implementation.md) for protocol and replay details.
 
 Preparation scheduling preferences are consumer-owned. The engine emits safe bounded operation diagnostics in UI modes, independently of fallback warning preferences. Legacy fields are preserved as unknown fields, not applied by this engine.

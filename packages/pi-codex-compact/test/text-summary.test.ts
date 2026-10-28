@@ -8,7 +8,13 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { test, vi } from "vitest";
 import { createMockContext, createMockPi } from "../../../test/support.js";
-import { createCheckpointDetails, fallbackSummary, latestCheckpoint } from "../src/checkpoint.js";
+import {
+  checkpointMarker,
+  createCheckpointDetails,
+  fallbackSummary,
+  latestCheckpoint,
+  parseCheckpointDetails,
+} from "../src/checkpoint.js";
 import { createCodexCompactExtension } from "../src/codex-compact.js";
 import { COMPACTION_ENGINE_REQUEST, type CompactionEngineV1 } from "../src/prepared-compaction-protocol.js";
 import { ScratchpadStore } from "../src/scratchpad-store.js";
@@ -68,6 +74,14 @@ function response(text = "Summary of the earlier task.") {
     { headers: { "content-type": "text/event-stream" } },
   );
 }
+function checkpointResponse() {
+  return Response.json({
+    id: "compact-fixture",
+    object: "response.compaction",
+    output: [{ type: "compaction", encrypted_content: "provider-override-checkpoint" }],
+    usage: { input_tokens: 100, output_tokens: 10, total_tokens: 110 },
+  });
+}
 async function fixture() {
   const name = "@earendil-works/pi-ai/providers/openai";
   const { openaiProvider } = (await import(name)) as { openaiProvider(): Provider };
@@ -108,12 +122,14 @@ async function fixture() {
     },
   });
   const payloads: Record<string, unknown>[] = [];
-  let reply = () => response();
+  const requestUrls: string[] = [];
+  let reply: (signal?: AbortSignal | null) => Response | Promise<Response> = () => response();
   createCodexCompactExtension({
     settingsRuntime: runtime,
-    fetch: async (_input, init) => {
+    fetch: async (input, init) => {
+      requestUrls.push(input instanceof Request ? input.url : String(input));
       payloads.push(JSON.parse(String(init?.body)));
-      return reply();
+      return reply(init?.signal);
     },
   })(host.pi);
   const emit = async (type: string, event: unknown = {}) => {
@@ -160,12 +176,223 @@ async function fixture() {
     guard,
     event,
     payloads,
+    requestUrls,
     outputBudgets,
-    setReply: (value: () => Response) => {
+    setReply: (value: typeof reply) => {
       reply = value;
     },
   };
 }
+
+function useProviderOverrides(h: Awaited<ReturnType<typeof fixture>>) {
+  h.ctx.model = { ...model, provider: "work-proxy", baseUrl: "https://proxy.example.test/v1" };
+  h.settings.compactionMode = "provider-checkpoint";
+  h.settings.protocol = "responses-compact";
+  h.settings.providerOverrides = {
+    "work-proxy": { compactionMode: "text-summary", protocol: "context-management" },
+  };
+}
+
+for (const execution of ["foreground", "prepared"] as const) {
+  test(`${execution} uses the custom provider's text-summary override instead of global checkpoint mode`, async () => {
+    const h = await fixture();
+    useProviderOverrides(h);
+    assert.equal(h.engine.available(h.ctx), true);
+    let details: unknown;
+    if (execution === "foreground") {
+      const result = (await h.emit("session_before_compact", h.event())) as {
+        compaction?: { details: unknown };
+      };
+      details = result.compaction?.details;
+    } else {
+      const preparation = h.engine.capture(h.ctx);
+      assert.ok(preparation);
+      const prepared = await preparation.start(h.guard);
+      assert.equal(prepared.usable, true, prepared.failure ?? "preparation failed");
+      details = (await prepared.draft(h.ctx, h.guard)).draft?.details;
+    }
+    assert.ok(parseTextSummaryDetails(details));
+    assert.deepEqual(h.requestUrls, ["https://proxy.example.test/v1/responses"]);
+    assert.doesNotMatch(JSON.stringify(h.payloads), /context_management|compaction_trigger|Retained detail/);
+    assert.match(JSON.stringify(h.payloads), /Earlier task/);
+    assert.equal(h.settings.compactionMode, "provider-checkpoint");
+    assert.equal(h.settings.protocol, "responses-compact");
+  });
+
+  test(`${execution} uses the custom provider's checkpoint mode and protocol overrides together`, async () => {
+    const h = await fixture();
+    useProviderOverrides(h);
+    h.settings.compactionMode = "text-summary";
+    h.settings.protocol = "context-management";
+    h.settings.providerOverrides["work-proxy"] = {
+      compactionMode: "provider-checkpoint",
+      protocol: "responses-compact",
+    };
+    h.setReply(checkpointResponse);
+    let details: unknown;
+    if (execution === "foreground") {
+      const result = (await h.emit("session_before_compact", h.event())) as {
+        compaction?: { details: unknown };
+      };
+      details = result.compaction?.details;
+    } else {
+      const preparation = h.engine.capture(h.ctx);
+      assert.ok(preparation);
+      const prepared = await preparation.start(h.guard);
+      assert.equal(prepared.usable, true, prepared.failure ?? "preparation failed");
+      details = (await prepared.draft(h.ctx, h.guard)).draft?.details;
+    }
+    const checkpoint = parseCheckpointDetails(details);
+    assert.ok(checkpoint);
+    assert.equal(checkpoint.provider, "work-proxy");
+    assert.equal(checkpoint.protocol, "responses-compact");
+    assert.deepEqual(h.requestUrls, ["https://proxy.example.test/v1/responses/compact"]);
+    assert.doesNotMatch(JSON.stringify(h.payloads), /context_management|compaction_trigger/);
+  });
+}
+
+test("prepared summary survives unrelated provider edits and changes to overridden global defaults", async () => {
+  const h = await fixture();
+  useProviderOverrides(h);
+  const preparation = h.engine.capture(h.ctx);
+  assert.ok(preparation);
+  const prepared = await preparation.start(h.guard);
+  assert.equal(prepared.usable, true, prepared.failure ?? "preparation failed");
+  h.settings.providerOverrides = {
+    ...h.settings.providerOverrides,
+    "unrelated-proxy": { compactionMode: "provider-checkpoint", protocol: "remote-v2" },
+  };
+  h.settings.compactionMode = "text-summary";
+  h.settings.protocol = "auto";
+  assert.equal(preparation.isCurrent(), true);
+  const result = await prepared.draft(h.ctx, h.guard);
+  assert.ok(result.draft, result.reason ?? "draft unavailable");
+  assert.ok(parseTextSummaryDetails(result.draft.details));
+  assert.equal(h.payloads.length, 1);
+});
+
+for (const change of ["mode", "protocol", "reset"] as const) {
+  test(`changing the active provider ${change} invalidates a prepared summary without another request`, async () => {
+    const h = await fixture();
+    useProviderOverrides(h);
+    const preparation = h.engine.capture(h.ctx);
+    assert.ok(preparation);
+    const prepared = await preparation.start(h.guard);
+    assert.equal(prepared.usable, true, prepared.failure ?? "preparation failed");
+    if (change === "reset") delete h.settings.providerOverrides["work-proxy"];
+    else if (change === "mode") h.settings.providerOverrides["work-proxy"].compactionMode = "provider-checkpoint";
+    else h.settings.providerOverrides["work-proxy"].protocol = "remote-v2";
+    assert.equal(preparation.isCurrent(), false);
+    assert.equal(preparation.reason, "compaction settings changed");
+    const result = await prepared.draft(h.ctx, h.guard);
+    assert.equal(result.draft, undefined);
+    assert.equal(h.payloads.length, 1);
+  });
+}
+
+test("switching providers invalidates the old preparation and selects global or provider-specific settings", async () => {
+  const h = await fixture();
+  useProviderOverrides(h);
+  h.settings.providerOverrides["other-proxy"] = { compactionMode: "text-summary" };
+  const preparation = h.engine.capture(h.ctx);
+  assert.ok(preparation);
+  const prepared = await preparation.start(h.guard);
+  assert.equal(prepared.usable, true, prepared.failure ?? "preparation failed");
+  const previousModel = h.ctx.model;
+  h.ctx.model = structuredClone(model);
+  await h.emit("model_select", { model: h.ctx.model, previousModel });
+  assert.equal(preparation.isCurrent(), false);
+  assert.equal((await prepared.draft(h.ctx, h.guard)).draft, undefined);
+  h.setReply(checkpointResponse);
+  const fallback = (await h.emit("session_before_compact", h.event())) as {
+    compaction?: { details: unknown };
+  };
+  assert.equal(parseCheckpointDetails(fallback.compaction?.details)?.protocol, "responses-compact");
+  h.ctx.model = { ...model, provider: "other-proxy", baseUrl: "https://other.example.test/v1" };
+  await h.emit("model_select", { model: h.ctx.model, previousModel: model });
+  h.setReply(() => response());
+  const next = h.engine.capture(h.ctx);
+  assert.ok(next);
+  const nextPrepared = await next.start(h.guard);
+  assert.equal(nextPrepared.usable, true, nextPrepared.failure ?? "preparation failed");
+  assert.ok(parseTextSummaryDetails((await nextPrepared.draft(h.ctx, h.guard)).draft?.details));
+  assert.deepEqual(h.requestUrls, [
+    "https://proxy.example.test/v1/responses",
+    "https://api.openai.com/v1/responses/compact",
+    "https://other.example.test/v1/responses",
+  ]);
+});
+
+test("provider selection aborts an in-flight foreground summary selected by its override", async () => {
+  const h = await fixture();
+  useProviderOverrides(h);
+  let started!: (signal: AbortSignal | null | undefined) => void;
+  const requestStarted = new Promise<AbortSignal | null | undefined>((resolve) => {
+    started = resolve;
+  });
+  let release!: (value: Response) => void;
+  const responseReady = new Promise<Response>((resolve) => {
+    release = resolve;
+  });
+  h.setReply((signal) => {
+    started(signal);
+    return responseReady;
+  });
+  const pending = h.emit("session_before_compact", h.event());
+  try {
+    const signal = await requestStarted;
+    assert.ok(signal);
+    assert.equal(signal.aborted, false);
+    const previousModel = h.ctx.model;
+    h.ctx.model = structuredClone(model);
+    await h.emit("model_select", { model: h.ctx.model, previousModel });
+    assert.equal(signal.aborted, true);
+  } finally {
+    release(response());
+  }
+  assert.deepEqual(await pending, { cancel: true });
+  assert.equal(h.payloads.length, 1);
+  assert.equal(
+    h.manager.getBranch().some((entry) => entry.type === "compaction"),
+    false,
+  );
+});
+
+test("selecting text-summary for a provider preserves its existing opaque checkpoint until replacement", async () => {
+  const h = await fixture();
+  useProviderOverrides(h);
+  const details = createCheckpointDetails({
+    provider: "work-proxy",
+    api: model.api,
+    profile: "openai-responses-v1",
+    modelId: model.id,
+    protocol: "responses-compact",
+    replacementHistory: [{ type: "compaction", encrypted_content: "existing-provider-checkpoint" }],
+    keptMessages: h.manager.buildSessionContext().messages.slice(1),
+  });
+  h.manager.appendCompaction(fallbackSummary(details.checkpointId), h.tailId, 65_000, details, true);
+  const payload = {
+    model: model.id,
+    input: [{ role: "user", content: [{ type: "input_text", text: checkpointMarker(details.checkpointId) }] }],
+  };
+  const replay = await h.emit("before_provider_request", { payload });
+  assert.match(JSON.stringify(replay), /existing-provider-checkpoint/);
+  assert.doesNotMatch(JSON.stringify(replay), /PI_CODEX_REMOTE_CHECKPOINT/);
+  assert.equal(h.engine.checkpointId(h.ctx), details.checkpointId);
+  h.manager.appendMessage({ role: "user", content: "Continue after checkpoint", timestamp: 5 });
+  h.manager.appendMessage(assistant("Latest retained detail"));
+  const preparation = h.engine.capture(h.ctx);
+  assert.ok(preparation);
+  const prepared = await preparation.start(h.guard);
+  assert.equal(prepared.usable, true, prepared.failure ?? "preparation failed");
+  assert.match(JSON.stringify(h.payloads), /existing-provider-checkpoint/);
+  assert.doesNotMatch(JSON.stringify(h.payloads), /context_management|compaction_trigger/);
+  const { draft } = await prepared.draft(h.ctx, h.guard);
+  assert.ok(draft);
+  h.manager.appendCompaction(draft.summary, draft.firstKeptEntryId, 65_000, draft.details, true);
+  assert.equal(latestCheckpoint(h.manager.getBranch()), undefined);
+  assert.doesNotMatch(JSON.stringify(h.manager.buildSessionContext()), /existing-provider-checkpoint/);
+});
 
 test("direct foreground summary keeps native tail and persists plaintext identity", async () => {
   const h = await fixture();

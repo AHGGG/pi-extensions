@@ -7,6 +7,7 @@ import {
   type CodexCompactSettingsRuntime,
   type CodexCompactSettingsState,
   DEFAULT_CODEX_COMPACT_SETTINGS,
+  effectiveCodexCompactSettings,
   MAX_MAINTENANCE_MESSAGE_BYTES,
 } from "./settings.js";
 import { terminalText as safeText } from "./terminal.js";
@@ -16,6 +17,8 @@ type Action =
   | "compact-now"
   | "set-enabled"
   | "set-mode"
+  | "set-scope"
+  | "reset-provider"
   | "set-scratchpad"
   | "set-append-message"
   | "edit-maintenance-message"
@@ -39,6 +42,7 @@ export interface SettingsMenuOwner {
 
 interface CompactMenuStatus {
   model: string;
+  provider?: string;
   api?: Api;
 }
 
@@ -78,10 +82,11 @@ async function update(
   signal: AbortSignal,
   onSettingsChanged?: () => void,
   isCurrent: () => boolean = () => true,
+  provider?: string,
 ) {
   try {
     if (signal.aborted || !isCurrent()) return { kind: "rejected" as const };
-    await runtime.update(patch, signal);
+    await runtime.update(patch, signal, provider);
     if (signal.aborted || !isCurrent()) return { kind: "rejected" as const };
     onSettingsChanged?.();
     ctx.ui.notify("Responses compaction settings saved.", "info");
@@ -107,76 +112,132 @@ export function createCodexCompactMenu(
     canReplayCheckpoint?: () => boolean;
     lastProtocol?: () => RemoteCompactionProtocol | undefined;
     onSettingsChanged?: () => void;
+    isCurrent?: () => boolean;
   } = {},
 ): MenuDefinition<CodexCompactSettingsState, Screen, Action, ExtensionCommandContext> {
-  const save = (ctx: ExtensionCommandContext, patch: Partial<CodexCompactSettings>, signal: AbortSignal) =>
-    update(runtime, ctx, patch, signal, options.onSettingsChanged);
+  const provider = options.status?.provider;
+  let scope: "provider" | "global" = provider ? "provider" : "global";
+  const save = (
+    ctx: ExtensionCommandContext,
+    patch: Partial<CodexCompactSettings>,
+    signal: AbortSignal,
+    scoped = false,
+  ) =>
+    update(
+      runtime,
+      ctx,
+      patch,
+      signal,
+      options.onSettingsChanged,
+      options.isCurrent,
+      scoped && scope === "provider" ? provider : undefined,
+    );
+  const editedSettings = (state: Readonly<CodexCompactSettingsState>) =>
+    effectiveCodexCompactSettings(state.settings, scope === "provider" ? provider : undefined);
+  const inherited = (state: Readonly<CodexCompactSettingsState>, field: "compactionMode" | "protocol") =>
+    scope === "provider" && provider && !Object.hasOwn(state.settings.providerOverrides[provider] ?? {}, field)
+      ? " Inherited from global defaults."
+      : scope === "provider"
+        ? " Saved for this provider only."
+        : " Global default for providers without an override.";
   return {
     start: "main",
     screens: {
-      main: ({ state }) => ({
-        kind: "actions",
-        title: "Responses Compaction",
-        lines: [
-          `Compaction and replay: ${state.settings.enabled ? "On" : "Off"}`,
-          `Compaction mode: ${modeLabel(state.settings.compactionMode)}`,
-          ...(state.settings.compactionMode === "provider-checkpoint"
-            ? [`Protocol setting: ${protocolLabel(state.settings.protocol)}`]
-            : ["Text summaries use normal Responses inference; the provider checkpoint protocol setting is unused."]),
-          `Active model: ${safeText(options.status?.model ?? "none")}`,
-          `Preferred route: ${safeText(compactRoute(state, options.status))}`,
-          ...(state.settings.enabled &&
-          state.settings.compactionMode === "provider-checkpoint" &&
-          options.status?.api === "openai-responses"
-            ? [
-                "For official OpenAI ChatGPT OAuth subscription-sharing, Remote V2 is unsupported. The effective route is Context Management (experimental), regardless of the preferred protocol.",
-              ]
-            : []),
-          ...(state.settings.compactionMode === "provider-checkpoint"
-            ? lastProtocolLines(options.lastProtocol?.())
-            : []),
-          ...(state.settings.enabled && options.hasCheckpoint?.() && options.canReplayCheckpoint?.() === false
-            ? [
-                "Direct opaque replay is unavailable. Compatible provider changes require issuer summary recovery; incompatible routes cancel.",
-              ]
-            : []),
-          ...(state.settings.compactionMode === "provider-checkpoint" && options.isPaused?.()
-            ? [
-                "Last observed remote operation paused after OAuth rejection; /reload retries it.",
-                options.hasCheckpoint?.()
-                  ? state.settings.checkpointRecovery === "cancel"
-                    ? "Recovery: cancel compaction; preserve checkpoint history."
-                    : options.canReplayCheckpoint?.() === false
-                      ? "Recovery: issuer summary for compatible provider changes; otherwise cancel and preserve history."
-                      : "Recovery: checkpoint-aware summary; on failure, Pi native may lose older context. Integrity failures cancel."
-                  : "Recovery: Pi native compaction.",
-              ]
-            : []),
-        ],
-        items: [
-          {
-            id: "compact-now",
-            label: "Compact now",
-            description: "Close this menu and compact the active session immediately.",
-            action: "compact-now",
-          },
-          state.kind === "invalid"
-            ? {
-                id: "settings",
-                label: "Settings",
-                description: "Read-only until the invalid settings file is repaired.",
-                to: "invalid" as const,
-              }
-            : { id: "settings", label: "Settings", to: "settings" as const },
-          { id: "close", label: "Close", close: true },
-        ],
-        hint: "close",
-      }),
+      main: ({ state: stored }) => {
+        const state = { ...stored, settings: effectiveCodexCompactSettings(stored.settings, provider) };
+        return {
+          kind: "actions",
+          title: "Responses Compaction",
+          lines: [
+            `Compaction and replay: ${state.settings.enabled ? "On" : "Off"}`,
+            `Compaction mode: ${modeLabel(state.settings.compactionMode)}`,
+            ...(state.settings.compactionMode === "provider-checkpoint"
+              ? [`Protocol setting: ${protocolLabel(state.settings.protocol)}`]
+              : ["Text summaries use normal Responses inference; the provider checkpoint protocol setting is unused."]),
+            `Active model: ${safeText(options.status?.model ?? "none")}`,
+            `Current provider: ${safeText(provider ?? "none")}`,
+            `Provider preferences: ${provider && Object.keys(state.settings.providerOverrides[provider] ?? {}).length ? "Custom" : "Global defaults"}`,
+            `Preferred route: ${safeText(compactRoute(state, options.status))}`,
+            ...(state.settings.enabled &&
+            state.settings.compactionMode === "provider-checkpoint" &&
+            options.status?.api === "openai-responses"
+              ? [
+                  "For official OpenAI ChatGPT OAuth subscription-sharing, Remote V2 is unsupported. The effective route is Context Management (experimental), regardless of the preferred protocol.",
+                ]
+              : []),
+            ...(state.settings.compactionMode === "provider-checkpoint"
+              ? lastProtocolLines(options.lastProtocol?.())
+              : []),
+            ...(state.settings.enabled && options.hasCheckpoint?.() && options.canReplayCheckpoint?.() === false
+              ? [
+                  "Direct opaque replay is unavailable. Compatible provider changes require issuer summary recovery; incompatible routes cancel.",
+                ]
+              : []),
+            ...(state.settings.compactionMode === "provider-checkpoint" && options.isPaused?.()
+              ? [
+                  "Last observed remote operation paused after OAuth rejection; /reload retries it.",
+                  options.hasCheckpoint?.()
+                    ? state.settings.checkpointRecovery === "cancel"
+                      ? "Recovery: cancel compaction; preserve checkpoint history."
+                      : options.canReplayCheckpoint?.() === false
+                        ? "Recovery: issuer summary for compatible provider changes; otherwise cancel and preserve history."
+                        : "Recovery: checkpoint-aware summary; on failure, Pi native may lose older context. Integrity failures cancel."
+                    : "Recovery: Pi native compaction.",
+                ]
+              : []),
+          ],
+          items: [
+            {
+              id: "compact-now",
+              label: "Compact now",
+              description: "Close this menu and compact the active session immediately.",
+              action: "compact-now",
+            },
+            state.kind === "invalid"
+              ? {
+                  id: "settings",
+                  label: "Settings",
+                  description: "Read-only until the invalid settings file is repaired.",
+                  to: "invalid" as const,
+                }
+              : { id: "settings", label: "Settings", to: "settings" as const },
+            { id: "close", label: "Close", close: true },
+          ],
+          hint: "close",
+        };
+      },
       settings: ({ state }) => ({
         kind: "settings",
         title: "Responses Compaction Settings",
-        lines: [`User settings · ${safeText(state.path)}`],
+        lines: [
+          `User settings · ${safeText(state.path)}`,
+          `Current provider: ${safeText(provider ?? "none")}`,
+          "Scope applies to Compaction mode and Protocol. All other settings are global.",
+        ],
         items: [
+          ...(provider
+            ? [
+                {
+                  id: "scope",
+                  label: "Settings scope",
+                  currentValue: scope === "provider" ? "This provider" : "Global defaults",
+                  description: `Choose where mode and protocol changes are saved. This provider: ${safeText(provider)}.`,
+                  values: ["This provider", "Global defaults"],
+                  action: "set-scope" as const,
+                },
+              ]
+            : []),
+          ...(provider && scope === "provider"
+            ? [
+                {
+                  id: "resetProvider",
+                  label: "Use global defaults",
+                  currentValue: "Reset this provider",
+                  description: "Remove this provider's mode and protocol overrides; keep other provider settings.",
+                  action: "reset-provider" as const,
+                },
+              ]
+            : []),
           {
             id: "enabled",
             label: "Compaction and replay",
@@ -189,8 +250,9 @@ export function createCodexCompactMenu(
             id: "compactionMode",
             label: "Compaction mode",
             description:
-              "Provider checkpoint preserves the existing behavior. Text summary (experimental) directly requests a readable summary; existing checkpoint replay stays enabled.",
-            currentValue: modeLabel(state.settings.compactionMode),
+              "Provider checkpoint preserves the existing behavior. Text summary (experimental) directly requests a readable summary; existing checkpoint replay stays enabled." +
+              inherited(state, "compactionMode"),
+            currentValue: modeLabel(editedSettings(state).compactionMode),
             values: ["Provider checkpoint", "Text summary"],
             action: "set-mode",
           },
@@ -207,8 +269,9 @@ export function createCodexCompactMenu(
             id: "protocol",
             label: "Protocol",
             description:
-              "Used only in Provider checkpoint mode. Auto can try Context Management after a third-party Compact endpoint rejects the request; this can consume quota. Explicit proxy protocols stay fixed. Official OpenAI ChatGPT OAuth uses Context Management for every preference.",
-            currentValue: protocolLabel(state.settings.protocol),
+              "Used only in Provider checkpoint mode. Auto can try Context Management after a third-party Compact endpoint rejects the request; this can consume quota. Official OpenAI ChatGPT OAuth uses Context Management for every preference." +
+              inherited(state, "protocol"),
+            currentValue: protocolLabel(editedSettings(state).protocol),
             values: ["Auto", "Remote V2", "Responses Compact", "Context Management (experimental)"],
             action: "set-protocol",
           },
@@ -295,6 +358,11 @@ export function createCodexCompactMenu(
       }),
     },
     actions: {
+      "set-scope": ({ value }) => {
+        scope = provider && value === "This provider" ? "provider" : "global";
+        return { kind: "stay" };
+      },
+      "reset-provider": ({ ctx, signal }) => (provider ? save(ctx, {}, signal, true) : { kind: "rejected" }),
       "compact-now": async () => {
         options.onCompactRequested?.();
         return { kind: "close" };
@@ -309,7 +377,7 @@ export function createCodexCompactMenu(
       },
       "set-enabled": ({ ctx, value, signal }) => save(ctx, { enabled: value === "On" }, signal),
       "set-mode": ({ ctx, value, signal }) =>
-        save(ctx, { compactionMode: value === "Text summary" ? "text-summary" : "provider-checkpoint" }, signal),
+        save(ctx, { compactionMode: value === "Text summary" ? "text-summary" : "provider-checkpoint" }, signal, true),
       "set-protocol": ({ ctx, value, signal }) =>
         save(
           ctx,
@@ -324,6 +392,7 @@ export function createCodexCompactMenu(
                     : "auto",
           },
           signal,
+          true,
         ),
       "set-recovery": ({ ctx, value, signal }) =>
         save(ctx, { checkpointRecovery: value === "Cancel" ? "cancel" : "summarize" }, signal),
@@ -350,6 +419,8 @@ export async function showCodexCompactMenu(
     throw new Error("/codex-compact requires TUI or RPC UI support");
   }
   if (owner.signal.aborted || !owner.isCurrent()) return;
+  const provider = ctx.model?.provider;
+  const isCurrent = () => owner.isCurrent() && ctx.model?.provider === provider;
   let compactRequested = false;
   let editMessageRequested = false;
   await runMenu(
@@ -361,7 +432,9 @@ export async function showCodexCompactMenu(
       onCompactRequested: () => {
         compactRequested = true;
       },
+      isCurrent,
       status: {
+        provider,
         get model() {
           return compactMenuStatus(ctx).model;
         },
@@ -380,10 +453,10 @@ export async function showCodexCompactMenu(
     {
       getState: () => runtime.get(),
       signal: owner.signal,
-      isCurrent: owner.isCurrent,
+      isCurrent,
     },
   );
-  if (owner.signal.aborted || !owner.isCurrent()) return;
+  if (owner.signal.aborted || !isCurrent()) return;
   if (editMessageRequested) {
     await editMaintenanceMessage(runtime, ctx, owner);
     return;
@@ -433,6 +506,7 @@ export function compactMenuStatus(ctx: ExtensionCommandContext): CompactMenuStat
   const model = ctx.model;
   return {
     model: model ? `${model.provider}/${model.id}` : "none",
+    provider: model?.provider,
     api: model?.api,
   };
 }

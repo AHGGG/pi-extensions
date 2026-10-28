@@ -48,6 +48,7 @@ test("root menu makes manual compaction primary and exposes its effective route"
   const customContext = createMockContext({ model: customModel }).ctx;
   assert.deepEqual(compactMenuStatus(customContext), {
     model: "company-codex-proxy/gpt-5.6",
+    provider: "company-codex-proxy",
     api: "openai-codex-responses",
   });
   const openAIStatus = compactMenuStatus(createMockContext({ model: { ...customModel, api: "openai-responses" } }).ctx);
@@ -428,7 +429,7 @@ test("route status revalidates model metadata after loading menu state", async (
   const runtime = {
     ...memory.runtime,
     get: () => {
-      model = { provider: "openai-codex", id: "new", api: "openai-codex-responses" };
+      model = { provider: "openai", id: "new", api: "openai-codex-responses" };
       return memory.runtime.get();
     },
   };
@@ -454,7 +455,7 @@ test("route status revalidates model metadata after loading menu state", async (
     hasCheckpoint: () => false,
   });
   const output = rendered.join("\n");
-  assert.match(output, /openai-codex\/new/);
+  assert.match(output, /openai\/new/);
   assert.match(output, /Responses Remote V2/);
   assert.doesNotMatch(output, /openai\/old/);
 });

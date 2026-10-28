@@ -41,7 +41,7 @@ import { type RemoteCompactionProtocol, resolveCompactionRoute } from "./model-a
 import type { CheckpointPreparation, PreparedCheckpoint } from "./prepared-compaction-protocol.js";
 import { type RejectedRoutes, rejectionRouteKey } from "./rejection-state.js";
 import type { RequestDiagnostics } from "./request-diagnostics.js";
-import { type CodexCompactSettingsRuntime, compactionSettingsKey } from "./settings.js";
+import { type CodexCompactSettingsRuntime, compactionSettingsKey, effectiveCodexCompactSettings } from "./settings.js";
 import { matchedToolPairs, parseTextSummaryDetails, textSummaryCut, textSummaryReserve } from "./text-summary.js";
 
 type CompactionResult = Awaited<ReturnType<typeof compactRemotely>>;
@@ -68,7 +68,7 @@ export function captureCheckpointPreparation(
   fetch?: typeof globalThis.fetch,
   autoProtocols?: AutoCompactionProtocols,
 ): CheckpointPreparation | undefined {
-  const settings = runtime.get().settings;
+  const settings = effectiveCodexCompactSettings(runtime.get().settings, ctx.model?.provider);
   const model = ctx.model;
   const route = resolveCompactionRoute(model, settings);
   if (
@@ -124,7 +124,8 @@ export function captureCheckpointPreparation(
       ? "preparation owner was cancelled"
       : !ownerIsCurrent()
         ? "session ownership changed"
-        : compactionSettingsKey(runtime.get().settings) !== settingsKey
+        : compactionSettingsKey(effectiveCodexCompactSettings(runtime.get().settings, ctx.model?.provider)) !==
+            settingsKey
           ? "compaction settings changed"
           : JSON.stringify(ctx.model) !== modelKey
             ? "model configuration changed"
@@ -331,7 +332,13 @@ async function adoptPreparedCheckpoint(
     let binding: Awaited<ReturnType<typeof resolveCompactionBinding>>;
     try {
       binding = await abortable(
-        resolveCompactionBinding(ctx, ctx.model, runtime.get().settings, valid, options.timings),
+        resolveCompactionBinding(
+          ctx,
+          ctx.model,
+          effectiveCodexCompactSettings(runtime.get().settings, ctx.model?.provider),
+          valid,
+          options.timings,
+        ),
         signal,
       );
     } catch {

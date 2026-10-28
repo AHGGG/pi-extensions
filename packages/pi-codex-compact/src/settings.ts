@@ -10,6 +10,9 @@ export const CODEX_COMPACT_SETTINGS_FILE = "pi-codex-compact.json";
 export const MAX_SETTINGS_BYTES = 64 * 1024;
 export const MAX_MAINTENANCE_MESSAGE_BYTES = 16 * 1024;
 
+export type ProviderCompactionSettings = Partial<Pick<CodexCompactSettings, "compactionMode" | "protocol">>;
+export const MAX_PROVIDER_OVERRIDES = 128;
+
 export interface CodexCompactSettings {
   enabled: boolean;
   compactionMode: "provider-checkpoint" | "text-summary";
@@ -18,6 +21,7 @@ export interface CodexCompactSettings {
   maintenanceMessage: string;
   protocol: RemoteCompactionProtocolSetting;
   apiProfiles: Record<string, "codex-responses-v1">;
+  providerOverrides: Record<string, ProviderCompactionSettings>;
   requestTimeoutMs: number;
   maxRetries: number;
   replacementTokenBudget: number;
@@ -29,7 +33,9 @@ export interface CodexCompactSettings {
 export function compactionSettingsKey(settings: CodexCompactSettings): string {
   return JSON.stringify(
     Object.fromEntries(
-      Object.keys(DEFAULT_CODEX_COMPACT_SETTINGS).map((key) => [key, settings[key as keyof CodexCompactSettings]]),
+      Object.keys(DEFAULT_CODEX_COMPACT_SETTINGS)
+        .filter((key) => key !== "providerOverrides")
+        .map((key) => [key, settings[key as keyof CodexCompactSettings]]),
     ),
   );
 }
@@ -42,6 +48,7 @@ export const DEFAULT_CODEX_COMPACT_SETTINGS: Readonly<CodexCompactSettings> = Ob
   maintenanceMessage: COMPACTION_MAINTENANCE_MESSAGE,
   protocol: "auto",
   apiProfiles: {},
+  providerOverrides: {},
   requestTimeoutMs: 300_000,
   maxRetries: 2,
   replacementTokenBudget: 64_000,
@@ -80,7 +87,12 @@ export interface CodexCompactSettingsState {
 export interface CodexCompactSettingsRuntime {
   get(): Readonly<CodexCompactSettingsState>;
   reload(signal?: AbortSignal): Promise<Readonly<CodexCompactSettingsState>>;
-  update(patch: Partial<CodexCompactSettings>, signal?: AbortSignal): Promise<Readonly<CodexCompactSettingsState>>;
+  /** A provider target permits only mode/protocol patches; an empty patch resets those overrides. */
+  update(
+    patch: Partial<CodexCompactSettings>,
+    signal?: AbortSignal,
+    provider?: string,
+  ): Promise<Readonly<CodexCompactSettingsState>>;
   flush(): Promise<void>;
 }
 
@@ -126,6 +138,61 @@ function normalizeApiProfiles(value: unknown): Record<string, "codex-responses-v
   return profiles;
 }
 
+/** Resolve only the active provider. Unrelated provider preferences never affect request fingerprints. */
+export function effectiveCodexCompactSettings(settings: CodexCompactSettings, provider?: string): CodexCompactSettings {
+  const overrides = settings.providerOverrides;
+  const override = provider && Object.hasOwn(overrides, provider) ? overrides[provider] : undefined;
+  return { ...settings, ...override };
+}
+
+function validProviderId(provider: string): boolean {
+  return (
+    provider.length > 0 &&
+    provider.length <= 256 &&
+    provider.trim() === provider &&
+    ![...provider].some((character) => {
+      const code = character.codePointAt(0) ?? 0;
+      return code < 0x20 || code === 0x7f;
+    }) &&
+    !["__proto__", "constructor", "prototype"].includes(provider)
+  );
+}
+
+function normalizeProviderOverrides(value: unknown): Record<string, ProviderCompactionSettings> | undefined {
+  if (!isRecord(value) || ![Object.prototype, null].includes(Object.getPrototypeOf(value))) return undefined;
+  const entries = Object.entries(value);
+  if (entries.length > MAX_PROVIDER_OVERRIDES) return undefined;
+  const result: Record<string, ProviderCompactionSettings> = {};
+  for (const [provider, override] of entries) {
+    if (
+      !validProviderId(provider) ||
+      !isRecord(override) ||
+      ![Object.prototype, null].includes(Object.getPrototypeOf(override))
+    )
+      return undefined;
+    if (
+      Object.hasOwn(override, "compactionMode") &&
+      override.compactionMode !== "provider-checkpoint" &&
+      override.compactionMode !== "text-summary"
+    )
+      return undefined;
+    if (
+      Object.hasOwn(override, "protocol") &&
+      !["auto", "remote-v2", "responses-compact", "context-management"].includes(override.protocol as string)
+    )
+      return undefined;
+    result[provider] = {
+      ...(Object.hasOwn(override, "compactionMode")
+        ? { compactionMode: override.compactionMode as CodexCompactSettings["compactionMode"] }
+        : {}),
+      ...(Object.hasOwn(override, "protocol")
+        ? { protocol: override.protocol as CodexCompactSettings["protocol"] }
+        : {}),
+    };
+  }
+  return result;
+}
+
 export function normalizeCodexCompactSettings(value: unknown): CodexCompactSettings | undefined {
   if (!isRecord(value)) return undefined;
   if (Object.hasOwn(value, "scratchpadEnabled") && typeof value.scratchpadEnabled !== "boolean") return undefined;
@@ -163,6 +230,8 @@ export function normalizeCodexCompactSettings(value: unknown): CodexCompactSetti
   if (Object.hasOwn(value, "notifyOnFallback") && typeof value.notifyOnFallback !== "boolean") {
     return undefined;
   }
+  if (Object.hasOwn(value, "providerOverrides") && normalizeProviderOverrides(value.providerOverrides) === undefined)
+    return undefined;
   if (Object.hasOwn(value, "apiProfiles") && normalizeApiProfiles(value.apiProfiles) === undefined) return undefined;
   for (const [field, limits] of Object.entries(LIMITS) as [
     keyof typeof LIMITS,
@@ -191,6 +260,7 @@ export function normalizeCodexCompactSettings(value: unknown): CodexCompactSetti
       value.protocol === "context-management"
         ? value.protocol
         : DEFAULT_CODEX_COMPACT_SETTINGS.protocol,
+    providerOverrides: normalizeProviderOverrides(value.providerOverrides) ?? {},
     apiProfiles: normalizeApiProfiles(value.apiProfiles) ?? structuredClone(DEFAULT_CODEX_COMPACT_SETTINGS.apiProfiles),
     requestTimeoutMs:
       typeof value.requestTimeoutMs === "number"
@@ -266,12 +336,31 @@ async function savePatch(
   path: string,
   patch: Partial<CodexCompactSettings>,
   signal?: AbortSignal,
+  provider?: string,
 ): Promise<CodexCompactSettingsState> {
   const latest = await loadCodexCompactSettings(path, signal);
   if (latest.kind === "invalid") {
     throw new Error("Cannot overwrite an invalid pi-codex-compact.json; repair it and reload first");
   }
-  const document = { ...latest.document, ...patch };
+  let document = { ...latest.document, ...patch };
+  if (provider !== undefined) {
+    if (!validProviderId(provider) || Object.keys(patch).some((key) => key !== "compactionMode" && key !== "protocol"))
+      throw new Error("Invalid provider compaction settings patch");
+    const overrides = {
+      ...(latest.document?.providerOverrides as Record<string, Record<string, unknown>> | undefined),
+    };
+    const previous = Object.hasOwn(overrides, provider) ? overrides[provider] : {};
+    const next = { ...previous, ...patch };
+    if (Object.keys(patch).length === 0) {
+      delete next.compactionMode;
+      delete next.protocol;
+    }
+    if (Object.keys(next).length) overrides[provider] = next;
+    else delete overrides[provider];
+    document = { ...latest.document };
+    if (Object.keys(overrides).length) document.providerOverrides = overrides;
+    else delete document.providerOverrides;
+  }
   const settings = normalizeCodexCompactSettings(document);
   if (!settings) throw new Error("Refusing to save invalid Codex compaction settings");
   const serialized = `${JSON.stringify(document, null, 2)}\n`;
@@ -326,9 +415,9 @@ export function createCodexCompactSettingsRuntime(path = codexCompactSettingsPat
         state = await loadCodexCompactSettings(path, signal);
         return structuredClone(state);
       }),
-    update: (patch, signal) =>
+    update: (patch, signal, provider) =>
       enqueue(async () => {
-        state = await savePatch(path, patch, signal);
+        state = await savePatch(path, patch, signal, provider);
         return structuredClone(state);
       }),
     flush: () => queue,

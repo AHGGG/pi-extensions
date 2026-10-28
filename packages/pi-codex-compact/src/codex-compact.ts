@@ -38,6 +38,7 @@ import {
   type CodexCompactSettingsState,
   compactionSettingsKey,
   createCodexCompactSettingsRuntime,
+  effectiveCodexCompactSettings,
 } from "./settings.js";
 import { terminalText } from "./terminal.js";
 import { activeCompactionId } from "./text-summary.js";
@@ -73,6 +74,7 @@ export function createCodexCompactExtension(
   return (pi) => {
     const providerWarnings = new Set<string>();
     const settingsRuntime = options.settingsRuntime ?? createCodexCompactSettingsRuntime();
+    const settingsFor = (provider?: string) => effectiveCodexCompactSettings(settingsRuntime.get().settings, provider);
     type ContinuationRun = {
       used: boolean;
       pending?: {
@@ -128,14 +130,14 @@ export function createCodexCompactExtension(
       version: 1,
       available(ctx) {
         const owner = ownerFor(ctx);
-        const route = resolveCompactionRoute(ctx.model, settingsRuntime.get().settings);
+        const route = resolveCompactionRoute(ctx.model, settingsFor(ctx.model?.provider));
         return (
           !owner.controller.signal.aborted &&
           !owner.operation &&
-          settingsRuntime.get().settings.enabled &&
+          settingsFor(ctx.model?.provider).enabled &&
           !!ctx.model &&
           route.kind === "remote" &&
-          (settingsRuntime.get().settings.compactionMode === "text-summary" ||
+          (settingsFor(ctx.model?.provider).compactionMode === "text-summary" ||
             !owner.rejected.hasObserved(rejectionRouteKey(ctx.model, route)))
         );
       },
@@ -150,7 +152,7 @@ export function createCodexCompactExtension(
           owner.rejected,
           () => owners.get(ctx.sessionManager) === owner && owner.sessionId === ctx.sessionManager.getSessionId(),
           (protocol) => {
-            const route = resolveCompactionRoute(ctx.model, settingsRuntime.get().settings);
+            const route = resolveCompactionRoute(ctx.model, settingsFor(ctx.model?.provider));
             if (!owner.controller.signal.aborted && ctx.model && route.kind === "remote")
               owner.lastRoute = { key: rejectionRouteKey(ctx.model, route), protocol };
           },
@@ -197,6 +199,7 @@ export function createCodexCompactExtension(
         const controller = owner.controller;
         const { showCodexCompactMenu } = await import("./settings-menu.js");
         if (owners.get(ctx.sessionManager) !== owner || controller.signal.aborted) return;
+        let menuSettingsKey = compactionSettingsKey(settingsFor(ctx.model?.provider));
         await showCodexCompactMenu(settingsRuntime, ctx, {
           signal: controller.signal,
           isCurrent: () =>
@@ -204,26 +207,28 @@ export function createCodexCompactExtension(
             !controller.signal.aborted &&
             ctx.sessionManager.getSessionId() === owner.sessionId,
           isPaused: () => {
-            const route = resolveCompactionRoute(ctx.model, settingsRuntime.get().settings);
+            const route = resolveCompactionRoute(ctx.model, settingsFor(ctx.model?.provider));
             return (
               !!ctx.model && route.kind === "remote" && owner.rejected.hasObserved(rejectionRouteKey(ctx.model, route))
             );
           },
           lastProtocol: () => {
-            const route = resolveCompactionRoute(ctx.model, settingsRuntime.get().settings);
+            const route = resolveCompactionRoute(ctx.model, settingsFor(ctx.model?.provider));
             return ctx.model && route.kind === "remote" && owner.lastRoute?.key === rejectionRouteKey(ctx.model, route)
               ? owner.lastRoute.protocol
               : undefined;
           },
           onSettingsChanged: () => {
             scratchpad.sync(ctx);
-            cancelOperation(ctx);
+            const nextKey = compactionSettingsKey(settingsFor(ctx.model?.provider));
+            if (nextKey !== menuSettingsKey) cancelOperation(ctx);
+            menuSettingsKey = nextKey;
           },
           hasCheckpoint: () => hasActiveCheckpointClaim(ctx.sessionManager.getBranch()),
           canReplayCheckpoint: () => {
             const checkpoint = activeCheckpoint(ctx);
             return (
-              !!checkpoint && isCheckpointCompatible(checkpoint.details, ctx.model, settingsRuntime.get().settings)
+              !!checkpoint && isCheckpointCompatible(checkpoint.details, ctx.model, settingsFor(ctx.model?.provider))
             );
           },
         });
@@ -295,7 +300,7 @@ export function createCodexCompactExtension(
       cancelOperation(ctx);
       const operation = new AbortController();
       owner.operation = operation;
-      const settings = settingsRuntime.get().settings;
+      const settings = settingsFor(ctx.model?.provider);
       const model = ctx.model;
       const route = resolveCompactionRoute(model, settings);
       const key = model && route.kind === "remote" ? rejectionRouteKey(model, route) : undefined;
@@ -315,7 +320,7 @@ export function createCodexCompactExtension(
           owner.sessionId !== ctx.sessionManager.getSessionId()
         )
           return false;
-        const currentSettings = settingsRuntime.get().settings;
+        const currentSettings = settingsFor(ctx.model?.provider);
         const currentRoute = resolveCompactionRoute(ctx.model, currentSettings);
         return (
           compactionSettingsKey(currentSettings) === compactionSettingsKey(settings) &&
@@ -472,7 +477,7 @@ export function createCodexCompactExtension(
       // Consume the candidate even when another participant already continues.
       // Repeated events cannot replay it at a later or unrelated boundary.
       run.pending = undefined;
-      const settings = settingsRuntime.get().settings;
+      const settings = settingsFor(ctx.model?.provider);
       const route = resolveCompactionRoute(ctx.model, settings);
       const checkpoint = activeCheckpoint(ctx);
       if (
@@ -526,8 +531,8 @@ export function createCodexCompactExtension(
     });
 
     pi.on("context", async (event, ctx) => {
-      if (!settingsRuntime.get().settings.enabled) return undefined;
-      const settings = settingsRuntime.get().settings;
+      if (!settingsFor(ctx.model?.provider).enabled) return undefined;
+      const settings = settingsFor(ctx.model?.provider);
       const checkpoint = activeCheckpoint(ctx);
       if (!checkpoint) return undefined;
       const route = resolveCompactionRoute(ctx.model, settings);
@@ -563,7 +568,7 @@ export function createCodexCompactExtension(
         ctx.model === model &&
         JSON.stringify(ctx.model) === modelKey &&
         JSON.stringify([pi.getActiveTools(), activeTools(pi)]) === toolsKey &&
-        JSON.stringify(settingsRuntime.get().settings) === JSON.stringify(settings) &&
+        compactionSettingsKey(settingsFor(ctx.model?.provider)) === compactionSettingsKey(settings) &&
         ctx.getSystemPrompt() === systemPrompt &&
         branchIsCurrent(ctx.sessionManager.getBranch());
       let transferred = false;
@@ -585,7 +590,7 @@ export function createCodexCompactExtension(
             ctx,
             checkpoint,
             [marker],
-            settings,
+            settingsFor(checkpoint.details.provider),
             signal,
             stillCurrent,
             options.fetch,
@@ -649,8 +654,8 @@ export function createCodexCompactExtension(
       if (run?.pending?.entryId) {
         run.pending = undefined;
       }
-      if (!settingsRuntime.get().settings.enabled) return undefined;
-      const settings = settingsRuntime.get().settings;
+      if (!settingsFor(ctx.model?.provider).enabled) return undefined;
+      const settings = settingsFor(ctx.model?.provider);
       const checkpoint = activeCheckpoint(ctx);
       if (!checkpoint) return undefined;
       const marker = checkpointMarker(checkpoint.details.checkpointId);
@@ -682,8 +687,8 @@ export function createCodexCompactExtension(
       cancelOperation(ctx);
       const owner = owners.get(ctx.sessionManager);
       if (owner) owner.run = undefined;
-      if (!settingsRuntime.get().settings.enabled) return;
-      const settings = settingsRuntime.get().settings;
+      if (!settingsFor(event.model.provider).enabled) return;
+      const settings = settingsFor(event.model.provider);
       const checkpoint = activeCheckpoint(ctx);
       if (!checkpoint || isCheckpointCompatible(checkpoint.details, event.model, settings)) return;
       const key = `${ctx.sessionManager.getSessionId()}:${event.model.provider}:${event.model.id}`;
