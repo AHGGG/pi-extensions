@@ -119,8 +119,10 @@ for (const trigger of [
   "context-compact",
   "queued-custom",
   "context-and-queued",
+  "proxy-auto",
 ] as const) {
   test(`real Pi ${trigger} compaction scopes maintenance and preserves ordinary replay`, async () => {
+    const activeModel = trigger === "proxy-auto" ? { ...model, baseUrl: "https://proxy.example.test/v1" } : model;
     const directory = await mkdtemp(join(tmpdir(), "pi-context-management-runtime-"));
     const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
     process.env.PI_CODING_AGENT_DIR = directory;
@@ -144,10 +146,13 @@ for (const trigger of [
         "context-compact",
         "queued-custom",
         "context-and-queued",
+        "proxy-auto",
       ].includes(trigger);
-      const fixtureFetch: typeof fetch = async (_input, init) => {
+      const fixtureFetch: typeof fetch = async (input, init) => {
         const payload: JsonObject = JSON.parse(String(init?.body));
         requests.push(payload);
+        if (trigger === "proxy-auto" && String(input).endsWith("/responses/compact"))
+          return Response.json({ error: { message: "Compact endpoint unavailable" } }, { status: 403 });
         if (payload.context_management) return response(maintenanceOutput.content[0].text, 20, true);
         ordinaryRequests += 1;
         if (trigger === "overflow" && ordinaryRequests === 1) {
@@ -182,7 +187,10 @@ for (const trigger of [
         kind: "loaded" as const,
         path: join(directory, "pi-codex-compact.json"),
         document: {},
-        settings: { ...DEFAULT_CODEX_COMPACT_SETTINGS, protocol: "context-management" as const },
+        settings: {
+          ...DEFAULT_CODEX_COMPACT_SETTINGS,
+          protocol: trigger === "proxy-auto" ? ("auto" as const) : ("context-management" as const),
+        },
       };
       const settingsManager = SettingsManager.inMemory({
         compaction: { enabled: true, reserveTokens: 15_000, keepRecentTokens: 10_000 },
@@ -302,7 +310,7 @@ for (const trigger of [
         cwd: directory,
         agentDir: directory,
         modelRuntime,
-        model,
+        model: activeModel,
         resourceLoader,
         settingsManager,
         sessionManager,
@@ -319,7 +327,11 @@ for (const trigger of [
       await cancellation;
       assert.equal(
         requests.length,
-        trigger === "repeat" ? 4 : ["pre-prompt", "manual", "cancel"].includes(trigger) ? 2 : 3,
+        trigger === "repeat" || trigger === "proxy-auto"
+          ? 4
+          : ["pre-prompt", "manual", "cancel"].includes(trigger)
+            ? 2
+            : 3,
       );
       assert.equal(session.isIdle, true);
       assert.match(
@@ -354,7 +366,7 @@ for (const trigger of [
         .filter((entry) => entry.type === "custom_message" && entry.customType === "codex-compact:continue-v1");
       assert.equal(
         continuationEntries.length,
-        ["threshold", "repeat", "context-agent-end", "context-compact"].includes(trigger) ? 1 : 0,
+        ["threshold", "repeat", "context-agent-end", "context-compact", "proxy-auto"].includes(trigger) ? 1 : 0,
       );
       if (contextSent) {
         const contextEntries = sessionManager

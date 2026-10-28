@@ -77,7 +77,7 @@ describe("Responses compaction route selection", () => {
     }
   });
 
-  test("server compaction requires explicit selection and retains API/profile eligibility", () => {
+  test("initial server compaction selection retains explicit protocol and API/profile eligibility", () => {
     for (const api of [
       "openai-responses",
       "azure-openai-responses",

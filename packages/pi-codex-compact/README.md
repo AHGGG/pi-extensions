@@ -10,13 +10,14 @@ The extension replays that checkpoint in later compatible requests. Pi still con
 - Supports built-in Codex, OpenAI, and Azure OpenAI Responses APIs, plus explicitly configured custom APIs.
 - Offers Remote Compaction V2, unary `responses/compact`, and experimental streaming Context Management.
 - Adapts verified official OpenAI ChatGPT OAuth requests to Context Management before dispatch, including Auto and V2 preferences.
+- Automatically tries Context Management when a third-party Responses Compact endpoint rejects Auto, and remembers validated success for the session.
 - Handles manual, threshold, and overflow compaction through Pi's normal lifecycle.
 - Exposes an optional prepared-checkpoint engine without scheduling speculative work itself.
 - Preserves compatible checkpoints across repeated compaction, protocol changes, reloads, resumes, and forks.
 - Uses Pi-native fallback before the first checkpoint; afterward, tries checkpoint-aware recovery with lossy native fallback on recovery failure.
 - Pauses an operation rejected by OAuth without disabling compatible checkpoint replay.
 
-**Context Management is experimental.** This fork selects it for verified official OpenAI ChatGPT OAuth requests; other authentication routes require explicit selection. It consumes the active route's quota or API usage; support depends on the backend, model, and account.
+**Context Management is experimental.** This fork selects it for verified official OpenAI ChatGPT OAuth requests and can try it automatically after a third-party Compact endpoint rejects Auto. Other routes require explicit selection. It consumes the active route's quota or API usage; support depends on the backend, model, and account.
 
 ## 📦 Install
 
@@ -89,7 +90,7 @@ For example, select Remote V2 explicitly on a compatible backend:
 }
 ```
 
-With `auto`, verified official OpenAI ChatGPT OAuth uses Context Management; API-key OpenAI and Azure use unary `responses/compact`, and legacy Codex uses Remote V2. The OAuth adaptation also applies to explicit V2 and Compact preferences. Remote V2 is unsupported on the current official `openai` ChatGPT OAuth subscription-sharing route: its `compaction_trigger` input is rejected. This is not a universal restriction on V2, API-key routes, or the separate Codex backend. Other APIs remain Pi-native unless explicitly configured. The menu reports the last resolved protocol after a compaction attempt without refreshing OAuth merely to display it.
+With `auto`, verified official OpenAI ChatGPT OAuth uses Context Management; API-key OpenAI and Azure start with unary `responses/compact`, and legacy Codex uses Remote V2. Third-party `openai-responses` endpoints can automatically try Context Management after a Compact rejection; see [automatic proxy compatibility](#automatic-proxy-compatibility). The OAuth adaptation also applies to explicit V2 and Compact preferences. Remote V2 is unsupported on the current official `openai` ChatGPT OAuth subscription-sharing route: its `compaction_trigger` input is rejected. This is not a universal restriction on V2, API-key routes, or the separate Codex backend. Other APIs remain Pi-native unless explicitly configured. The menu reports the last resolved protocol after a compaction attempt without refreshing OAuth merely to display it.
 
 New checkpoint summaries show preparation duration. Background checkpoints show preparation and apply-check durations separately, excluding the idle wait before adoption. Apply checks include draft preview validation, not Pi's persistence or UI work; these numbers are not the total user-visible pause. Existing checkpoint summaries are unchanged.
 
@@ -110,7 +111,7 @@ The provider adapter must honor Pi's public `onPayload` and injected `fetch` opt
 | Model API | `auto` route | Other selectable route |
 | --- | --- | --- |
 | `openai-codex-responses` | Responses Remote V2 | Responses Compact API, experimental Context Management |
-| `openai-responses` | Context Management for verified official ChatGPT OAuth; Responses Compact API otherwise | API-key routes honor the selected protocol; verified ChatGPT OAuth always uses Context Management |
+| `openai-responses` | Context Management for verified official ChatGPT OAuth; Responses Compact API otherwise, with automatic proxy compatibility | Explicit API-key protocols remain fixed; verified ChatGPT OAuth always uses Context Management |
 | `azure-openai-responses` | Responses Compact API | Responses Remote V2, experimental Context Management |
 
 For a custom API, map its exact non-built-in label to `"codex-responses-v1"` in `apiProfiles`. This profile uses Remote V2 in `auto` mode and requires Codex-compatible request fields and replay; it declares compatibility rather than probing the backend. With unary compaction selected, it retains Codex-supported tools and reasoning.
@@ -118,7 +119,14 @@ Built-in adapter tests cover request plumbing, not backend support or hosted ent
 
 Within the same provider, checkpoints can replay across models when their Responses API label and compatibility profile match. Custom checkpoints also require the matching `apiProfiles` entry.
 Changing providers transfers the checkpoint through its issuing provider as a plaintext summary when summary recovery is enabled. The selected provider never receives the issuer's encrypted checkpoint. This transfer can consume quota and lose detail; missing issuer access or a failed transfer stops the request and preserves history.
-The extension does not make capability probes or automatically retry a failed billable request through another protocol.
+
+### Automatic proxy compatibility
+
+For a third-party endpoint using `openai-responses` and `protocol: "auto"`, Compact HTTP 403, 404, 405, or 501 permits one Context Management attempt at the same provider-built `/responses` URL, using the same credentials, headers, environment, history, and timeout settings. This extra inference request can consume quota. Official OpenAI endpoints, Azure and Codex APIs, explicit protocols, OAuth operation rejections, 401, 429, network failures, and ordinary service errors do not enter this negotiation. A malformed successful Compact response does not trigger another protocol.
+
+A completed, validated checkpoint allows later Auto compactions in that session to use Context Management directly. The bounded in-memory observation is tied to the model, authentication, provider functions, maintenance settings, and exact dispatch URL digest. It clears on session start or reload, is not saved to settings, and is removed when Context Management fails. A backend changing during negotiation or cached dispatch cancels that operation and preserves history.
+
+If Context Management is rejected or produces no valid checkpoint, foreground compaction uses the existing native-summary or checkpoint-recovery policy. Background preparation remains checkpoint-only and pauses after failure; it does not publish ordinary assistant text as a checkpoint. A service supporting only ordinary Responses inference therefore uses foreground Pi summaries. No separate capability probes or Remote V2 guesses are made.
 
 ### Prepared-compaction interface
 

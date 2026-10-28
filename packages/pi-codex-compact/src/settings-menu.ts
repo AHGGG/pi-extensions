@@ -186,7 +186,7 @@ export function createCodexCompactMenu(
             id: "protocol",
             label: "Protocol",
             description:
-              "Preferred protocol only. Official OpenAI ChatGPT OAuth subscription-sharing does not support Remote V2; it uses Context Management instead. Other routes may support V2.",
+              "Auto can try Context Management after a third-party Compact endpoint rejects the request; this can consume quota. Explicit proxy protocols stay fixed. Official OpenAI ChatGPT OAuth uses Context Management for every preference.",
             currentValue: protocolLabel(state.settings.protocol),
             values: ["Auto", "Remote V2", "Responses Compact", "Context Management (experimental)"],
             action: "set-protocol",

@@ -1,6 +1,7 @@
 import type { Api, Model } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { abortable } from "./abortable.js";
+import { AutoCompactionProtocols } from "./auto-protocol.js";
 import {
   type CodexCheckpointDetails,
   checkpointMarker,
@@ -83,6 +84,7 @@ export function createCodexCompactExtension(
     type Owner = {
       controller: AbortController;
       rejected: RejectedRoutes;
+      autoProtocols: AutoCompactionProtocols;
       sessionId: string;
       operation?: AbortController;
       run?: ContinuationRun;
@@ -97,7 +99,12 @@ export function createCodexCompactExtension(
       if (!owner || owner.sessionId !== sessionId) {
         owner?.controller.abort();
         if (owner) ctx.ui.setStatus(STATUS_KEY, undefined);
-        owner = { controller: new AbortController(), rejected: new RejectedRoutes(), sessionId };
+        owner = {
+          controller: new AbortController(),
+          rejected: new RejectedRoutes(),
+          autoProtocols: new AutoCompactionProtocols(),
+          sessionId,
+        };
         owners.set(ctx.sessionManager, owner);
         activeManagers.add(ctx.sessionManager);
       }
@@ -146,6 +153,7 @@ export function createCodexCompactExtension(
               owner.lastRoute = { key: rejectionRouteKey(ctx.model, route), protocol };
           },
           options.fetch,
+          owner.autoProtocols,
         );
       },
       checkpointId: (ctx) => activeCheckpoint(ctx)?.details.checkpointId,
@@ -228,6 +236,7 @@ export function createCodexCompactExtension(
       const owner: Owner = {
         controller: new AbortController(),
         rejected: new RejectedRoutes(),
+        autoProtocols: new AutoCompactionProtocols(),
         sessionId: ctx.sessionManager.getSessionId(),
       };
       owners.set(ctx.sessionManager, owner);
@@ -364,6 +373,7 @@ export function createCodexCompactExtension(
             if (isCurrent() && key) owner.lastRoute = { key, protocol };
           },
           options.fetch,
+          { autoProtocols: owner.autoProtocols },
         );
       };
       return execute()

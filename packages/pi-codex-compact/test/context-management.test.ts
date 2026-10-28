@@ -78,7 +78,7 @@ async function request(fetch: typeof globalThis.fetch, options = {}) {
   });
 }
 
-test("server compaction is an explicit opt-in setting, not a new auto route", () => {
+test("server compaction can be selected explicitly while the default preference remains auto", () => {
   assert.equal(normalizeCodexCompactSettings({ protocol })?.protocol, "context-management");
   assert.equal(normalizeCodexCompactSettings({})?.protocol, "auto");
 });

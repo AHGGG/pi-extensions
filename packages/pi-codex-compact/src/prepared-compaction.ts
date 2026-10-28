@@ -11,6 +11,7 @@ import {
   SessionManager,
 } from "@earendil-works/pi-coding-agent";
 import { abortable } from "./abortable.js";
+import type { AutoCompactionProtocols } from "./auto-protocol.js";
 import { createCheckpointDetails, fallbackSummary, latestCheckpoint, parseCheckpointDetails } from "./checkpoint.js";
 import { checkpointKeptMessages, projectSessionCheckpointContext } from "./checkpoint-projection.js";
 import { compactionBindingChanges, resolveCompactionBinding, sameCompactionBinding } from "./compaction-binding.js";
@@ -49,6 +50,7 @@ export function captureCheckpointPreparation(
   ownerIsCurrent: () => boolean,
   onRouteResolved: (protocol: RemoteCompactionProtocol) => void,
   fetch?: typeof globalThis.fetch,
+  autoProtocols?: AutoCompactionProtocols,
 ): CheckpointPreparation | undefined {
   const settings = runtime.get().settings;
   const model = ctx.model;
@@ -156,6 +158,7 @@ export function captureCheckpointPreparation(
         onRouteResolved,
         fetch,
         {
+          autoProtocols,
           preparation: { attempt, branchIsCurrent, failureReportOwner: guard.failureReportOwner },
           deadlineSignal: guard.deadlineSignal,
           onDiagnostics: (value) => {

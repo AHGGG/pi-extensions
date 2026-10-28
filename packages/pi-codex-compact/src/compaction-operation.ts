@@ -9,6 +9,13 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { abortable } from "./abortable.js";
 import {
+  type AutoCompactionProtocols,
+  compactionEndpointKey,
+  contextManagementEndpointKey,
+  isAutomaticProxyCompaction,
+  isCompactEndpointRejection,
+} from "./auto-protocol.js";
+import {
   buildReplacementHistory,
   type CodexCheckpointDetails,
   checkpointMarker,
@@ -37,7 +44,7 @@ import { type CompactionRoute, type RemoteCompactionProtocol, resolveCompactionR
 import { preparationFailureDetail } from "./preparation-failure.js";
 import { type RejectedRoutes, rejectionRouteKey } from "./rejection-state.js";
 import { requestRemoteCompaction } from "./remote.js";
-import { abortError } from "./remote-types.js";
+import { abortError, type RemoteCompactionRequest, type RemoteCompactionResponse } from "./remote-types.js";
 import { RequestDiagnostics } from "./request-diagnostics.js";
 import { captureScratchpadForCompaction } from "./scratchpad-compaction.js";
 import type { CodexCompactSettings } from "./settings.js";
@@ -52,6 +59,7 @@ export interface CompactionAttempt {
 }
 
 export interface CompactionOperationOptions {
+  autoProtocols?: AutoCompactionProtocols;
   preparation?: {
     attempt: CompactionAttempt;
     branchIsCurrent: (current: SessionBeforeCompactEvent["branchEntries"]) => boolean;
@@ -196,6 +204,9 @@ export async function compactRemotely(
   let lastHttpStatus: number | undefined;
   let lastTransportFailure: string | undefined;
   let rejectionError: Error | undefined;
+  let autoBinding: CompactionBinding | undefined;
+  let automaticEndpoint: string | undefined;
+  let automaticBackendChanged = false;
   const remoteController = new AbortController();
   const remoteSignal = AbortSignal.any([
     signal,
@@ -261,6 +272,17 @@ export async function compactRemotely(
     if (!stillCurrent()) return { cancel: true };
     const { auth, provider } = resolved;
     route = resolved.route;
+    if (
+      settings.protocol === "auto" &&
+      route.protocol === "responses-compact" &&
+      isAutomaticProxyCompaction(model, auth)
+    ) {
+      // Bind the configured preference before negotiation. Prepared adoption must
+      // validate the same credentials/provider even when a different protocol wins.
+      autoBinding = resolved.binding;
+      automaticEndpoint = options.autoProtocols?.contextManagementEndpoint(autoBinding);
+      if (automaticEndpoint) route = { ...route, protocol: "context-management" };
+    }
     diagnostics.configure(settings.protocol, route.protocol, settings.appendMaintenanceMessage);
     privateAuthValues.push(
       resolved.auth.apiKey ?? "",
@@ -307,8 +329,9 @@ export async function compactRemotely(
       return { compaction };
     }
     const preparationStarted = performance.now();
-    if (route.protocol === "context-management") await captureScratchpad(remoteSignal);
+    if (route.protocol === "context-management" || autoBinding) await captureScratchpad(remoteSignal);
     if (!stillCurrent()) return { cancel: true };
+    scratchpadIncluded = route.protocol === "context-management" && scratchpadSnapshot !== undefined;
     const context: Context = {
       systemPrompt: ctx.getSystemPrompt(),
       // Prepared operations borrow raw ancestry under persisted-value guards. Keep
@@ -321,147 +344,181 @@ export async function compactRemotely(
     };
     diagnostics.record("preparation", preparationStarted);
     diagnostics.phase = "request";
-    const response = await abortable(
-      requestRemoteCompaction({
-        diagnostics,
-        provider,
-        model,
-        context,
-        protocol: route.protocol,
-        profile: route.profile,
-        apiKey: auth.apiKey,
-        headers: auth.headers,
-        env: auth.env,
-        signal: remoteSignal,
-        priorCheckpoint: current.prior
-          ? {
-              marker: checkpointMarker(current.prior.checkpointId),
-              replacementHistory: current.prior.replacementHistory,
-            }
-          : undefined,
-        appendMaintenanceMessage: settings.appendMaintenanceMessage,
-        maintenanceMessage: settings.maintenanceMessage,
-        scratchpadSnapshot,
-        scratchpadOmittedForSize,
-        requestTimeoutMs: settings.requestTimeoutMs,
-        maxRetries: settings.maxRetries,
-        beforeStreamRetry: async () => {
-          if (!stillCurrent() || remoteSignal.aborted) throw abortError();
-          const rebound = await abortable(
-            resolveCompactionBinding(ctx, model, settings, stillCurrent, diagnostics),
-            remoteSignal,
+    const request: RemoteCompactionRequest = {
+      diagnostics,
+      provider,
+      model,
+      context,
+      protocol: route.protocol,
+      profile: route.profile,
+      apiKey: auth.apiKey,
+      headers: auth.headers,
+      env: auth.env,
+      signal: remoteSignal,
+      priorCheckpoint: current.prior
+        ? {
+            marker: checkpointMarker(current.prior.checkpointId),
+            replacementHistory: current.prior.replacementHistory,
+          }
+        : undefined,
+      appendMaintenanceMessage: settings.appendMaintenanceMessage,
+      maintenanceMessage: settings.maintenanceMessage,
+      scratchpadSnapshot,
+      scratchpadOmittedForSize,
+      requestTimeoutMs: settings.requestTimeoutMs,
+      maxRetries: settings.maxRetries,
+      beforeStreamRetry: async () => {
+        if (!stillCurrent() || remoteSignal.aborted) throw abortError();
+        const rebound = await abortable(
+          resolveCompactionBinding(ctx, model, settings, stillCurrent, diagnostics),
+          remoteSignal,
+        );
+        if (!stillCurrent() || remoteSignal.aborted) throw abortError();
+        if (!sameCompactionBinding(resolved.binding, rebound.binding))
+          throw new Error("Compaction retry binding changed");
+        privateAuthValues.push(
+          rebound.auth.apiKey ?? "",
+          ...Object.values(rebound.auth.headers ?? {}).filter((value): value is string => typeof value === "string"),
+          ...Object.values(rebound.auth.env ?? {}),
+        );
+        return { apiKey: rebound.auth.apiKey, headers: rebound.auth.headers, env: rebound.auth.env };
+      },
+      onProviderStreamEvent: (raw) => {
+        if (route.protocol !== "context-management") diagnostics.observe(raw);
+        const error = streamOperationRejection(raw);
+        if (error) recordRejection(error);
+      },
+      fetch: async (input, init) => {
+        if (remoteSignal.aborted) throw remoteSignal.reason;
+        if (!stillCurrent()) throw new Error("Compaction ownership changed before dispatch");
+        const endpoint = input instanceof Request ? input.url : String(input);
+        diagnostics.endpoint(endpoint);
+        if (autoBinding) {
+          if (route.protocol === "responses-compact") automaticEndpoint = contextManagementEndpointKey(endpoint);
+          else if (automaticEndpoint && compactionEndpointKey(endpoint) !== automaticEndpoint) {
+            automaticBackendChanged = true;
+            throw new Error("Automatic compaction backend changed before dispatch; history preserved");
+          }
+        }
+        routeKey = rejectionRouteKey(model, route, endpoint);
+        endpointObserved = true;
+        rejected.observe(publicRouteKey, routeKey);
+        paused = rejected.has(routeKey);
+        if (paused) {
+          // Cancel only the remote subrequest, including adapter-owned retries.
+          // Keep the parent compaction signal available for checkpoint recovery.
+          remoteController.abort();
+          return Response.json(
+            { error: { message: "Remote compaction route is paused after an OAuth operation rejection" } },
+            { status: 409, headers: { "x-should-retry": "false" } },
           );
-          if (!stillCurrent() || remoteSignal.aborted) throw abortError();
-          if (!sameCompactionBinding(resolved.binding, rebound.binding))
-            throw new Error("Compaction retry binding changed");
-          privateAuthValues.push(
-            rebound.auth.apiKey ?? "",
-            ...Object.values(rebound.auth.headers ?? {}).filter((value): value is string => typeof value === "string"),
-            ...Object.values(rebound.auth.env ?? {}),
-          );
-          return { apiKey: rebound.auth.apiKey, headers: rebound.auth.headers, env: rebound.auth.env };
-        },
-        onProviderStreamEvent: (raw) => {
-          if (route.protocol !== "context-management") diagnostics.observe(raw);
-          const error = streamOperationRejection(raw);
-          if (error) recordRejection(error);
-        },
-        fetch: async (input, init) => {
-          if (remoteSignal.aborted) throw remoteSignal.reason;
-          if (!stillCurrent()) throw new Error("Compaction ownership changed before dispatch");
-          const endpoint = input instanceof Request ? input.url : String(input);
-          diagnostics.endpoint(endpoint);
-          routeKey = rejectionRouteKey(model, route, endpoint);
-          endpointObserved = true;
-          rejected.observe(publicRouteKey, routeKey);
-          paused = rejected.has(routeKey);
-          if (paused) {
-            // Cancel only the remote subrequest, including adapter-owned retries.
-            // Keep the parent compaction signal available for checkpoint recovery.
-            remoteController.abort();
-            return Response.json(
-              { error: { message: "Remote compaction route is paused after an OAuth operation rejection" } },
-              { status: 409, headers: { "x-should-retry": "false" } },
-            );
-          }
-          remoteAttempted = true;
-          lastHttpStatus = undefined;
-          lastTransportFailure = undefined;
-          const diagnosticAttempt =
-            route.protocol === "context-management" ? diagnostics.currentAttempt : diagnostics.beginAttempt();
-          if (route.protocol !== "context-management") {
-            const providerSignals = [
-              ...(init?.signal ? [init.signal] : []),
-              ...(input instanceof Request ? [input.signal] : []),
-            ];
-            const providerSignal = providerSignals.length ? AbortSignal.any(providerSignals) : undefined;
-            const markProviderAbort = () => diagnostics.providerAborted(diagnosticAttempt);
-            if (providerSignal?.aborted) markProviderAbort();
-            providerSignal?.addEventListener("abort", markProviderAbort, { once: true });
-            diagnosticCleanups.push(() => providerSignal?.removeEventListener("abort", markProviderAbort));
-          }
-          const response = await (fetch ?? globalThis.fetch)(input, {
-            ...init,
-            signal: AbortSignal.any([
-              remoteSignal,
-              ...(init?.signal ? [init.signal] : []),
-              ...(input instanceof Request ? [input.signal] : []),
-            ]),
-          }).catch((error: unknown) => {
-            const detail = preparationFailureDetail(error, { remoteAttempted: true });
-            lastTransportFailure =
-              detail.startsWith("network request failed") ||
-              detail === "checkpoint request timed out" ||
-              detail === "provider or transport aborted the checkpoint request"
-                ? detail
-                : "network request failed";
-            throw error;
-          });
-          diagnostics.headers(response, diagnosticAttempt);
-          lastHttpStatus = response.ok ? undefined : response.status;
-          if (remoteSignal.aborted || !stillCurrent()) {
-            void response.body?.cancel().catch(() => undefined);
-            throw new Error("Compaction ownership changed after response");
-          }
-          const signals = [
-            remoteSignal,
+        }
+        remoteAttempted = true;
+        lastHttpStatus = undefined;
+        lastTransportFailure = undefined;
+        const diagnosticAttempt =
+          route.protocol === "context-management" ? diagnostics.currentAttempt : diagnostics.beginAttempt();
+        if (route.protocol !== "context-management") {
+          const providerSignals = [
             ...(init?.signal ? [init.signal] : []),
             ...(input instanceof Request ? [input.signal] : []),
           ];
-          const requestSignal = AbortSignal.any(signals);
-          let observed = response;
-          if (route.protocol !== "context-management" && observed.body) {
-            const transform = new TransformStream<Uint8Array, Uint8Array>({
-              transform(chunk, destination) {
-                diagnostics.chunk(chunk.byteLength, diagnosticAttempt);
-                destination.enqueue(chunk);
-              },
-              flush() {
-                diagnostics.end(diagnosticAttempt);
-              },
-            });
-            void observed.body.pipeTo(transform.writable, { signal: requestSignal }).catch(() => {
-              diagnostics.pipeError(diagnosticAttempt, requestSignal.aborted);
-            });
-            observed = new Response(transform.readable, {
-              status: observed.status,
-              statusText: observed.statusText,
-              headers: observed.headers,
-            });
-          }
-          const failure = await inspectFailureResponse(observed, requestSignal);
-          if (!stillCurrent()) {
-            void failure.response.body?.cancel().catch(() => undefined);
-            throw new Error("Compaction ownership changed during error inspection");
-          }
-          if (failure.rejection) recordRejection(failure.rejection);
-          return route.protocol === "responses-compact"
-            ? failure.response
-            : observeSseRejections(failure.response, requestSignal, recordRejection);
-        },
-      }),
-      remoteSignal,
-    );
+          const providerSignal = providerSignals.length ? AbortSignal.any(providerSignals) : undefined;
+          const markProviderAbort = () => diagnostics.providerAborted(diagnosticAttempt);
+          if (providerSignal?.aborted) markProviderAbort();
+          providerSignal?.addEventListener("abort", markProviderAbort, { once: true });
+          diagnosticCleanups.push(() => providerSignal?.removeEventListener("abort", markProviderAbort));
+        }
+        const response = await (fetch ?? globalThis.fetch)(input, {
+          ...init,
+          signal: AbortSignal.any([
+            remoteSignal,
+            ...(init?.signal ? [init.signal] : []),
+            ...(input instanceof Request ? [input.signal] : []),
+          ]),
+        }).catch((error: unknown) => {
+          const detail = preparationFailureDetail(error, { remoteAttempted: true });
+          lastTransportFailure =
+            detail.startsWith("network request failed") ||
+            detail === "checkpoint request timed out" ||
+            detail === "provider or transport aborted the checkpoint request"
+              ? detail
+              : "network request failed";
+          throw error;
+        });
+        diagnostics.headers(response, diagnosticAttempt);
+        lastHttpStatus = response.ok ? undefined : response.status;
+        if (remoteSignal.aborted || !stillCurrent()) {
+          void response.body?.cancel().catch(() => undefined);
+          throw new Error("Compaction ownership changed after response");
+        }
+        const signals = [
+          remoteSignal,
+          ...(init?.signal ? [init.signal] : []),
+          ...(input instanceof Request ? [input.signal] : []),
+        ];
+        const requestSignal = AbortSignal.any(signals);
+        let observed = response;
+        if (route.protocol !== "context-management" && observed.body) {
+          const transform = new TransformStream<Uint8Array, Uint8Array>({
+            transform(chunk, destination) {
+              diagnostics.chunk(chunk.byteLength, diagnosticAttempt);
+              destination.enqueue(chunk);
+            },
+            flush() {
+              diagnostics.end(diagnosticAttempt);
+            },
+          });
+          void observed.body.pipeTo(transform.writable, { signal: requestSignal }).catch(() => {
+            diagnostics.pipeError(diagnosticAttempt, requestSignal.aborted);
+          });
+          observed = new Response(transform.readable, {
+            status: observed.status,
+            statusText: observed.statusText,
+            headers: observed.headers,
+          });
+        }
+        const failure = await inspectFailureResponse(observed, requestSignal);
+        if (!stillCurrent()) {
+          void failure.response.body?.cancel().catch(() => undefined);
+          throw new Error("Compaction ownership changed during error inspection");
+        }
+        if (failure.rejection) recordRejection(failure.rejection);
+        return route.protocol === "responses-compact"
+          ? failure.response
+          : observeSseRejections(failure.response, requestSignal, recordRejection);
+      },
+    };
+    const dispatch = () => abortable(requestRemoteCompaction({ ...request, protocol: route.protocol }), remoteSignal);
+    let response: RemoteCompactionResponse;
+    try {
+      response = await dispatch();
+    } catch (error) {
+      if (
+        !autoBinding ||
+        !automaticEndpoint ||
+        route.protocol !== "responses-compact" ||
+        !isCompactEndpointRejection(lastHttpStatus) ||
+        rejectionError ||
+        isOAuthOperationRejection(error) ||
+        remoteSignal.aborted ||
+        !stillCurrent()
+      )
+        throw error;
+      route = { ...route, protocol: "context-management" };
+      scratchpadIncluded = scratchpadSnapshot !== undefined;
+      diagnostics.configure(settings.protocol, route.protocol, settings.appendMaintenanceMessage);
+      onRouteResolved(route.protocol);
+      if (ctx.hasUI)
+        ctx.ui.notify(
+          `[codex-compact] Compact endpoint returned HTTP ${lastHttpStatus}; Auto is trying Context Management on the same provider. This inference request can consume quota.`,
+          "info",
+        );
+      if (ownsStatus()) ctx.ui.setStatus(STATUS_KEY, "Responses Context Management (experimental)…");
+      lastHttpStatus = undefined;
+      lastTransportFailure = undefined;
+      response = await dispatch();
+    }
     diagnostics.seal();
     if (!stillCurrent()) return { cancel: true };
     const validationStarted = performance.now();
@@ -488,6 +545,8 @@ export async function compactRemotely(
       replacementHistory,
       keptMessages: keptMessages(event),
     });
+    if (autoBinding && automaticEndpoint && route.protocol === "context-management")
+      options.autoProtocols?.rememberContextManagement(autoBinding, automaticEndpoint);
     outcome = options.preparation ? "prepared" : "ready";
     return {
       compaction: {
@@ -504,9 +563,10 @@ export async function compactRemotely(
       httpStatus: lastHttpStatus,
       remoteAttempted,
     });
+    if (autoBinding && route.protocol === "context-management") options.autoProtocols?.forget(autoBinding);
     diagnostics.callerAbort ||= event.signal.aborted;
     diagnostics.seal();
-    if (!stillCurrent()) return { cancel: true };
+    if (!stillCurrent() || automaticBackendChanged) return { cancel: true };
     if (remoteAttempted && isOAuthOperationRejection(error))
       recordRejection(error instanceof Error ? error : new Error(String(error)));
     if (options.preparation) {

@@ -61,7 +61,7 @@ export function resolveCompactionRoute(
   return resolveCompactionRouteForApi(model?.api, options);
 }
 
-function isOfficialOpenAIBaseUrl(baseUrl: string): boolean {
+export function isOfficialOpenAIBaseUrl(baseUrl: string): boolean {
   return baseUrl === "https://api.openai.com/v1" || baseUrl === "https://api.openai.com/v1/";
 }
 
