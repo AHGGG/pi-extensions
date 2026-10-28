@@ -83,7 +83,7 @@ Pi's built-in `/compact` uses the same compaction routing.
 Use `/codex-compact` → **Settings**, or edit the global JSON file at `<getAgentDir()>/pi-codex-compact.json` (normally `~/.pi/agent/pi-codex-compact.json`).
 There are no project or extension-specific environment-variable overrides. Missing fields use defaults.
 
-Settings opens with **Settings scope → This provider**. Changes to **Compaction mode** and **Protocol** are saved for the displayed provider ID; all other controls stay global. Switch to **Global defaults** to change the fallback for providers without an override. **Use global defaults** removes this provider’s mode and protocol choices. Inherited and custom values are labeled.
+Settings always edits global defaults. To keep the displayed **Compaction mode** and **Protocol** for the current provider across sessions, select **Save current settings for this provider** and press Enter. Existing provider overrides remain active and are shown separately; **Use global defaults for this provider** removes those two overrides. All other controls remain global.
 
 For example, keep Provider checkpoint as the global default and use Text summary only for a custom provider named `my-proxy`:
 
@@ -97,7 +97,7 @@ For example, keep Provider checkpoint as the global default and use Text summary
 
 Use the exact provider ID from Pi, not its model ID or API type. Switching providers automatically selects its saved choices. This does not change credentials, background preparation, or Apply when ready. Existing opaque history still requires a compatible issuing provider for replay.
 
-Provider checkpoint is the default mode. To request text summaries directly, select **Compaction mode → Text summary** for this provider. To make it the global default, choose **Settings scope → Global defaults**, or save:
+Provider checkpoint is the default mode. To make text summaries the global default, select **Compaction mode → Text summary**, or save:
 
 ```json
 {

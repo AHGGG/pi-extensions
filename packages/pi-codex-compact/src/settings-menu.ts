@@ -17,7 +17,7 @@ type Action =
   | "compact-now"
   | "set-enabled"
   | "set-mode"
-  | "set-scope"
+  | "save-provider"
   | "reset-provider"
   | "set-scratchpad"
   | "set-append-message"
@@ -116,30 +116,34 @@ export function createCodexCompactMenu(
   } = {},
 ): MenuDefinition<CodexCompactSettingsState, Screen, Action, ExtensionCommandContext> {
   const provider = options.status?.provider;
-  let scope: "provider" | "global" = provider ? "provider" : "global";
-  const save = (
+  let displayedPreferences: Pick<CodexCompactSettings, "compactionMode" | "protocol"> | undefined;
+  const save = async (
     ctx: ExtensionCommandContext,
     patch: Partial<CodexCompactSettings>,
     signal: AbortSignal,
-    scoped = false,
-  ) =>
-    update(
+    targetProvider?: string,
+  ) => {
+    const result = await update(
       runtime,
       ctx,
       patch,
       signal,
       options.onSettingsChanged,
       options.isCurrent,
-      scoped && scope === "provider" ? provider : undefined,
+      targetProvider,
     );
-  const editedSettings = (state: Readonly<CodexCompactSettingsState>) =>
-    effectiveCodexCompactSettings(state.settings, scope === "provider" ? provider : undefined);
-  const inherited = (state: Readonly<CodexCompactSettingsState>, field: "compactionMode" | "protocol") =>
-    scope === "provider" && provider && !Object.hasOwn(state.settings.providerOverrides[provider] ?? {}, field)
-      ? " Inherited from global defaults."
-      : scope === "provider"
-        ? " Saved for this provider only."
-        : " Global default for providers without an override.";
+    // Kit serializes edits but retains the screen's original action state. Track only
+    // successful menu edits so a snapshot matches its rows, not an external reload.
+    if (result.kind === "stay" && targetProvider === undefined && displayedPreferences) {
+      if (patch.compactionMode !== undefined) displayedPreferences.compactionMode = patch.compactionMode;
+      if (patch.protocol !== undefined) displayedPreferences.protocol = patch.protocol;
+    }
+    return result;
+  };
+  const saveProvider = (ctx: ExtensionCommandContext, patch: Partial<CodexCompactSettings>, signal: AbortSignal) => {
+    if (!provider) return { kind: "rejected" as const };
+    return save(ctx, patch, signal, provider);
+  };
   return {
     start: "main",
     screens: {
@@ -206,146 +210,159 @@ export function createCodexCompactMenu(
           hint: "close",
         };
       },
-      settings: ({ state }) => ({
-        kind: "settings",
-        title: "Responses Compaction Settings",
-        lines: [
-          `User settings · ${safeText(state.path)}`,
-          `Current provider: ${safeText(provider ?? "none")}`,
-          "Scope applies to Compaction mode and Protocol. All other settings are global.",
-        ],
-        items: [
-          ...(provider
-            ? [
-                {
-                  id: "scope",
-                  label: "Settings scope",
-                  currentValue: scope === "provider" ? "This provider" : "Global defaults",
-                  description: `Choose where mode and protocol changes are saved. This provider: ${safeText(provider)}.`,
-                  values: ["This provider", "Global defaults"],
-                  action: "set-scope" as const,
-                },
-              ]
-            : []),
-          ...(provider && scope === "provider"
-            ? [
-                {
-                  id: "resetProvider",
-                  label: "Use global defaults",
-                  currentValue: "Reset this provider",
-                  description: "Remove this provider's mode and protocol overrides; keep other provider settings.",
-                  action: "reset-provider" as const,
-                },
-              ]
-            : []),
-          {
-            id: "enabled",
-            label: "Compaction and replay",
-            description: "Enable the selected compaction mode and replay existing compatible provider checkpoints.",
-            currentValue: state.settings.enabled ? "On" : "Off",
-            values: ["On", "Off"],
-            action: "set-enabled",
-          },
-          {
-            id: "compactionMode",
-            label: "Compaction mode",
-            description:
-              "Provider checkpoint preserves the existing behavior. Text summary (experimental) directly requests a readable summary; existing checkpoint replay stays enabled." +
-              inherited(state, "compactionMode"),
-            currentValue: modeLabel(editedSettings(state).compactionMode),
-            values: ["Provider checkpoint", "Text summary"],
-            action: "set-mode",
-          },
-          {
-            id: "scratchpadEnabled",
-            label: "Scratchpad",
-            description:
-              "Expose session-specific task notes. Saved across sessions; Off preserves notes. Also available through /scratchpad on or off.",
-            currentValue: state.settings.scratchpadEnabled ? "On" : "Off",
-            values: ["On", "Off"],
-            action: "set-scratchpad",
-          },
-          {
-            id: "protocol",
-            label: "Protocol",
-            description:
-              "Used only in Provider checkpoint mode. Auto can try Context Management after a third-party Compact endpoint rejects the request; this can consume quota. Official OpenAI ChatGPT OAuth uses Context Management for every preference." +
-              inherited(state, "protocol"),
-            currentValue: protocolLabel(editedSettings(state).protocol),
-            values: ["Auto", "Remote V2", "Responses Compact", "Context Management (experimental)"],
-            action: "set-protocol",
-          },
-          {
-            id: "appendMaintenanceMessage",
-            label: "Append maintenance message",
-            description:
-              "Off omits the Context Management user message and scratchpad context in Text summary and recovery; summary instructions are preserved.",
-            currentValue: state.settings.appendMaintenanceMessage ? "On" : "Off",
-            values: ["On", "Off"],
-            action: "set-append-message",
-          },
-          {
-            id: "maintenanceMessage",
-            label: "Maintenance message",
-            description:
-              "Close this menu and edit the Context Management request-only instruction (nonempty, at most 16 KiB UTF-8). Used only when appending is On.",
-            currentValue:
-              state.settings.maintenanceMessage === DEFAULT_CODEX_COMPACT_SETTINGS.maintenanceMessage
-                ? "Default"
-                : "Custom",
-            action: "edit-maintenance-message",
-          },
-          {
-            id: "resetMaintenanceMessage",
-            label: "Reset maintenance message",
-            description: "Restore the built-in instruction without changing the append toggle.",
-            currentValue: "Reset to default",
-            action: "reset-maintenance-message",
-          },
-          {
-            id: "checkpointRecovery",
-            label: "Checkpoint recovery",
-            description:
-              "After Provider checkpoint failure, Summarize uses inference quota; on failure, Pi native may lose older context. Integrity failures cancel. Cancel preserves history without a summary request.",
-            currentValue: state.settings.checkpointRecovery === "cancel" ? "Cancel" : "Summarize",
-            values: ["Summarize", "Cancel"],
-            action: "set-recovery",
-          },
-          {
-            id: "requestTimeoutMs",
-            label: "Request timeout",
-            description: "Maximum time for the extension-owned checkpoint or text-summary request.",
-            currentValue: timeoutLabel(state.settings.requestTimeoutMs),
-            values: ["5 min", "10 min", "15 min", "20 min", "25 min", "30 min"],
-            action: "set-timeout",
-          },
-          {
-            id: "maxRetries",
-            label: "Transport retries",
-            description: "Bound provider-opening retries. Text summary failure preserves history.",
-            currentValue: String(state.settings.maxRetries),
-            values: ["0", "1", "2"],
-            action: "set-retries",
-          },
-          {
-            id: "replacementTokenBudget",
-            label: "Replacement text budget",
-            description:
-              "Upper bound for replacement text, including text summaries; Context Management applies it to output.",
-            currentValue: retentionLabel(state.settings.replacementTokenBudget),
-            values: ["32K tokens", "64K tokens", "96K tokens", "128K tokens"],
-            action: "set-retention",
-          },
-          {
-            id: "notifyOnFallback",
-            label: "Failure notifications",
-            description: "Warn on failed compaction and recovery; Text summary failure preserves history.",
-            currentValue: state.settings.notifyOnFallback ? "On" : "Off",
-            values: ["On", "Off"],
-            action: "set-notify",
-          },
-        ],
-      }),
+      settings: ({ state }) => {
+        displayedPreferences = {
+          compactionMode: state.settings.compactionMode,
+          protocol: state.settings.protocol,
+        };
+        const override = provider ? state.settings.providerOverrides[provider] : undefined;
+        const hasOverride = override && Object.keys(override).length > 0;
+        return {
+          kind: "settings",
+          title: "Responses Compaction Settings",
+          lines: [
+            `User settings · ${safeText(state.path)}`,
+            `Current provider: ${safeText(provider ?? "none")}`,
+            "Editing global defaults. Provider overrides remain active until replaced or reset.",
+            ...(hasOverride
+              ? [
+                  `Saved provider mode: ${override.compactionMode ? modeLabel(override.compactionMode) : "Global default"}`,
+                  `Saved provider protocol: ${override.protocol ? protocolLabel(override.protocol) : "Global default"}`,
+                ]
+              : ["Provider preferences: Global defaults"]),
+          ],
+          items: [
+            {
+              id: "enabled",
+              label: "Compaction and replay",
+              description: "Enable the selected compaction mode and replay existing compatible provider checkpoints.",
+              currentValue: state.settings.enabled ? "On" : "Off",
+              values: ["On", "Off"],
+              action: "set-enabled",
+            },
+            {
+              id: "compactionMode",
+              label: "Compaction mode",
+              description:
+                "Provider checkpoint preserves the existing behavior. Text summary (experimental) directly requests a readable summary; existing checkpoint replay stays enabled." +
+                " Global default for providers without a mode override.",
+              currentValue: modeLabel(state.settings.compactionMode),
+              values: ["Provider checkpoint", "Text summary"],
+              action: "set-mode",
+            },
+            {
+              id: "scratchpadEnabled",
+              label: "Scratchpad",
+              description:
+                "Expose session-specific task notes. Saved across sessions; Off preserves notes. Also available through /scratchpad on or off.",
+              currentValue: state.settings.scratchpadEnabled ? "On" : "Off",
+              values: ["On", "Off"],
+              action: "set-scratchpad",
+            },
+            {
+              id: "protocol",
+              label: "Protocol",
+              description:
+                "Used only in Provider checkpoint mode. Auto can try Context Management after a third-party Compact endpoint rejects the request; this can consume quota. Official OpenAI ChatGPT OAuth uses Context Management for every preference." +
+                " Global default for providers without a protocol override.",
+              currentValue: protocolLabel(state.settings.protocol),
+              values: ["Auto", "Remote V2", "Responses Compact", "Context Management (experimental)"],
+              action: "set-protocol",
+            },
+            ...(provider
+              ? [
+                  {
+                    id: "saveProvider",
+                    label: "Save current settings for this provider",
+                    currentValue: "Save snapshot",
+                    description: `Save the displayed global mode and protocol for ${safeText(provider)} across sessions. Other settings stay global.`,
+                    action: "save-provider" as const,
+                  },
+                ]
+              : []),
+            ...(hasOverride
+              ? [
+                  {
+                    id: "resetProvider",
+                    label: "Use global defaults for this provider",
+                    currentValue: "Remove overrides",
+                    description: "Remove this provider's mode and protocol overrides; keep other provider settings.",
+                    action: "reset-provider" as const,
+                  },
+                ]
+              : []),
+            {
+              id: "appendMaintenanceMessage",
+              label: "Append maintenance message",
+              description:
+                "Off omits the Context Management user message and scratchpad context in Text summary and recovery; summary instructions are preserved.",
+              currentValue: state.settings.appendMaintenanceMessage ? "On" : "Off",
+              values: ["On", "Off"],
+              action: "set-append-message",
+            },
+            {
+              id: "maintenanceMessage",
+              label: "Maintenance message",
+              description:
+                "Close this menu and edit the Context Management request-only instruction (nonempty, at most 16 KiB UTF-8). Used only when appending is On.",
+              currentValue:
+                state.settings.maintenanceMessage === DEFAULT_CODEX_COMPACT_SETTINGS.maintenanceMessage
+                  ? "Default"
+                  : "Custom",
+              action: "edit-maintenance-message",
+            },
+            {
+              id: "resetMaintenanceMessage",
+              label: "Reset maintenance message",
+              description: "Restore the built-in instruction without changing the append toggle.",
+              currentValue: "Reset to default",
+              action: "reset-maintenance-message",
+            },
+            {
+              id: "checkpointRecovery",
+              label: "Checkpoint recovery",
+              description:
+                "After Provider checkpoint failure, Summarize uses inference quota; on failure, Pi native may lose older context. Integrity failures cancel. Cancel preserves history without a summary request.",
+              currentValue: state.settings.checkpointRecovery === "cancel" ? "Cancel" : "Summarize",
+              values: ["Summarize", "Cancel"],
+              action: "set-recovery",
+            },
+            {
+              id: "requestTimeoutMs",
+              label: "Request timeout",
+              description: "Maximum time for the extension-owned checkpoint or text-summary request.",
+              currentValue: timeoutLabel(state.settings.requestTimeoutMs),
+              values: ["5 min", "10 min", "15 min", "20 min", "25 min", "30 min"],
+              action: "set-timeout",
+            },
+            {
+              id: "maxRetries",
+              label: "Transport retries",
+              description: "Bound provider-opening retries. Text summary failure preserves history.",
+              currentValue: String(state.settings.maxRetries),
+              values: ["0", "1", "2"],
+              action: "set-retries",
+            },
+            {
+              id: "replacementTokenBudget",
+              label: "Replacement text budget",
+              description:
+                "Upper bound for replacement text, including text summaries; Context Management applies it to output.",
+              currentValue: retentionLabel(state.settings.replacementTokenBudget),
+              values: ["32K tokens", "64K tokens", "96K tokens", "128K tokens"],
+              action: "set-retention",
+            },
+            {
+              id: "notifyOnFallback",
+              label: "Failure notifications",
+              description: "Warn on failed compaction and recovery; Text summary failure preserves history.",
+              currentValue: state.settings.notifyOnFallback ? "On" : "Off",
+              values: ["On", "Off"],
+              action: "set-notify",
+            },
+          ],
+        };
+      },
       invalid: ({ state }) => ({
         kind: "detail",
         title: "Codex Compact Settings · Read only",
@@ -358,11 +375,11 @@ export function createCodexCompactMenu(
       }),
     },
     actions: {
-      "set-scope": ({ value }) => {
-        scope = provider && value === "This provider" ? "provider" : "global";
-        return { kind: "stay" };
+      "save-provider": ({ ctx, signal }) => {
+        const settings = displayedPreferences ?? runtime.get().settings;
+        return saveProvider(ctx, { compactionMode: settings.compactionMode, protocol: settings.protocol }, signal);
       },
-      "reset-provider": ({ ctx, signal }) => (provider ? save(ctx, {}, signal, true) : { kind: "rejected" }),
+      "reset-provider": ({ ctx, signal }) => saveProvider(ctx, {}, signal),
       "compact-now": async () => {
         options.onCompactRequested?.();
         return { kind: "close" };
@@ -377,7 +394,7 @@ export function createCodexCompactMenu(
       },
       "set-enabled": ({ ctx, value, signal }) => save(ctx, { enabled: value === "On" }, signal),
       "set-mode": ({ ctx, value, signal }) =>
-        save(ctx, { compactionMode: value === "Text summary" ? "text-summary" : "provider-checkpoint" }, signal, true),
+        save(ctx, { compactionMode: value === "Text summary" ? "text-summary" : "provider-checkpoint" }, signal),
       "set-protocol": ({ ctx, value, signal }) =>
         save(
           ctx,
@@ -392,7 +409,6 @@ export function createCodexCompactMenu(
                     : "auto",
           },
           signal,
-          true,
         ),
       "set-recovery": ({ ctx, value, signal }) =>
         save(ctx, { checkpointRecovery: value === "Cancel" ? "cancel" : "summarize" }, signal),
