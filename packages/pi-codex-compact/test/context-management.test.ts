@@ -11,6 +11,7 @@ import {
 import type { RemoteCompactionProtocol } from "../src/model-api.js";
 import { MAX_SSE_BYTES } from "../src/protocol.js";
 import { requestRemoteCompaction } from "../src/remote.js";
+import { RequestDiagnostics } from "../src/request-diagnostics.js";
 import { normalizeCodexCompactSettings } from "../src/settings.js";
 
 const protocol: RemoteCompactionProtocol = "context-management";
@@ -533,3 +534,32 @@ for (const mode of ["default", "custom", "off"] as const) {
     assert.match(SCRATCHPAD_OMITTED_GUIDANCE, /Do not perform tasks or call tools/);
   });
 }
+
+test("context management forwards selected thinking through the normal provider adapter", async () => {
+  let payload: Record<string, unknown> = {};
+  await request(
+    async (_input, init) => {
+      payload = JSON.parse(String(init?.body));
+      return sse([latest, suffix]);
+    },
+    { thinkingLevel: "max", model: { ...model, thinkingLevelMap: { max: "xhigh" } } },
+  );
+  assert.equal((payload.reasoning as { effort?: string }).effort, "xhigh");
+  assert.equal(payload.tool_choice, "none");
+  assert.ok(payload.context_management);
+});
+
+test("Remote V2 forwards max and records the final provider-mapped effort", async () => {
+  let payload: Record<string, unknown> = {};
+  const diagnostics = new RequestDiagnostics();
+  await request(
+    async (_input, init) => {
+      payload = JSON.parse(String(init?.body));
+      return sse([latest], { output: [latest] });
+    },
+    { protocol: "remote-v2", diagnostics, thinkingLevel: "max", model: { ...model, thinkingLevelMap: { max: "max" } } },
+  );
+  assert.equal((payload.reasoning as { effort?: string }).effort, "max");
+  assert.equal((payload.input as { type?: string }[]).at(-1)?.type, "compaction_trigger");
+  assert.match(diagnostics.report(), /observedReasoningEffort=max/);
+});

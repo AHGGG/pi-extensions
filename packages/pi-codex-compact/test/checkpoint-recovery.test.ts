@@ -466,3 +466,37 @@ for (const api of ["openai-responses", "azure-openai-responses", "openai-codex-r
     if (typeof payload?.max_output_tokens === "number") assert.ok(payload.max_output_tokens > 1);
   });
 }
+
+for (const [level, expected, map, reasoning] of [
+  ["max", "max", { max: "max" }, true],
+  ["max", "xhigh", { max: "xhigh" }, true],
+  ["high", "high", {}, true],
+  ["max", "high", { max: null, xhigh: null }, true],
+  ["off", "none", {}, true],
+  ["off", undefined, { off: null }, true],
+  ["max", undefined, {}, false],
+] as const) {
+  test(`summary forwards selected ${level} through model mapping (${JSON.stringify(map)}, reasoning=${reasoning})`, async () => {
+    const input = await request();
+    input.thinkingLevel = level;
+    input.model = {
+      ...input.model,
+      provider: "custom",
+      id: "gpt-6.1-sol",
+      baseUrl: "https://custom.invalid/v1",
+      reasoning,
+      thinkingLevelMap: map,
+    };
+    let payload: Record<string, unknown> = {};
+    input.fetch = async (_url, init) => {
+      payload = JSON.parse(
+        typeof init?.body === "string" ? init.body : zlib.zstdDecompressSync(init?.body as Uint8Array).toString("utf8"),
+      );
+      return sse();
+    };
+    await recoverCheckpoint(input, event, true);
+    assert.equal((payload.reasoning as { effort?: string } | undefined)?.effort, expected);
+    assert.equal(payload.tool_choice, "none");
+    assert.equal(payload.context_management, undefined);
+  });
+}

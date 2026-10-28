@@ -9,6 +9,7 @@ import { collectProviderUsage } from "./remote-shared.js";
 import {
   abortError,
   assertPreparedInput,
+  compactionReasoningEffort,
   type RemoteCompactionRequest,
   type RemoteCompactionResponse,
 } from "./remote-types.js";
@@ -36,6 +37,7 @@ export async function requestRemoteCompactionV2(request: RemoteCompactionRequest
 
   const stream = request.provider.stream(request.model, normalizeContext(request.context), {
     apiKey: request.apiKey,
+    reasoningEffort: compactionReasoningEffort(request),
     headers: request.headers,
     env: request.env,
     signal: request.signal,
@@ -47,6 +49,7 @@ export async function requestRemoteCompactionV2(request: RemoteCompactionRequest
     onProviderStreamEvent: request.onProviderStreamEvent,
     onPayload: (payload) => {
       const prepared = prepareRemoteCompactionPayload(payload, request.priorCheckpoint);
+      request.diagnostics?.payload(prepared);
       sentInput = assertPreparedInput(prepared).slice(0, -1);
       return prepared;
     },

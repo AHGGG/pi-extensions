@@ -11,6 +11,7 @@ import { collectProviderUsage } from "./remote-shared.js";
 import {
   abortError,
   assertPreparedInput,
+  compactionReasoningEffort,
   isJsonObject,
   type RemoteCompactionRequest,
   type RemoteCompactionResponse,
@@ -236,6 +237,7 @@ export async function requestResponsesCompact(request: RemoteCompactionRequest):
 
   const stream = request.provider.stream(request.model, normalizeContext(request.context), {
     apiKey: request.apiKey,
+    reasoningEffort: compactionReasoningEffort(request),
     headers: request.headers,
     env: request.env,
     signal: request.signal,
@@ -250,6 +252,7 @@ export async function requestResponsesCompact(request: RemoteCompactionRequest):
       }
       const expanded = expandRemoteCompactionPayload(payload, request.priorCheckpoint);
       preparedPayload = compactPayload(expanded, request.profile);
+      request.diagnostics?.payload(preparedPayload);
       sentInput = assertPreparedInput(preparedPayload);
       return expanded;
     },

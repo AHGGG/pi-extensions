@@ -112,12 +112,13 @@ for (const api of Object.keys(PROVIDER_MODULES) as ResponsesCompactionApi[]) {
     test("makes one authenticated same-origin request and returns provider-normalized usage", async () => {
       const fixture = PROVIDER_MODULES[api];
       const provider = await providerFor(api);
-      const model = modelFor(api);
+      const model = { ...modelFor(api), thinkingLevelMap: { max: "xhigh" } };
       let fetches = 0;
       let requestBody: Record<string, unknown> | undefined;
       const result = await requestRemoteCompaction({
         provider,
         model,
+        thinkingLevel: "max",
         context: context(),
         protocol: "responses-compact",
         profile: api === "openai-codex-responses" ? "codex-responses-v1" : "openai-responses-v1",
@@ -146,6 +147,10 @@ for (const api of Object.keys(PROVIDER_MODULES) as ResponsesCompactionApi[]) {
       assert.equal(requestBody.stream, undefined);
       assert.equal(requestBody.store, undefined);
       assert.equal(requestBody.include, undefined);
+      assert.equal(
+        (requestBody.reasoning as { effort?: string } | undefined)?.effort,
+        api === "openai-codex-responses" ? "xhigh" : undefined,
+      );
       assert.ok(Array.isArray(requestBody.input));
       assert.equal(result.item.encrypted_content, "opaque");
       assert.equal(result.compactedOutput?.at(-1)?.type, "compaction");

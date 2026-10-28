@@ -177,11 +177,13 @@ export async function compactRemotely(
   const checkpoint = latestCheckpoint(event.branchEntries);
   const checkpointPresent = hasActiveCheckpointClaim(event.branchEntries);
   const branchIsCurrent = options.preparation?.branchIsCurrent ?? captureCompactionBranch(event.branchEntries);
+  const thinkingLevel = pi.getThinkingLevel();
   const systemPrompt = ctx.getSystemPrompt?.();
   const tools = JSON.stringify([pi.getActiveTools(), activeTools(pi)]);
   const stillCurrent = () =>
     sessionStillOwned(ctx, sessionId, signal) &&
     isCurrent() &&
+    pi.getThinkingLevel() === thinkingLevel &&
     ctx.getSystemPrompt?.() === systemPrompt &&
     JSON.stringify([pi.getActiveTools(), activeTools(pi)]) === tools &&
     branchIsCurrent(ctx.sessionManager.getBranch());
@@ -317,7 +319,7 @@ export async function compactRemotely(
       if (ownsStatus()) ctx.ui.setStatus(STATUS_KEY, "Transferring checkpoint through its issuing provider…");
       const messages = summaryPrefix(current.messages, keptMessages(event), fingerprintMessage);
       const request = await abortable(
-        checkpointIssuerRequest(ctx, checkpoint, messages, settings, remoteSignal, stillCurrent, fetch),
+        checkpointIssuerRequest(ctx, checkpoint, messages, settings, remoteSignal, stillCurrent, fetch, thinkingLevel),
         remoteSignal,
       );
       if (!stillCurrent()) return { cancel: true };
@@ -352,6 +354,7 @@ export async function compactRemotely(
       diagnostics,
       provider,
       model,
+      thinkingLevel,
       context,
       protocol: route.protocol,
       profile: route.profile,
@@ -640,6 +643,7 @@ export async function compactRemotely(
           diagnostics: recoveryDiagnostics,
           provider,
           model,
+          thinkingLevel,
           context: { systemPrompt: ctx.getSystemPrompt(), messages: convertToLlm(messages), tools: [] },
           profile: route.profile,
           protocol: route.protocol,

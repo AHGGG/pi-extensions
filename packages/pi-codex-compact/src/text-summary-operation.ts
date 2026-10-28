@@ -47,6 +47,7 @@ export async function compactToText(
     return { cancel: true };
   }
   const sessionId = ctx.sessionManager.getSessionId();
+  const thinkingLevel = pi.getThinkingLevel();
   const systemPrompt = ctx.getSystemPrompt();
   const tools = activeTools(pi);
   const toolsKey = JSON.stringify([pi.getActiveTools(), tools]);
@@ -54,6 +55,7 @@ export async function compactToText(
   const valid = () =>
     !signal.aborted &&
     isCurrent() &&
+    pi.getThinkingLevel() === thinkingLevel &&
     ctx.sessionManager.getSessionId() === sessionId &&
     ctx.getSystemPrompt() === systemPrompt &&
     JSON.stringify([pi.getActiveTools(), activeTools(pi)]) === toolsKey &&
@@ -70,6 +72,7 @@ export async function compactToText(
   let outcome: "failed" | "prepared" | "ready" = "failed";
   let failure = "none";
   let validationFailure: string | undefined;
+  let lastHttpStatus: number | undefined;
   const invalid = (reason: string): never => {
     validationFailure = reason;
     throw new Error(reason);
@@ -157,6 +160,7 @@ export async function compactToText(
         {
           provider: resolved.provider,
           model,
+          thinkingLevel,
           profile: resolved.route.profile,
           protocol: resolved.route.protocol,
           context: {
@@ -184,6 +188,7 @@ export async function compactToText(
             if (!valid()) throw abortError();
             diagnostics.endpoint(input instanceof Request ? input.url : String(input));
             const response = await (fetch ?? globalThis.fetch)(input, init);
+            lastHttpStatus = response.status;
             if (!valid()) {
               void response.body?.cancel().catch(() => undefined);
               throw abortError();
@@ -215,6 +220,7 @@ export async function compactToText(
       validationFailure ??
       preparationFailureDetail(error, {
         timedOut: diagnostics.deadline,
+        httpStatus: lastHttpStatus,
         remoteAttempted: diagnostics.currentAttempt > 0,
       });
     if (!valid()) return { cancel: true };

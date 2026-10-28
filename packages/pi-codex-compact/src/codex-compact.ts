@@ -551,6 +551,7 @@ export function createCodexCompactExtension(
       const model = ctx.model;
       const modelKey = JSON.stringify(model);
       const toolsKey = JSON.stringify([pi.getActiveTools(), activeTools(pi)]);
+      const thinkingLevel = pi.getThinkingLevel();
       const branchIsCurrent = captureCompactionBranch(ctx.sessionManager.getBranch());
       const systemPrompt = ctx.getSystemPrompt();
       const stillCurrent = () =>
@@ -558,6 +559,7 @@ export function createCodexCompactExtension(
         owners.get(ctx.sessionManager) === owner &&
         owner.operation === operation &&
         owner.sessionId === ctx.sessionManager.getSessionId() &&
+        pi.getThinkingLevel() === thinkingLevel &&
         ctx.model === model &&
         JSON.stringify(ctx.model) === modelKey &&
         JSON.stringify([pi.getActiveTools(), activeTools(pi)]) === toolsKey &&
@@ -579,7 +581,16 @@ export function createCodexCompactExtension(
         );
         if (!marker) throw new Error("The checkpoint marker is unavailable");
         const request = await abortable(
-          checkpointIssuerRequest(ctx, checkpoint, [marker], settings, signal, stillCurrent, options.fetch),
+          checkpointIssuerRequest(
+            ctx,
+            checkpoint,
+            [marker],
+            settings,
+            signal,
+            stillCurrent,
+            options.fetch,
+            thinkingLevel,
+          ),
           signal,
         );
         if (!stillCurrent()) return undefined;

@@ -150,6 +150,7 @@ async function fixture() {
   });
   return {
     host,
+    notifications: context.notifications,
     manager,
     tailId,
     settings,
@@ -364,4 +365,28 @@ test("small-context model can prepare and apply with bounded reserve", async () 
   assert.ok(result.draft, result.reason ?? "draft unavailable");
   assert.equal(h.payloads.length, 1);
   assert.ok(Number(h.outputBudgets[0]) <= 2048);
+});
+
+test("background thinking selection is captured and invalidated when changed", async () => {
+  const h = await fixture();
+  h.ctx.model = { ...model, reasoning: true, thinkingLevelMap: { max: "xhigh" } };
+  h.host.rawPi.setThinkingLevel("max");
+  const preparation = h.engine.capture(h.ctx);
+  assert.ok(preparation);
+  const prepared = await preparation.start(h.guard);
+  assert.equal(prepared.usable, true, prepared.failure ?? "summary unavailable");
+  assert.equal((h.payloads[0].reasoning as { effort?: string }).effort, "xhigh");
+  h.host.rawPi.setThinkingLevel("high");
+  assert.equal((await prepared.draft(h.ctx, h.guard)).draft, undefined);
+  assert.equal(h.payloads.length, 1);
+});
+
+test("text summary HTTP errors report safe status without provider response content", async () => {
+  const h = await fixture();
+  h.ctx.hasUI = true;
+  h.setReply(() => Response.json({ error: { message: "SECRET prompt and bearer fixture" } }, { status: 400 }));
+  assert.deepEqual(await h.emit("session_before_compact", h.event()), { cancel: true });
+  const logs = JSON.stringify(h.notifications);
+  assert.match(logs, /HTTP 400: request rejected/);
+  assert.doesNotMatch(logs, /SECRET|bearer fixture/);
 });

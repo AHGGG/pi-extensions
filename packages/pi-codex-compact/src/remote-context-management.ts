@@ -11,6 +11,7 @@ import { collectProviderUsage } from "./remote-shared.js";
 import {
   abortError,
   assertPreparedInput,
+  compactionReasoningEffort,
   type RemoteCompactionRequest,
   type RemoteCompactionResponse,
 } from "./remote-types.js";
@@ -123,6 +124,7 @@ async function requestAttempt(request: RemoteCompactionRequest): Promise<RemoteC
   try {
     const stream = request.provider.stream(request.model, normalizeContext(request.context), {
       apiKey: request.apiKey,
+      reasoningEffort: compactionReasoningEffort(request),
       headers: request.headers,
       env: request.env,
       signal,

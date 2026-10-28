@@ -63,6 +63,7 @@ export async function checkpointIssuerRequest(
   signal: AbortSignal,
   isCurrent: () => boolean,
   fetch?: typeof globalThis.fetch,
+  thinkingLevel?: RemoteCompactionRequest["thinkingLevel"],
 ): Promise<RemoteCompactionRequest> {
   const details = checkpoint.details;
   const model = ctx.modelRegistry.find(details.provider, details.modelId);
@@ -80,6 +81,7 @@ export async function checkpointIssuerRequest(
   return {
     provider,
     model,
+    thinkingLevel,
     profile: route.profile,
     protocol: details.protocol,
     context: { systemPrompt: ctx.getSystemPrompt(), messages: convertToLlm(messages), tools: [] },

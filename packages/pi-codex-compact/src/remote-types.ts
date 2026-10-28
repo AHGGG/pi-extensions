@@ -1,4 +1,13 @@
-import type { Api, Context, Model, Provider, ProviderHeaders, Usage } from "@earendil-works/pi-ai";
+import {
+  type Api,
+  type Context,
+  clampThinkingLevel,
+  type Model,
+  type ModelThinkingLevel,
+  type Provider,
+  type ProviderHeaders,
+  type Usage,
+} from "@earendil-works/pi-ai";
 import type { RemoteCompactionProtocol, ResponsesCompactionProfile } from "./model-api.js";
 import type { JsonObject } from "./protocol.js";
 import type { RequestDiagnostics } from "./request-diagnostics.js";
@@ -15,6 +24,7 @@ export interface RemoteCompactionRequest {
   context: Context;
   protocol: RemoteCompactionProtocol;
   sessionId?: string;
+  thinkingLevel?: ModelThinkingLevel;
   apiKey?: string;
   headers?: ProviderHeaders;
   env?: Record<string, string>;
@@ -55,4 +65,11 @@ export function assertPreparedInput(payload: JsonObject): JsonObject[] {
     throw new Error("Prepared compaction payload has invalid input items");
   }
   return structuredClone(payload.input);
+}
+
+/** Normalize selected reasoning while preserving native summary Off semantics and provider mapping. */
+export function compactionReasoningEffort(request: RemoteCompactionRequest) {
+  if (!request.model.reasoning || !request.thinkingLevel || request.thinkingLevel === "off") return undefined;
+  const level = clampThinkingLevel(request.model, request.thinkingLevel);
+  return level === "off" ? undefined : level;
 }
