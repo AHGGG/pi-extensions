@@ -217,6 +217,7 @@ export function createCodexCompactMenu(
         };
         const override = provider ? state.settings.providerOverrides[provider] : undefined;
         const hasOverride = override && Object.keys(override).length > 0;
+        const effective = effectiveCodexCompactSettings(state.settings, provider);
         return {
           kind: "settings",
           title: "Responses Compaction Settings",
@@ -226,8 +227,11 @@ export function createCodexCompactMenu(
             "Editing global defaults. Provider overrides remain active until replaced or reset.",
             ...(hasOverride
               ? [
-                  `Saved provider mode: ${override.compactionMode ? modeLabel(override.compactionMode) : "Global default"}`,
-                  `Saved provider protocol: ${override.protocol ? protocolLabel(override.protocol) : "Global default"}`,
+                  `Provider override active: ${modeLabel(effective.compactionMode)}${override.compactionMode ? "" : " (from global default)"}`,
+                  `Effective protocol preference: ${protocolLabel(effective.protocol)} (${override.protocol ? "provider override" : "from global default"})`,
+                  ...(effective.compactionMode === "text-summary"
+                    ? ["Protocol preference is unused in Text summary mode."]
+                    : []),
                 ]
               : ["Provider preferences: Global defaults"]),
           ],
@@ -242,7 +246,7 @@ export function createCodexCompactMenu(
             },
             {
               id: "compactionMode",
-              label: "Compaction mode",
+              label: "Global default mode",
               description:
                 "Provider checkpoint preserves the existing behavior. Text summary (experimental) directly requests a readable summary; existing checkpoint replay stays enabled." +
                 " Global default for providers without a mode override.",
@@ -261,7 +265,7 @@ export function createCodexCompactMenu(
             },
             {
               id: "protocol",
-              label: "Protocol",
+              label: "Global default protocol",
               description:
                 "Used only in Provider checkpoint mode. Auto can try Context Management after a third-party Compact endpoint rejects the request; this can consume quota. Official OpenAI ChatGPT OAuth uses Context Management for every preference." +
                 " Global default for providers without a protocol override.",

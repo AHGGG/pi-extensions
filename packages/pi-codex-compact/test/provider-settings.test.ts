@@ -135,6 +135,102 @@ test("scoped writes reject invalid data and preserve file/runtime state after fa
   assert.equal(await readFile(h.path, "utf8"), '{"providerOverrides":{"custom":{"protocol":"bad"}}}');
 });
 
+test("settings distinguish active provider overrides, inherited fields, and editable global defaults", async () => {
+  const h = await fixture({
+    protocol: "remote-v2",
+    providerOverrides: {
+      both: { compactionMode: "text-summary", protocol: "responses-compact" },
+      modeOnly: { compactionMode: "text-summary" },
+      protocolOnly: { protocol: "context-management" },
+      empty: {},
+    },
+  });
+  const cases = [
+    {
+      provider: "both",
+      lines: [
+        "Provider override active: Text summary",
+        "Effective protocol preference: Responses Compact (provider override)",
+        "Protocol preference is unused in Text summary mode.",
+      ],
+    },
+    {
+      provider: "modeOnly",
+      lines: [
+        "Provider override active: Text summary",
+        "Effective protocol preference: Remote V2 (from global default)",
+        "Protocol preference is unused in Text summary mode.",
+      ],
+    },
+    {
+      provider: "protocolOnly",
+      lines: [
+        "Provider override active: Provider checkpoint (from global default)",
+        "Effective protocol preference: Context Management (experimental) (provider override)",
+      ],
+    },
+    { provider: "empty", lines: ["Provider preferences: Global defaults"] },
+    { provider: "unconfigured", lines: ["Provider preferences: Global defaults"] },
+    { provider: undefined, lines: ["Provider preferences: Global defaults"] },
+  ];
+  for (const { provider, lines } of cases) {
+    const menu = createCodexCompactMenu(h.runtime, { status: { provider, model: `${provider ?? "none"}/model` } });
+    const screen = resolveMenuScreen(menu, "settings", h.runtime.get());
+    assert.equal(screen.kind, "settings");
+    if (screen.kind !== "settings") assert.fail("Expected settings");
+    assert.equal(screen.lines?.[1], `Current provider: ${provider ?? "none"}`);
+    assert.deepEqual(screen.lines?.slice(3), lines, provider ?? "none");
+    assert.deepEqual(
+      screen.items
+        .filter((row) => ["compactionMode", "protocol"].includes(row.id))
+        .map((row) => [row.label, row.currentValue]),
+      [
+        ["Global default mode", "Provider checkpoint"],
+        ["Global default protocol", "Remote V2"],
+      ],
+      provider ?? "none",
+    );
+  }
+});
+
+test("partial override headers refresh inherited values after global edits and clear after reset", async () => {
+  const h = await fixture({
+    protocol: "remote-v2",
+    providerOverrides: {
+      custom: { protocol: "context-management" },
+      other: { compactionMode: "text-summary" },
+    },
+  });
+  const menu = createCodexCompactMenu(h.runtime, { status: { provider: "custom", model: "custom/model" } });
+  const args = {
+    ctx: createMockContext({ mode: "tui" }).ctx,
+    state: h.runtime.get(),
+    signal: new AbortController().signal,
+    itemId: "setting",
+  };
+  const lines = () => resolveMenuScreen(menu, "settings", h.runtime.get()).lines?.slice(3);
+  assert.deepEqual(lines(), [
+    "Provider override active: Provider checkpoint (from global default)",
+    "Effective protocol preference: Context Management (experimental) (provider override)",
+  ]);
+  await menu.actions["set-mode"]({ ...args, value: "Text summary" });
+  assert.deepEqual(lines(), [
+    "Provider override active: Text summary (from global default)",
+    "Effective protocol preference: Context Management (experimental) (provider override)",
+    "Protocol preference is unused in Text summary mode.",
+  ]);
+  await menu.actions["reset-provider"](args);
+  assert.deepEqual(lines(), ["Provider preferences: Global defaults"]);
+  assert.deepEqual(h.runtime.get().settings.providerOverrides, { other: { compactionMode: "text-summary" } });
+  const other = createCodexCompactMenu(h.runtime, { status: { provider: "other", model: "other/model" } });
+  await menu.actions["set-protocol"]({ ...args, value: "Responses Compact" });
+  assert.deepEqual(resolveMenuScreen(other, "settings", h.runtime.get()).lines?.slice(3), [
+    "Provider override active: Text summary",
+    "Effective protocol preference: Responses Compact (from global default)",
+    "Protocol preference is unused in Text summary mode.",
+  ]);
+});
+
 test("provider menu edits global defaults, snapshots both fields, and resets only the active override", async () => {
   const h = await fixture({
     untouched: true,
@@ -176,7 +272,7 @@ test("provider menu edits global defaults, snapshots both fields, and resets onl
   });
   assert.equal(screen().items.find((row) => row.id === "compactionMode")?.currentValue, "Text summary");
   assert.equal(screen().items.find((row) => row.id === "protocol")?.currentValue, "Responses Compact");
-  assert.match(screen().lines?.join("\n") ?? "", /Saved provider mode: Provider checkpoint/);
+  assert.match(screen().lines?.join("\n") ?? "", /Provider override active: Provider checkpoint/);
   assert.match(
     resolveMenuScreen(menu, "main", h.runtime.get()).lines?.join("\n") ?? "",
     /Compaction mode: Provider checkpoint/,
@@ -271,8 +367,8 @@ for (const activation of ["enter", "space", "remapped"] as const) {
     assert.equal(saved.compactionMode, "text-summary");
     assert.equal(saved.protocol, "remote-v2");
     assert.deepEqual(saved.providerOverrides.custom, { compactionMode: "text-summary", protocol: "remote-v2" });
-    assert.match(captures[2].join("\n"), /Saved provider mode: Text summary/);
-    assert.match(captures[2].join("\n"), /Saved provider protocol: Remote V2/);
+    assert.match(captures[2].join("\n"), /Provider override active: Text summary/);
+    assert.match(captures[2].join("\n"), /Effective protocol preference: Remote V2 \(provider override\)/);
     assert.ok(captures[3].every((line) => visibleWidth(line) <= 12));
     assert.ok(captures[4].every((line) => visibleWidth(line) <= 1));
   });

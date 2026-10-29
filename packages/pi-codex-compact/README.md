@@ -83,7 +83,7 @@ Pi's built-in `/compact` uses the same compaction routing.
 Use `/codex-compact` → **Settings**, or edit the global JSON file at `<getAgentDir()>/pi-codex-compact.json` (normally `~/.pi/agent/pi-codex-compact.json`).
 There are no project or extension-specific environment-variable overrides. Missing fields use defaults.
 
-Settings always edits global defaults. To keep the displayed **Compaction mode** and **Protocol** for the current provider across sessions, select **Save current settings for this provider** and press Enter. Existing provider overrides remain active and are shown separately; **Use global defaults for this provider** removes those two overrides. All other controls remain global.
+Settings always edits global defaults. To keep the displayed **Global default mode** and **Global default protocol** for the current provider across sessions, select **Save current settings for this provider** and press Enter. The header marks an active provider override and shows its effective mode and protocol preference separately; **Use global defaults for this provider** removes those two overrides. All other controls remain global.
 
 For example, keep Provider checkpoint as the global default and use Text summary only for a custom provider named `my-proxy`:
 
@@ -97,7 +97,7 @@ For example, keep Provider checkpoint as the global default and use Text summary
 
 Use the exact provider ID from Pi, not its model ID or API type. Switching providers automatically selects its saved choices. This does not change credentials, background preparation, or Apply when ready. Existing opaque history still requires a compatible issuing provider for replay.
 
-Provider checkpoint is the default mode. To make text summaries the global default, select **Compaction mode → Text summary**, or save:
+Provider checkpoint is the default mode. To make text summaries the global default, select **Global default mode → Text summary**, or save:
 
 ```json
 {
@@ -163,7 +163,7 @@ Preparing does not rewrite the active conversation. Applying a summary intention
 
 ### Experimental Context Management
 
-For a backend supporting [server-side compaction](https://developers.openai.com/api/docs/guides/compaction), select **Context Management (experimental)** in `/codex-compact` → **Settings** → **Protocol**, or save this setting and reload Pi:
+For a backend supporting [server-side compaction](https://developers.openai.com/api/docs/guides/compaction), select **Context Management (experimental)** in `/codex-compact` → **Settings** → **Global default protocol**, or save this setting and reload Pi:
 
 ```json
 {

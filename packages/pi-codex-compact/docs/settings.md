@@ -43,7 +43,7 @@ API profile keys must be non-empty custom API IDs of at most 256 characters, wit
 
 ## Provider-specific choices
 
-The Settings menu always edits global defaults and shows the captured provider ID. **Save current settings for this provider** saves both displayed values, **Compaction mode** and **Protocol**, as a durable provider snapshot when selected with Enter or Space. Later global edits do not replace those saved values. Existing overrides remain unchanged until explicitly replaced or reset; the menu shows them separately from the global controls. **Use global defaults for this provider** removes the two overrides and resumes inheritance. All other settings remain global. A provider switch closes the old menu rather than applying its choices to a different provider.
+The Settings menu always edits global defaults and shows the captured provider ID. **Save current settings for this provider** saves both displayed values, **Global default mode** and **Global default protocol**, as a durable provider snapshot when selected with Enter or Space. Later global edits do not replace those saved values. Existing overrides remain unchanged until explicitly replaced or reset. The header shows **Provider override active** with the effective mode and **Effective protocol preference** with its source. A missing override field shows its inherited global value with **from global default**; the protocol preference is unused in Text summary mode. **Use global defaults for this provider** removes the two overrides and resumes inheritance. All other settings remain global. A provider switch closes the old menu rather than applying its choices to a different provider.
 
 ```json
 {
@@ -65,7 +65,7 @@ Foreground and background preparation use the same effective settings. Changing 
 
 ## Text summaries and background preparation
 
-Choose **Compaction mode → Text summary** in the menu to change the global default, or set `"compactionMode": "text-summary"`. Save the displayed settings for the current provider when it should retain its own snapshot. This mode directly requests a bounded continuation summary using a supported Responses adapter. It does not try provider checkpoint protocols first. The `protocol` preference is retained for switching back, but does not choose the summary request route. Keep `enabled: true`: turning it off also disables replay of existing opaque checkpoints.
+Choose **Global default mode → Text summary** in the menu to change the global default, or set `"compactionMode": "text-summary"`. Save the displayed settings for the current provider when it should retain its own snapshot. This mode directly requests a bounded continuation summary using a supported Responses adapter. It does not try provider checkpoint protocols first. The `protocol` preference is retained for switching back, but does not choose the summary request route. Keep `enabled: true`: turning it off also disables replay of existing opaque checkpoints.
 
 A compatible companion controls background preparation, threshold, and **Apply when ready**. Those settings are not changed here. With auto-apply On, a ready summary can replace its captured prefix at the next safe boundary while preserving later messages and tool results. A mode change invalidates preparations from the previous mode. Summary failure or cancellation preserves the current conversation.
 
