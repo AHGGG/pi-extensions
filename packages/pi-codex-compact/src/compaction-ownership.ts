@@ -58,6 +58,7 @@ function captureBranch(
   entries: SessionEntry[],
   mode: "exact" | "bookkeeping" | "prefix",
   onInvalid?: (reason: string) => void,
+  allowThinkingChanges = false,
 ): (current: SessionEntry[]) => boolean {
   const invalid = (reason: string) => {
     onInvalid?.(reason);
@@ -75,7 +76,8 @@ function captureBranch(
     for (const entry of current.slice(length)) {
       if (
         !["custom", "usage", "label", "session_info", "context_edit"].includes(entry.type) &&
-        !(mode === "prefix" && (entry.type === "message" || entry.type === "custom_message"))
+        !(mode === "prefix" && (entry.type === "message" || entry.type === "custom_message")) &&
+        !(allowThinkingChanges && entry.type === "thinking_level_change")
       )
         return invalid("session transition invalidated the snapshot");
     }
@@ -92,14 +94,18 @@ export function captureExactCompactionBranch(entries: SessionEntry[]): (current:
 }
 
 /** Allow bookkeeping descendants without accepting a different branch or compaction input. */
-export function captureCompactionBranch(entries: SessionEntry[]): (current: SessionEntry[]) => boolean {
-  return captureBranch(entries, "bookkeeping");
+export function captureCompactionBranch(
+  entries: SessionEntry[],
+  allowThinkingChanges = false,
+): (current: SessionEntry[]) => boolean {
+  return captureBranch(entries, "bookkeeping", undefined, allowThinkingChanges);
 }
 
 /** Preserve snapshot ancestry, effective input, and replay while allowing new turns. */
 export function capturePrefixCompactionBranch(
   entries: SessionEntry[],
   onInvalid?: (reason: string) => void,
+  allowThinkingChanges = false,
 ): (current: SessionEntry[]) => boolean {
-  return captureBranch(entries, "prefix", onInvalid);
+  return captureBranch(entries, "prefix", onInvalid, allowThinkingChanges);
 }

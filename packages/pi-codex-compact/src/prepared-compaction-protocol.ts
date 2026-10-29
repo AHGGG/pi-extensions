@@ -42,6 +42,9 @@ export interface PreparationDiagnostics {
   status: string;
   report: string;
   warning?: string;
+  /** Optional terminal disposition; omitted until settlement. Reasons are fixed safe labels. */
+  outcome?: "failed" | "prepared" | "ready" | "recovered" | "discarded" | "cancelled";
+  reason?: string;
 }
 export interface CheckpointPreparation {
   /** Optional live/final snapshot. Reports are retained by the producer after settlement. */

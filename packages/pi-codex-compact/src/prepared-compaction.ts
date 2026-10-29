@@ -28,8 +28,10 @@ import { compactionBindingChanges, resolveCompactionBinding, sameCompactionBindi
 import {
   activeTools,
   type CompactionAttempt,
+  captureTextSummaryInput,
   compactRemotely,
   projectedCurrentMessages,
+  promptAndToolsTokens,
 } from "./compaction-operation.js";
 import {
   captureCompactionBranch,
@@ -69,6 +71,7 @@ export function captureCheckpointPreparation(
   autoProtocols?: AutoCompactionProtocols,
 ): CheckpointPreparation | undefined {
   const settings = effectiveCodexCompactSettings(runtime.get().settings, ctx.model?.provider);
+  const textSummary = settings.compactionMode === "text-summary";
   const model = ctx.model;
   const route = resolveCompactionRoute(model, settings);
   if (
@@ -94,9 +97,13 @@ export function captureCheckpointPreparation(
   // non-label cutoff; guard the full ancestry, including trailing labels.
   const snapshotLeafId = [...snapshot].reverse().find((entry) => entry.type !== "label")?.id;
   let branchFailure: string | undefined;
-  const branchIsCurrent = capturePrefixCompactionBranch(snapshot, (reason) => {
-    branchFailure = reason;
-  });
+  const branchIsCurrent = capturePrefixCompactionBranch(
+    snapshot,
+    (reason) => {
+      branchFailure = reason;
+    },
+    textSummary,
+  );
   if (!branchIsCurrent(snapshot)) return undefined;
   const projection = buildSessionProjection(snapshot, snapshotLeafId ?? null);
   const first = projection.entries.find(({ messages }) => messages.some((message) => message.role !== "system"));
@@ -118,6 +125,7 @@ export function captureCheckpointPreparation(
   const systemPrompt = ctx.getSystemPrompt();
   const toolsKey = JSON.stringify([pi.getActiveTools(), activeTools(pi)]);
   const thinkingLevel = pi.getThinkingLevel();
+  const textSummaryInput = textSummary ? captureTextSummaryInput(pi, ctx) : undefined;
   let reason: string | undefined;
   const isCurrent = () => {
     reason = ownerSignal.aborted
@@ -129,11 +137,11 @@ export function captureCheckpointPreparation(
           ? "compaction settings changed"
           : JSON.stringify(ctx.model) !== modelKey
             ? "model configuration changed"
-            : ctx.getSystemPrompt() !== systemPrompt
+            : !textSummary && ctx.getSystemPrompt() !== systemPrompt
               ? "system prompt changed"
-              : JSON.stringify([pi.getActiveTools(), activeTools(pi)]) !== toolsKey
+              : !textSummary && JSON.stringify([pi.getActiveTools(), activeTools(pi)]) !== toolsKey
                 ? "active tools or tool definitions changed"
-                : pi.getThinkingLevel() !== thinkingLevel
+                : !textSummary && pi.getThinkingLevel() !== thinkingLevel
                   ? "thinking level changed"
                   : !branchIsCurrent(ctx.sessionManager.getBranch())
                     ? (branchFailure ?? "session snapshot changed")
@@ -190,6 +198,7 @@ export function captureCheckpointPreparation(
         fetch,
         {
           autoProtocols,
+          textSummaryInput,
           preparation: { attempt, branchIsCurrent, failureReportOwner: guard.failureReportOwner },
           deadlineSignal: guard.deadlineSignal,
           onDiagnostics: (value) => {
@@ -202,7 +211,9 @@ export function captureCheckpointPreparation(
         performance.now() - preparationStarted,
         attempt,
         snapshotLeafId,
-        Math.ceil((systemPrompt.length + toolsKey.length) / 4),
+        textSummary
+          ? (current) => promptAndToolsTokens(pi, current)
+          : () => Math.ceil((systemPrompt.length + toolsKey.length) / 4),
         isCurrent,
         runtime,
       );
@@ -216,7 +227,8 @@ interface PreparedData {
   preparationMs: number;
   attempt: CompactionAttempt;
   snapshotLeafId: string;
-  promptAndToolsTokens: number;
+  promptAndToolsTokens: (ctx: ExtensionContext) => number;
+  textSummary: boolean;
   isCurrent(): boolean;
   validationFailure?: string;
   applicationFailure?: string;
@@ -226,14 +238,22 @@ function createPreparedCheckpoint(
   preparationMs: number,
   attempt: CompactionAttempt,
   snapshotLeafId: string,
-  promptAndToolsTokens: number,
+  promptAndToolsTokens: (ctx: ExtensionContext) => number,
   isCurrent: () => boolean,
   runtime: CodexCompactSettingsRuntime,
 ): PreparedCheckpoint {
-  const data: PreparedData = { result, preparationMs, attempt, snapshotLeafId, promptAndToolsTokens, isCurrent };
   const details = result && "compaction" in result ? parseCheckpointDetails(result.compaction?.details) : undefined;
   const textDetails =
     result && "compaction" in result ? parseTextSummaryDetails(result.compaction?.details) : undefined;
+  const data: PreparedData = {
+    result,
+    preparationMs,
+    attempt,
+    snapshotLeafId,
+    promptAndToolsTokens,
+    isCurrent,
+    textSummary: !!textDetails,
+  };
   const resultId = details?.checkpointId ?? textDetails?.resultId;
   return {
     checkpointId: resultId,
@@ -294,7 +314,8 @@ async function adoptPreparedCheckpoint(
   const signal = AbortSignal.any([event.signal, operationSignal]);
   // Exact equality is stronger than the foreground guard (which allows harmless
   // bookkeeping descendants). Reuse its captured digest, not an earlier verdict.
-  const adoptionBranchIsCurrent = options.exactBranchIsCurrent ?? captureCompactionBranch(event.branchEntries);
+  const adoptionBranchIsCurrent =
+    options.exactBranchIsCurrent ?? captureCompactionBranch(event.branchEntries, prepared.textSummary);
   const stale = (reason: string, failure = false): PreparedAdoption => {
     prepared.validationFailure = reason;
     if (failure) prepared.applicationFailure = reason;
@@ -384,25 +405,28 @@ async function adoptPreparedCheckpoint(
         ? projectedKeptMessages(entries, leafId, firstKeptEntryId)
         : suffix.flatMap(({ messages }) => messages);
       const suffixTokens = retained.reduce((sum, message) => sum + estimateTokens(message), 0);
-      const estimatedTokens = replacementTokens + suffixTokens + prepared.promptAndToolsTokens;
+      // Text summaries keep the fixed raw tail and every new suffix. Preview
+      // before the budget check because public session callbacks may reenter.
+      if (
+        textDetails &&
+        (!matchedToolPairs(retained) ||
+          !validateTextSummaryProjection(ctx, entries, result.compaction.summary, firstKeptEntryId, textDetails))
+      )
+        return stale("finalized text summary projection did not validate", true);
+      const overheadTokens = prepared.promptAndToolsTokens(ctx);
+      const estimatedTokens = replacementTokens + suffixTokens + overheadTokens;
       const reserveTokens = textDetails
         ? textSummaryReserve(ctx.model.contextWindow, event.preparation.settings.reserveTokens)
         : event.preparation.settings.reserveTokens;
       if (estimatedTokens >= ctx.model.contextWindow - reserveTokens) {
         const number = (value: number) => (Number.isFinite(value) ? String(value) : "unknown");
         return stale(
-          `token budget exceeded (estimated=${number(estimatedTokens)}, replacement=${number(replacementTokens)}, suffix=${number(suffixTokens)}, prompt/tools=${number(prepared.promptAndToolsTokens)}, context=${number(ctx.model.contextWindow)}, reserve=${number(reserveTokens)})`,
+          `token budget exceeded (estimated=${number(estimatedTokens)}, replacement=${number(replacementTokens)}, suffix=${number(suffixTokens)}, prompt/tools=${number(overheadTokens)}, context=${number(ctx.model.contextWindow)}, reserve=${number(reserveTokens)})`,
           true,
         );
       }
       if (textDetails) {
-        // The captured text summary excludes its fixed raw tail. Never move that
-        // cut later: all captured retained messages and every new suffix survive.
-        if (
-          !matchedToolPairs(retained) ||
-          !validateTextSummaryProjection(ctx, entries, result.compaction.summary, firstKeptEntryId, textDetails)
-        )
-          return stale("finalized text summary projection did not validate", true);
+        if (!valid()) return { kind: "stale" };
         return {
           kind: "ready",
           result: {
@@ -525,6 +549,18 @@ async function preparedCheckpointDraft(
     if (textDetails) {
       if (!validateTextSummaryProjection(ctx, entries, summary, firstKeptEntryId, textDetails))
         return reject("finalized text summary projection did not validate", true);
+      if (!validate()) return reject(prepared.validationFailure ?? "application cancelled or boundary changed");
+      const retained = projectedKeptMessages(entries, entries.at(-1)?.id ?? null, firstKeptEntryId);
+      const estimate =
+        Math.ceil(summary.length / 4) +
+        retained.reduce((sum, message) => sum + estimateTokens(message), 0) +
+        prepared.promptAndToolsTokens(ctx);
+      if (
+        !ctx.model ||
+        estimate >= ctx.model.contextWindow - textSummaryReserve(ctx.model.contextWindow, ctx.model.maxTokens)
+      )
+        return reject("token budget exceeded at final text summary handoff", true);
+      if (!validate()) return reject(prepared.validationFailure ?? "application cancelled or boundary changed");
       return { type: "compaction", summary, firstKeptEntryId, details, usage };
     }
     const checkpoint = latestCheckpoint(preview.getBranch());

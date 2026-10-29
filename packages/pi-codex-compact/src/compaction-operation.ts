@@ -58,7 +58,27 @@ export interface CompactionAttempt {
   };
 }
 
+export interface TextSummaryInput {
+  systemPrompt: string;
+  tools: Tool[];
+  thinkingLevel: ReturnType<ExtensionAPI["getThinkingLevel"]>;
+}
+
+/** Detach mutable schemas before auth, scratchpad, or lazy-loading awaits. */
+export function captureTextSummaryInput(pi: ExtensionAPI, ctx: ExtensionContext): TextSummaryInput {
+  return {
+    systemPrompt: ctx.getSystemPrompt(),
+    tools: JSON.parse(JSON.stringify(activeTools(pi))) as Tool[],
+    thinkingLevel: pi.getThinkingLevel(),
+  };
+}
+
+export function promptAndToolsTokens(pi: ExtensionAPI, ctx: ExtensionContext): number {
+  return Math.ceil((ctx.getSystemPrompt().length + JSON.stringify([pi.getActiveTools(), activeTools(pi)]).length) / 4);
+}
+
 export interface CompactionOperationOptions {
+  textSummaryInput?: TextSummaryInput;
   autoProtocols?: AutoCompactionProtocols;
   preparation?: {
     attempt: CompactionAttempt;
@@ -158,8 +178,12 @@ export async function compactRemotely(
   options: CompactionOperationOptions = {},
 ) {
   if (settings.compactionMode === "text-summary") {
+    const textSummaryInput = options.textSummaryInput ?? captureTextSummaryInput(pi, ctx);
     const { compactToText } = await import("./text-summary-operation.js");
-    return compactToText(pi, event, ctx, settings, ownerSignal, isCurrent, ownsStatus, fetch, options);
+    return compactToText(pi, event, ctx, settings, ownerSignal, isCurrent, ownsStatus, fetch, {
+      ...options,
+      textSummaryInput,
+    });
   }
   const model = ctx.model;
   const configuredRoute = resolveCompactionRoute(model, settings);

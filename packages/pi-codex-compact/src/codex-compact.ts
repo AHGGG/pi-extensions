@@ -1,5 +1,5 @@
 import type { Api, Model } from "@earendil-works/pi-ai";
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { type ExtensionAPI, type ExtensionContext, estimateTokens } from "@earendil-works/pi-coding-agent";
 import { abortable } from "./abortable.js";
 import { AutoCompactionProtocols } from "./auto-protocol.js";
 import {
@@ -15,10 +15,10 @@ import {
   plaintextCheckpointMessages,
   savedPlaintextCheckpoint,
 } from "./checkpoint-portability.js";
-import { projectSessionCheckpointContext } from "./checkpoint-projection.js";
+import { projectedKeptMessages, projectSessionCheckpointContext } from "./checkpoint-projection.js";
 import { summarizeCheckpoint } from "./checkpoint-recovery.js";
 import { rewriteCheckpointForWork } from "./checkpoint-replay.js";
-import { activeTools, compactRemotely } from "./compaction-operation.js";
+import { activeTools, compactRemotely, promptAndToolsTokens } from "./compaction-operation.js";
 import { captureCompactionBranch, captureExactCompactionBranch } from "./compaction-ownership.js";
 import { type RemoteCompactionProtocol, resolveCompactionRoute } from "./model-api.js";
 import { captureCheckpointPreparation } from "./prepared-compaction.js";
@@ -41,7 +41,7 @@ import {
   effectiveCodexCompactSettings,
 } from "./settings.js";
 import { terminalText } from "./terminal.js";
-import { activeCompactionId } from "./text-summary.js";
+import { activeCompactionId, parseTextSummaryDetails, textSummaryReserve } from "./text-summary.js";
 
 const STATUS_KEY = "codex-compact";
 const CONTINUATION_TYPE = "codex-compact:continue-v1";
@@ -90,6 +90,7 @@ export function createCodexCompactExtension(
       autoProtocols: AutoCompactionProtocols;
       sessionId: string;
       operation?: AbortController;
+      textSummaryOperation?: AbortController;
       run?: ContinuationRun;
       lastRoute?: { key: string; protocol: RemoteCompactionProtocol };
     };
@@ -304,7 +305,9 @@ export function createCodexCompactExtension(
       const model = ctx.model;
       const route = resolveCompactionRoute(model, settings);
       const key = model && route.kind === "remote" ? rejectionRouteKey(model, route) : undefined;
-      const branchIsCurrent = captureCompactionBranch(event.branchEntries);
+      const textSummary = settings.compactionMode === "text-summary";
+      owner.textSummaryOperation = textSummary ? operation : undefined;
+      const branchIsCurrent = captureCompactionBranch(event.branchEntries, textSummary);
       const modelKey = JSON.stringify(model);
       const systemPrompt = ctx.getSystemPrompt?.();
       const toolsKey = JSON.stringify([pi.getActiveTools(), activeTools(pi)]);
@@ -394,6 +397,12 @@ export function createCodexCompactExtension(
           }
           const details =
             result && "compaction" in result ? parseCheckpointDetails(result.compaction?.details) : undefined;
+          const textDetails =
+            result && "compaction" in result ? parseTextSummaryDetails(result.compaction?.details) : undefined;
+          // Optional sources must not let opaque results inherit Text summary's
+          // relaxed request-configuration checks.
+          if (textSummary && result && "compaction" in result && result.compaction && !textDetails)
+            return { cancel: true };
           if (
             run &&
             owner.run === run &&
@@ -416,20 +425,46 @@ export function createCodexCompactExtension(
               settingsKey: compactionSettingsKey(settings),
             };
           }
-          if (
+          const handoffInvalid = () =>
             !isCurrent() ||
             (sourceIsCurrent && !sourceIsCurrent()) ||
             owner.controller.signal.aborted ||
             event.signal.aborted ||
             owner.sessionId !== ctx.sessionManager.getSessionId() ||
             JSON.stringify(ctx.model) !== modelKey ||
-            ctx.getSystemPrompt?.() !== systemPrompt ||
-            JSON.stringify([pi.getActiveTools(), activeTools(pi)]) !== toolsKey ||
-            pi.getThinkingLevel() !== thinkingLevel ||
-            !branchIsCurrent(ctx.sessionManager.getBranch())
-          ) {
+            (!textSummary &&
+              (ctx.getSystemPrompt?.() !== systemPrompt ||
+                JSON.stringify([pi.getActiveTools(), activeTools(pi)]) !== toolsKey ||
+                pi.getThinkingLevel() !== thinkingLevel)) ||
+            !branchIsCurrent(ctx.sessionManager.getBranch());
+          if (handoffInvalid()) {
             if (run && owner.run === run) run.pending = undefined;
             return { cancel: true };
+          }
+          if (result && "compaction" in result && result.compaction && textDetails) {
+            const retained = projectedKeptMessages(
+              ctx.sessionManager.getBranch(),
+              ctx.sessionManager.getLeafId(),
+              result.compaction.firstKeptEntryId,
+            );
+            const estimated =
+              Math.ceil(result.compaction.summary.length / 4) +
+              retained.reduce((sum, message) => sum + estimateTokens(message), 0) +
+              promptAndToolsTokens(pi, ctx);
+            if (
+              !ctx.model ||
+              estimated >=
+                ctx.model.contextWindow -
+                  textSummaryReserve(ctx.model.contextWindow, event.preparation.settings.reserveTokens)
+            ) {
+              if (ctx.hasUI && !handoffInvalid())
+                ctx.ui.notify(
+                  "[codex-compact] Text summary cannot be applied: current context token budget exceeded at final handoff; history preserved.",
+                  "warning",
+                );
+              return { cancel: true };
+            }
+            if (handoffInvalid()) return { cancel: true };
           }
           return result;
         })
@@ -675,7 +710,10 @@ export function createCodexCompactExtension(
     pi.on("session_before_switch", beforeNavigation);
     pi.on("session_before_fork", beforeNavigation);
     pi.on("session_before_tree", beforeNavigation);
-    pi.on("thinking_level_select", beforeNavigation);
+    pi.on("thinking_level_select", (event, ctx) => {
+      const owner = owners.get(ctx.sessionManager);
+      if (!owner?.textSummaryOperation || owner.operation !== owner.textSummaryOperation) beforeNavigation(event, ctx);
+    });
 
     pi.on("session_tree", (_event, ctx) => {
       cancelOperation(ctx);

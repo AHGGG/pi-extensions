@@ -1,6 +1,8 @@
 import { diagnosticRuntime } from "./diagnostic-runtime.js";
 import type { RemoteCompactionProtocol, RemoteCompactionProtocolSetting } from "./model-api.js";
 
+export type RequestOutcome = "failed" | "prepared" | "ready" | "recovered" | "discarded" | "cancelled";
+
 type Stage = "binding" | "preparation" | "validation" | "boundary" | "preparedWait" | "authWait" | "rebind" | "preview";
 
 /** Fixed, bounded metadata only. Never retain payloads, URLs, headers, or error prose. */
@@ -22,6 +24,8 @@ export class RequestDiagnostics {
   private reasoningEffort = "unobserved";
   private frozenReport: string | undefined;
   private finalResult = "";
+  private outcome: RequestOutcome | undefined;
+  private reason: string | undefined;
   private finishedAttempt: string | undefined;
   private frozenStatus: string | undefined;
   private requestId: string | undefined;
@@ -246,7 +250,9 @@ export class RequestDiagnostics {
     );
   }
 
-  finish(outcome: "failed" | "prepared" | "ready" | "recovered", safeFailure: string): void {
+  finish(outcome: RequestOutcome, safeFailure: string): void {
+    this.outcome = outcome;
+    this.reason = safeFailure === "none" ? undefined : safeFailure;
     // Callers pass only preparationFailureDetail's fixed categories, never provider prose.
     this.finalResult = `outcome=${outcome} failure=${safeFailure}`;
   }
@@ -280,11 +286,13 @@ export class RequestDiagnostics {
     return `${this.phase}; ${Math.floor((performance.now() - this.started) / 1000)}s elapsed; attempt ${this.attempts}; last byte ${age(this.lastByteAt)}; last event ${age(this.lastEventAt)}; ${this.kind === "text-summary" ? `summary messages ${this.items[2]}` : `compaction items ${this.items[0]}`}`;
   }
 
-  snapshot(): { status: string; report: string; warning?: string } {
+  snapshot(): { status: string; report: string; warning?: string; outcome?: RequestOutcome; reason?: string } {
     const inactive = performance.now() - (this.lastByteAt ?? this.attemptStarted) >= 300_000;
     const noEvents = performance.now() - (this.lastEventAt ?? this.attemptStarted) >= 300_000;
     return {
       status: this.frozenStatus ?? this.statusText(),
+      outcome: this.outcome,
+      reason: this.reason,
       report: this.report(),
       ...(!this.frozen && (inactive || noEvents)
         ? {

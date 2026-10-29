@@ -1,7 +1,11 @@
 import assert from "node:assert/strict";
 import { buildSessionContext, type SessionEntry, SessionManager } from "@earendil-works/pi-coding-agent";
 import { test } from "vitest";
-import { captureCompactionBranch } from "../src/compaction-ownership.js";
+import {
+  captureCompactionBranch,
+  captureExactCompactionBranch,
+  capturePrefixCompactionBranch,
+} from "../src/compaction-ownership.js";
 
 function fixture() {
   const manager = SessionManager.inMemory();
@@ -139,4 +143,27 @@ test("empty snapshots permit bookkeeping roots but not conversation roots", () =
   assert.equal(isCurrent(manager.getBranch()), true);
   manager.appendMessage({ role: "user", content: "New input", timestamp: 1 });
   assert.equal(isCurrent(manager.getBranch()), false);
+});
+
+test("only Text summary prefix/bookkeeping guards permit appended thinking metadata", () => {
+  const h = fixture();
+  h.manager.appendThinkingLevelChange("low");
+  const entries = h.manager.getBranch();
+  const prefix = capturePrefixCompactionBranch(entries, undefined, true);
+  const bookkeeping = captureCompactionBranch(entries, true);
+  const exact = captureExactCompactionBranch(entries);
+  const opaque = capturePrefixCompactionBranch(entries);
+  h.manager.appendThinkingLevelChange("high");
+  assert.equal(prefix(h.manager.getBranch()), true);
+  assert.equal(bookkeeping(h.manager.getBranch()), true);
+  assert.equal(exact(h.manager.getBranch()), false);
+  assert.equal(opaque(h.manager.getBranch()), false);
+  const changed = structuredClone(h.manager.getBranch());
+  const originalThinking = changed.find((entry) => entry.type === "thinking_level_change");
+  assert.ok(originalThinking?.type === "thinking_level_change");
+  originalThinking.thinkingLevel = "medium";
+  assert.equal(prefix(changed), false);
+  h.manager.appendModelChange("openai", "fixture");
+  assert.equal(prefix(h.manager.getBranch()), false);
+  assert.equal(bookkeeping(h.manager.getBranch()), false);
 });

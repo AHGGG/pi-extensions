@@ -87,12 +87,26 @@ async function fixture() {
   const { openaiProvider } = (await import(name)) as { openaiProvider(): Provider };
   const provider = openaiProvider();
   const outputBudgets: (number | undefined)[] = [];
+  let afterTerminal: (() => void) | undefined;
   const originalStream = provider.stream;
   provider.stream = (active, context, options) => {
     outputBudgets.push(options?.maxTokens);
+    if (options) {
+      const observe = options.onProviderStreamEvent;
+      options.onProviderStreamEvent = (event, activeModel) => {
+        void observe?.(event, activeModel);
+        if (event && typeof event === "object" && "type" in event && event.type === "response.completed")
+          afterTerminal?.();
+      };
+    }
     return originalStream(active, context, options);
   };
-  const host = createMockPi();
+  const tool = {
+    name: "read",
+    description: "Original tool",
+    parameters: { type: "object", properties: { path: { type: "string", description: "Original schema" } } },
+  };
+  const host = createMockPi({ activeTools: ["read"], allTools: [tool] });
   const manager = SessionManager.inMemory();
   manager.appendMessage({ role: "user", content: "Earlier task", timestamp: 1 });
   const tailId = manager.appendMessage(assistant("Retained detail"));
@@ -178,6 +192,10 @@ async function fixture() {
     payloads,
     requestUrls,
     outputBudgets,
+    tool,
+    setAfterTerminal: (callback: () => void) => {
+      afterTerminal = callback;
+    },
     setReply: (value: typeof reply) => {
       reply = value;
     },
@@ -594,7 +612,7 @@ test("small-context model can prepare and apply with bounded reserve", async () 
   assert.ok(Number(h.outputBudgets[0]) <= 2048);
 });
 
-test("background thinking selection is captured and invalidated when changed", async () => {
+test("background thinking selection is captured without invalidating a completed text summary", async () => {
   const h = await fixture();
   h.ctx.model = { ...model, reasoning: true, thinkingLevelMap: { max: "xhigh" } };
   h.host.rawPi.setThinkingLevel("max");
@@ -604,7 +622,10 @@ test("background thinking selection is captured and invalidated when changed", a
   assert.equal(prepared.usable, true, prepared.failure ?? "summary unavailable");
   assert.equal((h.payloads[0].reasoning as { effort?: string }).effort, "xhigh");
   h.host.rawPi.setThinkingLevel("high");
-  assert.equal((await prepared.draft(h.ctx, h.guard)).draft, undefined);
+  h.manager.appendThinkingLevelChange("high");
+  await h.emit("thinking_level_select", { thinkingLevel: "high" });
+  assert.equal(preparation.isCurrent(), true);
+  assert.ok((await prepared.draft(h.ctx, h.guard)).draft);
   assert.equal(h.payloads.length, 1);
 });
 
@@ -616,4 +637,326 @@ test("text summary HTTP errors report safe status without provider response cont
   const logs = JSON.stringify(h.notifications);
   assert.match(logs, /HTTP 400: request rejected/);
   assert.doesNotMatch(logs, /SECRET|bearer fixture/);
+});
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((done) => {
+    resolve = done;
+  });
+  return { promise, resolve };
+}
+
+for (const phase of ["captured", "binding", "request", "ready"] as const) {
+  test(`text summary survives prompt, tool, and thinking changes while ${phase}`, async () => {
+    const h = await fixture();
+    h.ctx.model = { ...model, reasoning: true, thinkingLevelMap: { max: "xhigh" } };
+    h.host.rawPi.setThinkingLevel("max");
+    const preparation = h.engine.capture(h.ctx);
+    assert.ok(preparation);
+    const started = deferred<void>();
+    const release = deferred<void>();
+    if (phase === "binding") {
+      h.ctx.modelRegistry.getApiKeyAndHeaders = async () => {
+        started.resolve();
+        await release.promise;
+        return { ok: true, apiKey: "fixture" };
+      };
+    }
+    if (phase === "request")
+      h.setReply(async () => {
+        started.resolve();
+        await release.promise;
+        return response();
+      });
+    const mutate = async () => {
+      h.ctx.getSystemPrompt = () => "New instructions after capture";
+      h.tool.description = "Changed tool";
+      h.tool.parameters.properties.path.description = "Changed nested schema";
+      h.host.rawPi.setActiveTools([]);
+      h.host.rawPi.setThinkingLevel("high");
+      h.manager.appendThinkingLevelChange("high");
+      await h.emit("thinking_level_select", { thinkingLevel: "high" });
+    };
+    if (phase === "captured") await mutate();
+    const pending = preparation.start(h.guard);
+    if (phase === "binding" || phase === "request") {
+      await started.promise;
+      await mutate();
+      release.resolve();
+    }
+    const prepared = await pending;
+    assert.equal(prepared.usable, true, prepared.failure ?? "preparation failed");
+    if (phase === "ready") await mutate();
+    assert.equal(preparation.isCurrent(), true, preparation.reason ?? "preparation stale");
+    const drafted = await prepared.draft(h.ctx, h.guard);
+    assert.ok(drafted.draft, drafted.reason ?? "draft unavailable");
+    assert.equal(h.payloads.length, 1);
+    const input = JSON.stringify(h.payloads[0]);
+    assert.match(input, /Stable system/);
+    assert.match(input, /Original tool/);
+    assert.match(input, /Original schema/);
+    assert.doesNotMatch(input, /New instructions|Changed tool|Changed nested/);
+    assert.equal((h.payloads[0].reasoning as { effort?: string }).effort, "xhigh");
+  });
+}
+
+test("foreground text summary survives in-flight prompt, tool, and thinking changes", async () => {
+  const h = await fixture();
+  const started = deferred<void>();
+  const release = deferred<void>();
+  h.setReply(async () => {
+    started.resolve();
+    await release.promise;
+    return response();
+  });
+  const pending = h.emit("session_before_compact", h.event());
+  await started.promise;
+  h.ctx.getSystemPrompt = () => "New foreground instructions";
+  h.host.rawPi.setActiveTools([]);
+  h.host.rawPi.setThinkingLevel("high");
+  h.manager.appendThinkingLevelChange("high");
+  await h.emit("thinking_level_select", { thinkingLevel: "high" });
+  release.resolve();
+  const result = (await pending) as { compaction?: { details: unknown } };
+  assert.ok(parseTextSummaryDetails(result.compaction?.details));
+  assert.equal(h.payloads.length, 1);
+});
+
+for (const mutation of ["prompt", "tools"] as const) {
+  test(`prepared text summary uses the current ${mutation} overhead for its application budget`, async () => {
+    const h = await fixture();
+    const preparation = h.engine.capture(h.ctx);
+    assert.ok(preparation);
+    const prepared = await preparation.start(h.guard);
+    if (mutation === "prompt") h.ctx.getSystemPrompt = () => "x".repeat(400_000);
+    else h.tool.parameters.properties.path.description = "x".repeat(400_000);
+    assert.equal(preparation.isCurrent(), true);
+    const drafted = await prepared.draft(h.ctx, h.guard);
+    assert.equal(drafted.draft, undefined);
+    assert.equal(drafted.failure, true);
+    assert.match(drafted.reason ?? "", /token budget exceeded/);
+    assert.equal(h.payloads.length, 1);
+  });
+}
+
+test("foreground final handoff rechecks current overhead after reentrant status cleanup", async () => {
+  const h = await fixture();
+  h.ctx.hasUI = true;
+  let cleared = 0;
+  h.ctx.ui.setStatus = (_key, value) => {
+    if (value === undefined && ++cleared === 2) h.ctx.getSystemPrompt = () => "x".repeat(400_000);
+  };
+  assert.deepEqual(await h.emit("session_before_compact", h.event()), { cancel: true });
+  assert.equal(cleared, 2);
+  assert.match(JSON.stringify(h.notifications), /current context token budget exceeded at final handoff/);
+  assert.equal(h.payloads.length, 1);
+});
+
+test("successful summary invalidated after its terminal response reports discarded, not failed/none", async () => {
+  const h = await fixture();
+  const preparation = h.engine.capture(h.ctx);
+  assert.ok(preparation);
+  h.setAfterTerminal(() =>
+    h.manager.appendContextEdit(h.manager.getBranch()[0].id, { content: "SECRET changed history" }),
+  );
+  const prepared = await preparation.start(h.guard);
+  assert.equal(prepared.usable, false);
+  const diagnostic = preparation.diagnostics?.();
+  assert.equal(diagnostic?.outcome, "discarded");
+  assert.equal(diagnostic?.reason, "text summary ownership or captured history changed");
+  assert.match(
+    diagnostic?.report ?? "",
+    /outcome=discarded failure=text summary ownership or captured history changed/,
+  );
+  assert.doesNotMatch(diagnostic?.report ?? "", /outcome=failed failure=none|SECRET changed history/);
+  assert.equal(h.payloads.length, 1);
+});
+
+test("cancelled summary retains a terminal cancellation diagnostic without a failed disposition", async () => {
+  const h = await fixture();
+  const preparation = h.engine.capture(h.ctx);
+  assert.ok(preparation);
+  const controller = new AbortController();
+  const started = deferred<void>();
+  const release = deferred<void>();
+  h.setReply(async () => {
+    started.resolve();
+    await release.promise;
+    return response();
+  });
+  const pending = preparation.start({ ...h.guard, signal: controller.signal });
+  await started.promise;
+  controller.abort();
+  release.resolve();
+  const prepared = await pending;
+  assert.equal(prepared.usable, false);
+  assert.equal(preparation.diagnostics?.().outcome, "cancelled");
+  assert.equal(preparation.diagnostics?.().reason, "text summary operation was cancelled");
+});
+
+for (const change of ["model", "provider", "mode", "disable", "history", "session"] as const) {
+  test(`text summary still rejects ${change} changes after becoming ready`, async () => {
+    const h = await fixture();
+    const preparation = h.engine.capture(h.ctx);
+    assert.ok(preparation);
+    const prepared = await preparation.start(h.guard);
+    if (change === "model") h.ctx.model = { ...model, id: "other" };
+    if (change === "provider") h.ctx.model = { ...model, provider: "other" };
+    if (change === "mode") h.settings.compactionMode = "provider-checkpoint";
+    if (change === "disable") h.settings.enabled = false;
+    if (change === "history") h.manager.appendContextEdit(h.manager.getBranch()[0].id, { content: "Edited history" });
+    if (change === "session") await h.emit("session_start");
+    assert.equal(preparation.isCurrent(), false);
+    assert.equal((await prepared.draft(h.ctx, h.guard)).draft, undefined);
+    assert.equal(h.payloads.length, 1);
+  });
+}
+
+for (const boundary of ["adopt", "draft"] as const) {
+  test(`thinking metadata during application auth is ${boundary === "adopt" ? "accepted for foreground reuse" : "rejected at an exact draft boundary"}`, async () => {
+    const h = await fixture();
+    const preparation = h.engine.capture(h.ctx);
+    assert.ok(preparation);
+    const prepared = await preparation.start(h.guard);
+    const auth = deferred<void>();
+    const release = deferred<void>();
+    h.ctx.modelRegistry.getApiKeyAndHeaders = async () => {
+      auth.resolve();
+      await release.promise;
+      return { ok: true, apiKey: "fixture" };
+    };
+    const pending = boundary === "adopt" ? prepared.adopt(h.event(), h.ctx, h.guard) : prepared.draft(h.ctx, h.guard);
+    await auth.promise;
+    h.host.rawPi.setThinkingLevel("high");
+    h.manager.appendThinkingLevelChange("high");
+    await h.emit("thinking_level_select", { thinkingLevel: "high" });
+    release.resolve();
+    const result = await pending;
+    if ("kind" in result) assert.equal(result.kind, "ready");
+    else assert.equal(result.draft, undefined);
+    assert.equal(h.payloads.length, 1);
+  });
+}
+
+for (const callback of ["status", "notification"] as const) {
+  test(`reentrant ${callback} invalidation returns an unusable discarded result`, async () => {
+    const h = await fixture();
+    h.ctx.hasUI = true;
+    const preparation = h.engine.capture(h.ctx);
+    assert.ok(preparation);
+    const invalidate = () => h.manager.appendContextEdit(h.manager.getBranch()[0].id, { content: "Changed" });
+    if (callback === "status")
+      h.ctx.ui.setStatus = (_key, value) => {
+        if (value === undefined) invalidate();
+      };
+    else h.ctx.ui.notify = invalidate;
+    const prepared = await preparation.start(h.guard);
+    assert.equal(prepared.usable, false);
+    assert.equal(preparation.diagnostics?.().outcome, "discarded");
+    assert.equal(h.payloads.length, 1);
+  });
+}
+
+test("in-flight local invalidation remains discarded when the provider wraps its abort", async () => {
+  const h = await fixture();
+  const preparation = h.engine.capture(h.ctx);
+  assert.ok(preparation);
+  const started = deferred<void>();
+  const release = deferred<void>();
+  h.setReply(async () => {
+    started.resolve();
+    await release.promise;
+    return response();
+  });
+  const pending = preparation.start(h.guard);
+  await started.promise;
+  h.manager.appendContextEdit(h.manager.getBranch()[0].id, { content: "Changed" });
+  release.resolve();
+  assert.equal((await pending).usable, false);
+  assert.equal(preparation.diagnostics?.().outcome, "discarded");
+  assert.equal(preparation.diagnostics?.().reason, "text summary ownership or captured history changed");
+});
+
+test("a completed HTTP rejection remains a safe failure if history became stale", async () => {
+  const h = await fixture();
+  const preparation = h.engine.capture(h.ctx);
+  assert.ok(preparation);
+  h.setReply(() => {
+    h.manager.appendContextEdit(h.manager.getBranch()[0].id, { content: "Changed" });
+    return Response.json({ error: "SECRET" }, { status: 400 });
+  });
+  assert.equal((await preparation.start(h.guard)).usable, false);
+  assert.equal(preparation.diagnostics?.().outcome, "failed");
+  assert.equal(preparation.diagnostics?.().reason, "HTTP 400: request rejected");
+  assert.doesNotMatch(preparation.diagnostics?.().report ?? "", /SECRET/);
+});
+
+for (const boundary of ["adopt", "draft"] as const) {
+  test(`${boundary} rechecks current budget after session preview callbacks`, async () => {
+    const h = await fixture();
+    const preparation = h.engine.capture(h.ctx);
+    assert.ok(preparation);
+    const prepared = await preparation.start(h.guard);
+    const getHeader = h.manager.getHeader.bind(h.manager);
+    let previews = 0;
+    h.manager.getHeader = () => {
+      if (++previews === (boundary === "draft" ? 2 : 1)) h.ctx.getSystemPrompt = () => "x".repeat(400_000);
+      return getHeader();
+    };
+    const result =
+      boundary === "adopt" ? await prepared.adopt(h.event(), h.ctx, h.guard) : await prepared.draft(h.ctx, h.guard);
+    if ("kind" in result) {
+      assert.equal(result.kind, "stale");
+      assert.ok(result.kind === "stale");
+      assert.match(result.reason, /token budget exceeded/);
+    } else {
+      assert.equal(result.draft, undefined);
+      assert.match(result.reason ?? "", /token budget exceeded/);
+    }
+    assert.equal(h.payloads.length, 1);
+  });
+}
+
+test("application budgets use the fresh boundary context rather than its captured context object", async () => {
+  const h = await fixture();
+  const preparation = h.engine.capture(h.ctx);
+  assert.ok(preparation);
+  const prepared = await preparation.start(h.guard);
+  const ctx = { ...h.ctx, getSystemPrompt: () => "x".repeat(400_000) };
+  const result = await prepared.draft(ctx, h.guard);
+  assert.equal(result.draft, undefined);
+  assert.match(result.reason ?? "", /token budget exceeded/);
+  assert.equal(h.payloads.length, 1);
+});
+
+test("a prepared source cannot return opaque history under Text summary's relaxed guards", async () => {
+  const h = await fixture();
+  const details = createCheckpointDetails({
+    provider: model.provider,
+    api: model.api,
+    profile: "openai-responses-v1",
+    modelId: model.id,
+    protocol: "responses-compact",
+    replacementHistory: [{ type: "compaction", encrypted_content: "opaque" }],
+    keptMessages: h.manager.buildSessionContext().messages.slice(1),
+  });
+  h.engine.attachSource({
+    beforeCompact: async () => {
+      h.ctx.getSystemPrompt = () => "Changed instructions";
+      return {
+        kind: "ready",
+        result: {
+          compaction: {
+            summary: fallbackSummary(details.checkpointId),
+            details,
+            firstKeptEntryId: h.tailId,
+            tokensBefore: 65_000,
+          },
+        },
+      };
+    },
+  });
+  assert.deepEqual(await h.emit("session_before_compact", h.event()), { cancel: true });
+  assert.equal(h.payloads.length, 0);
 });
