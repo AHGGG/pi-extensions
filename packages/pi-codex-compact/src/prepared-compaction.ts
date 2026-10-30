@@ -107,7 +107,11 @@ export function captureCheckpointPreparation(
   if (!branchIsCurrent(snapshot)) return undefined;
   const projection = buildSessionProjection(snapshot, snapshotLeafId ?? null);
   const first = projection.entries.find(({ messages }) => messages.some((message) => message.role !== "system"));
-  if (!snapshotLeafId || !first || !completeToolPairs(buildSessionContext(snapshot, snapshotLeafId).messages))
+  if (
+    !snapshotLeafId ||
+    !first ||
+    !(textSummary ? matchedToolPairs : completeToolPairs)(buildSessionContext(snapshot, snapshotLeafId).messages)
+  )
     return undefined;
   let firstKeptEntryId = first.sourceEntry.id;
   if (settings.compactionMode === "text-summary") {
@@ -377,7 +381,7 @@ async function adoptPreparedCheckpoint(
     const rebindStarted = performance.now();
     try {
       const entries = event.branchEntries;
-      if (!completeToolPairs(buildSessionContext(entries).messages))
+      if (!(prepared.textSummary ? matchedToolPairs : completeToolPairs)(buildSessionContext(entries).messages))
         return stale("session contains an unmatched tool call");
       const cutoffIndex = entries.findIndex((entry) => entry.id === prepared.snapshotLeafId);
       if (cutoffIndex < 0) return stale("snapshot cutoff is absent from the session");

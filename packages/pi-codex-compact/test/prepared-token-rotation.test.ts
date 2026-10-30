@@ -305,6 +305,41 @@ for (const action of ["adopt", "draft"] as const) {
   }
 }
 
+for (const stopReason of ["aborted", "error"] as const) {
+  test(`prepared opaque checkpoint still rejects an appended ${stopReason} tool attempt`, async () => {
+    const h = fixture();
+    const guard = { signal: new AbortController().signal, isCurrent: () => true, ownsStatus: () => true };
+    const preparation = h.engine().capture(h.ctx);
+    assert.ok(preparation);
+    h.release();
+    const checkpoint = await preparation.start(guard);
+    assert.equal(checkpoint.usable, true);
+    h.manager.appendMessage({
+      ...assistant(""),
+      stopReason,
+      content: [{ type: "toolCall", id: "interrupted", name: "read", arguments: {} }],
+    });
+    const before = JSON.stringify(h.manager.getBranch());
+    assert.equal((await checkpoint.draft(h.ctx, guard)).draft, undefined);
+    let result: { kind: string } | undefined;
+    const detach = h.engine().attachSource({
+      beforeCompact: async (event, ctx, current) => {
+        result = await checkpoint.adopt(event, ctx, current);
+        return { kind: "cancel" };
+      },
+    });
+    try {
+      await h.compact();
+    } finally {
+      detach();
+    }
+    assert.equal(result?.kind, "stale");
+    assert.equal(h.fetches, 1);
+    assert.equal(JSON.stringify(h.manager.getBranch()), before);
+    await h.emit("session_shutdown", { type: "session_shutdown" });
+  });
+}
+
 test("refreshed OAuth retries a failed preparation instead of reusing its old authentication failure", async () => {
   const h = fixture();
   const guard = { signal: new AbortController().signal, isCurrent: () => true, ownsStatus: () => true };

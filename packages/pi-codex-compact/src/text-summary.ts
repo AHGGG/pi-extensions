@@ -1,6 +1,11 @@
 import { randomUUID } from "node:crypto";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
-import { buildSessionProjection, type FileOperations, type SessionEntry } from "@earendil-works/pi-coding-agent";
+import {
+  buildSessionProjection,
+  convertToLlm,
+  type FileOperations,
+  type SessionEntry,
+} from "@earendil-works/pi-coding-agent";
 import { fingerprintMessage, parseCheckpointDetails } from "./checkpoint.js";
 import { projectedKeptMessages } from "./checkpoint-projection.js";
 import { summaryPrefix } from "./checkpoint-recovery.js";
@@ -43,14 +48,23 @@ export function activeCompactionId(entries: SessionEntry[]): string | undefined 
 }
 export function matchedToolPairs(messages: readonly AgentMessage[]): boolean {
   const pending = new Set<string>();
-  for (const message of messages) {
+  // Only convert Pi's message roles; unlike provider normalization this never
+  // synthesizes missing tool results. Keep raw messages for history fingerprints.
+  for (const message of convertToLlm([...messages])) {
     if (message.role === "assistant") {
+      // Pi omits failed/aborted assistant attempts when replaying provider input.
+      // Validate that replay without changing the saved messages or raw cut-point
+      // fingerprints. Do not synthesize results: Pi closes earlier pending calls
+      // before omitting an attempt, so accepting those here could replay duplicates.
+      if (pending.size > 0) return false;
+      if (message.stopReason === "aborted" || message.stopReason === "error") continue;
       for (const block of message.content)
         if (block.type === "toolCall") {
           if (pending.has(block.id)) return false;
           pending.add(block.id);
         }
     } else if (message.role === "toolResult" && !pending.delete(message.toolCallId)) return false;
+    else if (message.role === "user" && pending.size > 0) return false;
   }
   return pending.size === 0;
 }
