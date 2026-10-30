@@ -146,8 +146,8 @@ export async function summarizeCheckpoint(
         };
         delete prepared.context_management;
         delete prepared.previous_response_id;
-        if (Buffer.byteLength(JSON.stringify(prepared)) > MAX_SSE_BYTES)
-          throw new Error("Checkpoint recovery request exceeded the size limit");
+        // Image-heavy conversation inputs can exceed the response-stream budget.
+        // Keep that bound on received bytes, not on the provider's outgoing payload.
         diagnostics?.payload(prepared);
         payloadSeen = true;
         return prepared;

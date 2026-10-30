@@ -5,7 +5,9 @@ import { compact, type SessionBeforeCompactEvent } from "@earendil-works/pi-codi
 import { test, vi } from "vitest";
 import { checkpointMarker, fingerprintMessage } from "../src/checkpoint.js";
 import { recoverCheckpoint, summaryPrefix } from "../src/checkpoint-recovery.js";
+import { MAX_COMPACTION_ITEM_BYTES, MAX_SSE_BYTES } from "../src/protocol.js";
 import type { RemoteCompactionRequest } from "../src/remote-types.js";
+import { RequestDiagnostics } from "../src/request-diagnostics.js";
 
 const usage = {
   input: 10,
@@ -289,15 +291,16 @@ for (const [name, output, status, terminal] of [
   });
 }
 
-test("recovery bounds request bodies and rejects a missing marker before dispatch", async () => {
+test("recovery rejects a missing marker before dispatch", async () => {
   const input = await request();
   input.context.messages = [{ role: "user", content: [{ type: "text", text: "missing marker" }], timestamp: 1 }];
-  input.fetch = async () => assert.fail("unsafe request must not dispatch");
-  await assert.rejects(recoverCheckpoint(input, event));
-  input.context.messages = [{ role: "user", content: [{ type: "text", text: checkpointMarker("old") }], timestamp: 1 }];
-  assert.ok(input.priorCheckpoint);
-  input.priorCheckpoint.replacementHistory = [{ type: "compaction", encrypted_content: "x".repeat(9 * 1024 * 1024) }];
-  await assert.rejects(recoverCheckpoint(input, event));
+  let requests = 0;
+  input.fetch = async () => {
+    requests += 1;
+    return sse();
+  };
+  await assert.rejects(recoverCheckpoint(input, event), /0 checkpoint markers/);
+  assert.equal(requests, 0);
 });
 
 test("recovery releases a hung provider on cancellation and timeout", async () => {
@@ -375,12 +378,55 @@ test("actual Pi native compact cannot consume opaque checkpoint and returns only
   assert.deepEqual(result.details, { readFiles: ["read.ts"], modifiedFiles: ["changed.ts", "edited.ts"] });
 });
 
-for (const bytes of [3 * 1024 * 1024, 9 * 1024 * 1024]) {
-  test(`recovery rejects oversized ${bytes > 8 * 1024 * 1024 ? "stream" : "summary"}`, async () => {
+for (const textSummary of [false, true]) {
+  for (const mib of [7, 8, 10, 15]) {
+    test(`${textSummary ? "text summary" : "checkpoint recovery"} preserves ${mib} MiB image input`, async () => {
+      const input = await request();
+      input.model.input = ["text", "image"];
+      if (textSummary) {
+        input.priorCheckpoint = undefined;
+        input.context.messages = [];
+      }
+      const data = "A".repeat(mib * 1024 * 1024);
+      input.context.messages.push({
+        role: "user",
+        content: [{ type: "image", mimeType: "image/png", data }],
+        timestamp: 3,
+      });
+      const before = JSON.stringify(input.context);
+      input.diagnostics = new RequestDiagnostics();
+      let requests = 0;
+      let body = "";
+      input.fetch = async (_url, init) => {
+        requests += 1;
+        body = String(init?.body);
+        return sse();
+      };
+      const result = await recoverCheckpoint(input, event, textSummary);
+      assert.equal(requests, 1);
+      const payload = JSON.parse(body);
+      const images = payload.input.flatMap((item: { content?: string | { type: string; image_url?: string }[] }) =>
+        Array.isArray(item.content) ? item.content.filter((block) => block.type === "input_image") : [],
+      );
+      assert.equal(images.length, 1);
+      assert.equal(images[0].image_url, `data:image/png;base64,${data}`);
+      assert.match(result.summary, /Earlier assistant fact: sapphire/);
+      assert.equal(JSON.stringify(input.context), before);
+      assert.equal(input.diagnostics.currentAttempt, 1);
+      assert.doesNotMatch(input.diagnostics.report(), /AAAA|fixture-key|opaque-only-assistant-fact/);
+    });
+  }
+}
+
+for (const bytes of [MAX_COMPACTION_ITEM_BYTES + 1, MAX_SSE_BYTES + 1]) {
+  test(`recovery rejects oversized ${bytes > MAX_SSE_BYTES ? "stream" : "summary"}`, async () => {
     const input = await request();
     input.fetch = async () =>
       sse([{ ...messageItem, content: [{ type: "output_text", text: "x".repeat(bytes), annotations: [] }] }]);
-    await assert.rejects(recoverCheckpoint(input, event));
+    await assert.rejects(
+      recoverCheckpoint(input, event),
+      bytes > MAX_SSE_BYTES ? /stream exceeded the size limit/ : /empty or oversized summary/,
+    );
   });
 }
 
