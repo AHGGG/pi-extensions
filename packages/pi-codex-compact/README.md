@@ -153,6 +153,8 @@ The engine exposes a documented, versioned [prepared-compaction protocol](./docs
 
 ### Text summary mode
 
+New text summaries group file paths by directory, retain every filename (including temporary files), and list modified files only once. Absolute/relative aliases are shortened only when the active cwd matches the original, unforked session root; ambiguous roots keep their original spelling. Complete raw path arrays remain in session metadata for later compactions. Existing summaries and Pi native fallback are unchanged.
+
 Text summary uses a separate normal Responses request with a continuation-summary instruction and optional scratchpad context. It does not call a compaction endpoint or send `context_management`. Tool definitions remain available to the request, but tool execution is disabled. A completed, nonempty, bounded summary is required; failure or cancellation leaves current history unchanged rather than trying another compaction mode.
 
 With a compatible background companion, preparation captures the current history while the agent keeps working. **Apply when ready** can remain On: the companion applies the validated result at its next safe boundary. Only captured history is replaced; newer messages and tool results remain. Branch, model/provider, settings, ownership, or captured-history changes invalidate stale work. Later system-prompt, tool-definition, and thinking-level changes do not discard a Text summary: its request uses the captured inputs, and application rechecks the current prompt/tool overhead and retained tail against the context budget. Provider checkpoints retain their stricter compatibility checks. The engine does not change the companion's saved threshold or auto-apply preference.

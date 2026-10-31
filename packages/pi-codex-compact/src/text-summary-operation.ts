@@ -24,7 +24,14 @@ import { abortError } from "./remote-types.js";
 import { RequestDiagnostics, type RequestOutcome } from "./request-diagnostics.js";
 import { captureScratchpadForCompaction } from "./scratchpad-compaction.js";
 import type { CodexCompactSettings } from "./settings.js";
-import { createTextSummaryDetails, matchedToolPairs, summaryFileOps, textSummaryReserve } from "./text-summary.js";
+import { summaryPathRoot } from "./summary-file-paths.js";
+import {
+  createTextSummaryDetails,
+  matchedToolPairs,
+  parseTextSummaryDetails,
+  summaryFileOps,
+  textSummaryReserve,
+} from "./text-summary.js";
 
 /** Direct text inference. Failure never falls through to a second compaction policy. */
 export async function compactToText(
@@ -51,6 +58,7 @@ export async function compactToText(
     return { cancel: true };
   }
   const sessionId = ctx.sessionManager.getSessionId();
+  const filePathRoot = summaryPathRoot(ctx);
   const { thinkingLevel, systemPrompt, tools } = options.textSummaryInput ?? captureTextSummaryInput(pi, ctx);
   const modelKey = JSON.stringify(model);
   const branchCurrent = options.preparation?.branchIsCurrent ?? captureCompactionBranch(event.branchEntries, true);
@@ -225,6 +233,7 @@ export async function compactToText(
           },
           { ...event, preparation },
           true,
+          filePathRoot,
         ),
         signal,
       );
@@ -238,8 +247,13 @@ export async function compactToText(
         summaryTokens + kept.reduce((sum, message) => sum + estimateTokens(message), 0) + promptAndToolsTokens(pi, ctx);
       if (contextTokens >= model.contextWindow - preparation.settings.reserveTokens)
         invalid("Text summary plus retained messages exceeds the model context budget; history preserved");
+      const details = createTextSummaryDetails(compaction.details);
+      // The compact presentation can fit while the complete inventory exceeds
+      // the existing metadata reader limits. Never persist an unreadable result.
+      if (!parseTextSummaryDetails(details))
+        invalid("Text summary file metadata exceeded the size limit; history preserved");
       outcome = options.preparation ? "prepared" : "ready";
-      return { compaction: { ...compaction, details: createTextSummaryDetails(compaction.details) } };
+      return { compaction: { ...compaction, details } };
     } catch (error) {
       failure =
         validationFailure ??

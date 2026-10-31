@@ -11,6 +11,7 @@ import {
   isJsonObject,
   type RemoteCompactionRequest,
 } from "./remote-types.js";
+import { formatSummaryFilePaths } from "./summary-file-paths.js";
 
 export const RECOVERY_INSTRUCTION =
   "Summarize the preceding conversation and encrypted checkpoint into a plaintext continuation checkpoint. Preserve user goals, constraints, decisions, completed work, pending tasks, and relevant file paths. Do not continue the task, call tools, or emit another encrypted checkpoint. Later retained messages are provided separately by the client.";
@@ -203,6 +204,7 @@ export async function recoverCheckpoint(
   request: RemoteCompactionRequest,
   event: SessionBeforeCompactEvent,
   textSummary = false,
+  filePathRoot?: string,
 ) {
   const result = await summarizeCheckpoint(request, {
     maxTokens: Math.max(
@@ -222,8 +224,10 @@ export async function recoverCheckpoint(
   const readFiles = [...event.preparation.fileOps.read].filter((path) => !modifiedFiles.includes(path)).sort();
   const summary =
     result.summary +
-    (readFiles.length ? `\n\n<read-files>\n${readFiles.join("\n")}\n</read-files>` : "") +
-    (modifiedFiles.length ? `\n\n<modified-files>\n${modifiedFiles.join("\n")}\n</modified-files>` : "");
+    (textSummary
+      ? formatSummaryFilePaths(readFiles, modifiedFiles, filePathRoot)
+      : (readFiles.length ? `\n\n<read-files>\n${readFiles.join("\n")}\n</read-files>` : "") +
+        (modifiedFiles.length ? `\n\n<modified-files>\n${modifiedFiles.join("\n")}\n</modified-files>` : ""));
   if (Buffer.byteLength(summary) > MAX_COMPACTION_ITEM_BYTES)
     throw new Error("Checkpoint recovery summary and file metadata exceeded the size limit");
   return {

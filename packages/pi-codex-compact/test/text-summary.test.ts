@@ -505,6 +505,62 @@ test("summary output budget and unsupported APIs fail closed without native fall
   assert.equal(h.payloads.length, 1);
 });
 
+for (const execution of ["foreground", "prepared"] as const) {
+  test(`${execution} groups summary paths and carries raw metadata through repeated compaction`, async () => {
+    const h = await fixture();
+    const raw = {
+      readFiles: [
+        `${h.ctx.cwd}/src/a.ts`,
+        "src/a.ts",
+        `${h.ctx.cwd}/src/b.ts`,
+        "/tmp/logs/first.log",
+        "/tmp/logs/second.log",
+      ].sort(),
+      modifiedFiles: ["src/b.ts", "src/c.ts"],
+    };
+    h.manager.appendCompaction("Earlier summary", h.tailId, 100, raw, true);
+    for (let generation = 0; generation < 2; generation++) {
+      const before = JSON.stringify(h.manager.getBranch());
+      let draft: { summary: string; firstKeptEntryId: string | null; details?: unknown } | undefined;
+      if (execution === "foreground") {
+        const outcome = (await h.emit("session_before_compact", h.event())) as { compaction?: typeof draft };
+        draft = outcome.compaction;
+      } else {
+        const preparation = h.engine.capture(h.ctx);
+        assert.ok(preparation);
+        const prepared = await preparation.start(h.guard);
+        assert.equal(prepared.usable, true, prepared.failure ?? "preparation failed");
+        draft = (await prepared.draft(h.ctx, h.guard)).draft;
+      }
+      assert.ok(draft);
+      assert.match(draft.summary, /src\/\n {2}b.ts, c.ts/);
+      assert.match(draft.summary, /\/tmp\/logs\/\n {2}first.log, second.log/);
+      assert.doesNotMatch(draft.summary.split("<modified-files>")[0], /src\/b.ts/);
+      const details = parseTextSummaryDetails(draft.details);
+      assert.ok(details);
+      assert.deepEqual(details.readFiles, raw.readFiles);
+      assert.deepEqual(details.modifiedFiles, raw.modifiedFiles);
+      assert.equal(JSON.stringify(h.manager.getBranch()), before);
+      assert.ok(draft.firstKeptEntryId);
+      h.manager.appendCompaction(draft.summary, draft.firstKeptEntryId, 65_000, draft.details, true);
+    }
+  });
+}
+
+test("compact path display cannot hide oversized raw metadata", async () => {
+  const h = await fixture();
+  h.ctx.hasUI = true;
+  const readFiles = Array.from({ length: 2500 }, (_, index) => `${"directory".repeat(120)}/${index}.ts`);
+  h.manager.appendCompaction("Earlier summary", h.tailId, 100, { readFiles, modifiedFiles: [] }, true);
+  const before = JSON.stringify(h.manager.getBranch());
+  assert.deepEqual(await h.emit("session_before_compact", h.event()), { cancel: true });
+  assert.equal(JSON.stringify(h.manager.getBranch()), before);
+  assert.ok(
+    h.notifications.some(({ message }) => message.includes("file metadata exceeded the size limit")),
+    JSON.stringify(h.notifications),
+  );
+});
+
 test("file metadata includes previous summary and nested read/write/edit calls", () => {
   const manager = SessionManager.inMemory();
   const id = manager.appendMessage({ role: "user", content: "task", timestamp: 1 });
