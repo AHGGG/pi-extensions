@@ -3,7 +3,11 @@ import type { Model, Provider } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, SessionEntry } from "@earendil-works/pi-coding-agent";
 import { test } from "vitest";
 import { createMockContext, createMockPi } from "../../../test/support.js";
-import { preparationFailureDetail } from "../src/preparation-failure.js";
+import {
+  PrematureCompactionEof,
+  preparationFailureDetail,
+  preparationFailureRetryable,
+} from "../src/preparation-failure.js";
 import { captureCheckpointPreparation } from "../src/prepared-compaction.js";
 import { CodexCompactionProtocolError } from "../src/protocol.js";
 import { RejectedRoutes } from "../src/rejection-state.js";
@@ -93,7 +97,11 @@ const model: Model<"openai-responses"> = {
   contextWindow: 100_000,
   maxTokens: 10_000,
 };
-async function preparation(fetch: typeof globalThis.fetch, maxRetries = 0, contextManagement = false) {
+async function preparation(
+  fetch: typeof globalThis.fetch,
+  maxRetries = 0,
+  contextManagement: boolean | "text-summary" = false,
+) {
   const specifier = "@earendil-works/pi-ai/providers/openai";
   const { openaiProvider } = (await import(specifier)) as { openaiProvider(): Provider };
   const provider = openaiProvider();
@@ -106,12 +114,22 @@ async function preparation(fetch: typeof globalThis.fetch, maxRetries = 0, conte
       message: { role: "user", content: "private conversation", timestamp: 1 },
     },
   ];
+  if (contextManagement === "text-summary")
+    entries.push({
+      type: "message",
+      id: "tail",
+      parentId: "user",
+      timestamp: "2026-01-01T00:00:01.000Z",
+      message: { role: "user", content: "Retain this tail", timestamp: 2 },
+    });
   const state = {
     kind: "loaded" as const,
     path: "/unused",
     settings: {
       ...DEFAULT_CODEX_COMPACT_SETTINGS,
-      protocol: contextManagement ? ("context-management" as const) : ("responses-compact" as const),
+      protocol: contextManagement === true ? ("context-management" as const) : ("responses-compact" as const),
+      compactionMode:
+        contextManagement === "text-summary" ? ("text-summary" as const) : ("provider-checkpoint" as const),
       maxRetries,
     },
   };
@@ -121,14 +139,15 @@ async function preparation(fetch: typeof globalThis.fetch, maxRetries = 0, conte
     update: async () => state,
     flush: async () => {},
   };
+  let apiKey = "secret";
   const { pi } = createMockPi();
   const { ctx } = createMockContext({
     model,
     getSystemPrompt: () => "synthetic system prompt",
     getContextUsage: () => ({ tokens: 80_000, contextWindow: 100_000, percent: 80 }),
-    sessionManager: { getSessionId: () => "session", getBranch: () => entries },
+    sessionManager: { getSessionId: () => "session", getBranch: () => entries, getHeader: () => null },
     modelRegistry: {
-      getApiKeyAndHeaders: async () => ({ ok: true, apiKey: "secret" }),
+      getApiKeyAndHeaders: async () => ({ ok: true, apiKey }),
       getProvider: () => provider,
     },
   });
@@ -144,7 +163,13 @@ async function preparation(fetch: typeof globalThis.fetch, maxRetries = 0, conte
     fetch,
   );
   assert.ok(captured);
-  return { captured, owner };
+  return {
+    captured,
+    owner,
+    setApiKey: (value: string) => {
+      apiKey = value;
+    },
+  };
 }
 
 test("prepared handle carries observed HTTP failure without provider response text", async () => {
@@ -181,6 +206,7 @@ test("prepared deadline identifies timeout while owner cancellation remains canc
     assert.equal(prepared.usable, false);
     assert.equal(prepared.failure, cancelled ? "checkpoint preparation failed" : "checkpoint request timed out");
     assert.equal(captured.isCurrent(), !cancelled);
+    if (cancelled) assert.equal(prepared.retryable, false);
   }
 });
 
@@ -206,6 +232,7 @@ test("malformed response produces a safe checkpoint diagnostic", async () => {
     ownsStatus: () => false,
   });
   assert.equal(prepared.failure, "invalid compaction response or checkpoint");
+  assert.equal(prepared.retryable, false);
 });
 
 test("HTTP status from an earlier retry does not mask a later invalid response", async () => {
@@ -224,6 +251,7 @@ test("HTTP status from an earlier retry does not mask a later invalid response",
   });
   assert.equal(requests, 2);
   assert.equal(prepared.failure, "invalid compaction response or checkpoint");
+  assert.equal(prepared.retryable, false);
 });
 
 test("provider-owned fetch timeout retains its category before the preparation deadline", async () => {
@@ -298,3 +326,158 @@ test("prepared deadline preserves HTTP headers received before a stalled error b
   assert.match(prepared.failure ?? "", /abort=1\//);
   assert.ok((prepared.failure?.length ?? 0) <= 200);
 });
+
+test("retry hint uses typed transport facts and rejects permanent/unknown failures", () => {
+  for (const status of [408, 429, 500, 502, 503, 504])
+    assert.equal(preparationFailureRetryable(new Error("private"), { httpStatus: status }), true);
+  for (const status of [400, 401, 403, 404, 409, 422])
+    assert.equal(preparationFailureRetryable(new Error("private"), { httpStatus: status, timedOut: true }), false);
+  for (const error of [
+    new PrematureCompactionEof("eof"),
+    new DOMException("timeout", "TimeoutError"),
+    new TypeError("fetch failed", { cause: Object.assign(new Error("socket"), { code: "ECONNRESET" }) }),
+  ])
+    assert.equal(preparationFailureRetryable(error), true);
+  for (const error of [
+    new Error("HTTP 503"),
+    new Error("pipe-error"),
+    new Error("OpenAI Responses stream ended before a terminal response event"),
+    new CodexCompactionProtocolError("invalid"),
+    new DOMException("cancelled", "AbortError"),
+    { status: 503 },
+    undefined,
+  ])
+    assert.equal(preparationFailureRetryable(error), false);
+});
+
+for (const mode of [false, true, "text-summary"] as const) {
+  test(`prepared retry hint classifies HTTP failures in ${mode}`, async () => {
+    for (const [status, retryable] of [
+      [400, false],
+      [401, false],
+      [403, false],
+      [408, true],
+      [429, true],
+      [503, true],
+    ] as const) {
+      const { captured } = await preparation(
+        async () => Response.json({ error: { message: "private" } }, { status }),
+        0,
+        mode,
+      );
+      const result = await captured.start({
+        signal: new AbortController().signal,
+        isCurrent: () => true,
+        ownsStatus: () => false,
+      });
+      assert.equal(result.usable, false);
+      assert.equal(result.retryable, retryable, `status ${status}`);
+    }
+  });
+  test(`prepared retry hint preserves fetch causes in ${mode}`, async () => {
+    const { captured } = await preparation(
+      async () => {
+        throw new TypeError("fetch failed", { cause: Object.assign(new Error("socket"), { code: "ECONNRESET" }) });
+      },
+      0,
+      mode,
+    );
+    const result = await captured.start({
+      signal: new AbortController().signal,
+      isCurrent: () => true,
+      ownsStatus: () => false,
+    });
+    assert.equal(result.retryable, true);
+  });
+}
+
+for (const mode of [false, "text-summary"] as const) {
+  test(`retry capture enforces original binding at dispatch in ${mode}`, async () => {
+    let requests = 0;
+    const h = await preparation(
+      async () => {
+        requests++;
+        return Response.json({ error: { message: "busy" } }, { status: 503 });
+      },
+      0,
+      mode,
+    );
+    const guard = { signal: new AbortController().signal, isCurrent: () => true, ownsStatus: () => false };
+    const result = await h.captured.start(guard);
+    assert.equal(result.retryable, true);
+    const retry = result.retry?.(guard);
+    assert.ok(retry);
+    h.setApiKey("different-account");
+    const refused = await retry.start(guard);
+    assert.equal(refused.usable, false);
+    assert.equal(refused.retryable, false);
+    assert.equal(requests, 1);
+    assert.equal(refused.retry?.(guard), undefined);
+  });
+  test(`retry capture stops on cancellation and allows unchanged binding in ${mode}`, async () => {
+    let requests = 0;
+    const h = await preparation(
+      async () => {
+        requests++;
+        return Response.json({ error: { message: "busy" } }, { status: 503 });
+      },
+      0,
+      mode,
+    );
+    const guard = { signal: new AbortController().signal, isCurrent: () => true, ownsStatus: () => false };
+    const result = await h.captured.start(guard);
+    const cancelled = AbortSignal.abort();
+    assert.equal(result.retry?.({ ...guard, signal: cancelled }), undefined);
+    assert.equal(result.retry?.({ ...guard, isCurrent: () => false }), undefined);
+    const retry = result.retry?.(guard);
+    assert.ok(retry);
+    const next = await retry.start(guard);
+    assert.equal(next.retryable, true);
+    assert.equal(requests, 2);
+    h.owner.abort();
+    assert.equal(next.retry?.(guard), undefined);
+  });
+}
+
+for (const mode of [true, "text-summary"] as const) {
+  test(`only known network pipe failures are retryable in ${mode}`, async () => {
+    for (const known of [false, true]) {
+      const { captured } = await preparation(
+        async () =>
+          new Response(
+            new ReadableStream({
+              start(c) {
+                c.error(
+                  known
+                    ? new TypeError("terminated", { cause: Object.assign(new Error("socket"), { code: "ECONNRESET" }) })
+                    : new Error("unknown pipe error"),
+                );
+              },
+            }),
+            { headers: { "content-type": "text/event-stream" } },
+          ),
+        0,
+        mode,
+      );
+      const result = await captured.start({
+        signal: new AbortController().signal,
+        isCurrent: () => true,
+        ownsStatus: () => false,
+      });
+      assert.equal(result.retryable, known);
+    }
+  });
+  test(`verified clean EOF without terminal is retryable in ${mode}`, async () => {
+    const { captured } = await preparation(
+      async () => new Response("", { headers: { "content-type": "text/event-stream" } }),
+      0,
+      mode,
+    );
+    const result = await captured.start({
+      signal: new AbortController().signal,
+      isCurrent: () => true,
+      ownsStatus: () => false,
+    });
+    assert.equal(result.retryable, true);
+  });
+}

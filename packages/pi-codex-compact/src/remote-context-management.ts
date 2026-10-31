@@ -6,6 +6,7 @@ import {
   createContextManagementCollector,
   scratchpadInstructionContent,
 } from "./context-management.js";
+import { PrematureCompactionEof, preparationFailureRetryable } from "./preparation-failure.js";
 import { CodexCompactionProtocolError, expandRemoteCompactionPayload, MAX_SSE_BYTES } from "./protocol.js";
 import { collectProviderUsage } from "./remote-shared.js";
 import {
@@ -17,8 +18,6 @@ import {
 } from "./remote-types.js";
 
 const EOF_RETRY_DELAY_MS = 250;
-
-class PrematureCompactionEof extends Error {}
 
 function isTerminal(event: unknown): boolean {
   return (
@@ -111,6 +110,7 @@ async function requestAttempt(request: RemoteCompactionRequest): Promise<RemoteC
   const collector = createContextManagementCollector();
   let sentInput: ReturnType<typeof assertPreparedInput> | undefined;
   let successes = 0;
+  let transportFailure: unknown;
   let cleanEof = false;
   let terminalSeen = false;
   let active = true;
@@ -146,9 +146,13 @@ async function requestAttempt(request: RemoteCompactionRequest): Promise<RemoteC
         providerSignal?.addEventListener("abort", markProviderAbort, { once: true });
         cleanupSignals.push(() => providerSignal?.removeEventListener("abort", markProviderAbort));
         cleanEof = false;
+        transportFailure = undefined;
         const response = await baseFetch(input, {
           ...init,
           signal: AbortSignal.any([signal, ...(init?.signal ? [init.signal] : [])]),
+        }).catch((error: unknown) => {
+          if (preparationFailureRetryable(error)) transportFailure = error;
+          throw error;
         });
         diagnostics?.headers(response, attempt);
         if (signal.aborted) {
@@ -174,7 +178,8 @@ async function requestAttempt(request: RemoteCompactionRequest): Promise<RemoteC
         });
         // One pipe, no tee or additional reader. Rejection may be upstream failure
         // or downstream parser cancellation, so do not mislabel it as a network error.
-        void response.body.pipeTo(transform.writable, { signal }).catch(() => {
+        void response.body.pipeTo(transform.writable, { signal }).catch((error: unknown) => {
+          if (!signal.aborted && preparationFailureRetryable(error)) transportFailure = error;
           diagnostics?.pipeError(attempt, signal.aborted);
         });
         return new Response(transform.readable, {
@@ -245,6 +250,7 @@ async function requestAttempt(request: RemoteCompactionRequest): Promise<RemoteC
       : collector.finish();
     return { item: replacementHistory[0], replacementHistory, promptInput: sentInput, usage };
   } catch (error) {
+    if (!signal.aborted && !terminalSeen && transportFailure) throw transportFailure;
     if (
       !signal.aborted &&
       successes === 1 &&

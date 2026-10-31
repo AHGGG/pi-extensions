@@ -2,6 +2,7 @@ import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import { type AssistantMessage, type AssistantMessageEventStream, normalizeContext } from "@earendil-works/pi-ai";
 import type { SessionBeforeCompactEvent } from "@earendil-works/pi-coding-agent";
 import { scratchpadInstructionContent } from "./context-management.js";
+import { PrematureCompactionEof, preparationFailureRetryable } from "./preparation-failure.js";
 import { expandRemoteCompactionPayload, MAX_COMPACTION_ITEM_BYTES, MAX_SSE_BYTES } from "./protocol.js";
 import { RecoveryOutput } from "./recovery-output.js";
 import {
@@ -55,7 +56,10 @@ export async function summarizeCheckpoint(
   void aborted.catch(() => undefined);
   let stream: AssistantMessageEventStream | undefined;
   let payloadSeen = false;
+  let cleanEof = false;
+  let terminalSeen = false;
   let successes = 0;
+  let transportFailure: unknown;
   const output = new RecoveryOutput();
   const baseFetch = request.fetch ?? globalThis.fetch;
   const cleanupSignals: (() => void)[] = [];
@@ -85,9 +89,14 @@ export async function summarizeCheckpoint(
         if (providerSignal?.aborted) markProviderAbort();
         providerSignal?.addEventListener("abort", markProviderAbort, { once: true });
         cleanupSignals.push(() => providerSignal?.removeEventListener("abort", markProviderAbort));
+        cleanEof = false;
+        transportFailure = undefined;
         const response = await baseFetch(input, {
           ...init,
           signal: AbortSignal.any([signal, ...(init?.signal ? [init.signal] : [])]),
+        }).catch((error: unknown) => {
+          if (preparationFailureRetryable(error)) transportFailure = error;
+          throw error;
         });
         diagnostics?.headers(response, attempt);
         if (signal.aborted) {
@@ -105,12 +114,14 @@ export async function summarizeCheckpoint(
             destination.enqueue(chunk);
           },
           flush() {
+            cleanEof = true;
             diagnostics?.end(attempt);
           },
         });
         // One pipe, no tee or additional reader. Rejection may be upstream failure
         // or downstream parser cancellation, so do not mislabel it as a network error.
-        void response.body.pipeTo(transform.writable, { signal }).catch(() => {
+        void response.body.pipeTo(transform.writable, { signal }).catch((error: unknown) => {
+          if (!signal.aborted && preparationFailureRetryable(error)) transportFailure = error;
           diagnostics?.pipeError(attempt, signal.aborted);
         });
         return new Response(transform.readable, {
@@ -156,6 +167,17 @@ export async function summarizeCheckpoint(
       onProviderStreamEvent: (raw) => {
         diagnostics?.observe(raw);
         if (!isJsonObject(raw)) return;
+        if (
+          [
+            "response.completed",
+            "response.done",
+            "response.incomplete",
+            "response.failed",
+            "response.cancelled",
+            "error",
+          ].includes(String(raw.type))
+        )
+          terminalSeen = true;
         output.observe(raw);
       },
     });
@@ -186,6 +208,18 @@ export async function summarizeCheckpoint(
       return { summary, usage: completed.usage };
     };
     return await Promise.race([collect(), aborted]);
+  } catch (error) {
+    if (!signal.aborted && !terminalSeen && transportFailure) throw transportFailure;
+    if (
+      !signal.aborted &&
+      successes === 1 &&
+      cleanEof &&
+      !terminalSeen &&
+      error instanceof Error &&
+      error.message === "OpenAI Responses stream ended before a terminal response event"
+    )
+      throw new PrematureCompactionEof(error.message);
+    throw error;
   } finally {
     if (diagnostics) {
       diagnostics.callerAbort = request.signal.aborted;

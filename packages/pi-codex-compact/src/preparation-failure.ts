@@ -15,6 +15,32 @@ const NETWORK_CODES = new Set([
   "UND_ERR_SOCKET",
 ]);
 
+/** Only locally verified clean EOFs receive this type, never arbitrary provider prose. */
+export class PrematureCompactionEof extends Error {}
+
+/** Retry classification uses observed HTTP/transport facts, not the display diagnostic. */
+export function preparationFailureRetryable(
+  error: unknown,
+  options: { timedOut?: boolean; httpStatus?: number } = {},
+): boolean {
+  if (error instanceof Error && isOAuthOperationRejection(error)) return false;
+  if (options.httpStatus !== undefined && options.httpStatus >= 400)
+    return (
+      options.httpStatus === 408 ||
+      options.httpStatus === 429 ||
+      (options.httpStatus >= 500 && options.httpStatus <= 599)
+    );
+  if (options.timedOut) return true;
+  if (!(error instanceof Error) || error instanceof CodexCompactionProtocolError) return false;
+  if (error instanceof PrematureCompactionEof || error.name === "TimeoutError") return true;
+  if (error.name === "AbortError") return false;
+  const cause = error.cause instanceof Error ? error.cause : error;
+  return (
+    ("code" in cause && typeof cause.code === "string" && NETWORK_CODES.has(cause.code)) ||
+    (error instanceof TypeError && error.message === "fetch failed")
+  );
+}
+
 /** Public diagnostics contain only our fixed labels and allowlisted metadata, never provider prose. */
 export function preparationFailureDetail(
   error: unknown,

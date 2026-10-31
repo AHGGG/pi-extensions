@@ -10,7 +10,7 @@ import { abortable } from "./abortable.js";
 import { checkpointMarker, fingerprintMessage, hasActiveCheckpointClaim, latestCheckpoint } from "./checkpoint.js";
 import { projectedKeptMessages } from "./checkpoint-projection.js";
 import { recoverCheckpoint, summaryPrefix } from "./checkpoint-recovery.js";
-import { resolveCompactionBinding } from "./compaction-binding.js";
+import { resolveCompactionBinding, sameCompactionBinding } from "./compaction-binding.js";
 import {
   type CompactionOperationOptions,
   captureTextSummaryInput,
@@ -19,7 +19,7 @@ import {
 } from "./compaction-operation.js";
 import { captureCompactionBranch } from "./compaction-ownership.js";
 import { resolveCompactionRoute } from "./model-api.js";
-import { preparationFailureDetail } from "./preparation-failure.js";
+import { preparationFailureDetail, preparationFailureRetryable } from "./preparation-failure.js";
 import { abortError } from "./remote-types.js";
 import { RequestDiagnostics, type RequestOutcome } from "./request-diagnostics.js";
 import { captureScratchpadForCompaction } from "./scratchpad-compaction.js";
@@ -86,7 +86,7 @@ export async function compactToText(
     if (diagnostics.deadline || options.deadlineSignal?.aborted) {
       outcome = "failed";
       failure = "checkpoint request timed out";
-      if (options.preparation) options.preparation.attempt.failure = { diagnostic: failure };
+      if (options.preparation) options.preparation.attempt.failure = { diagnostic: failure, retryable: false };
     } else {
       outcome = signal.aborted ? "cancelled" : "discarded";
       failure = signal.aborted
@@ -142,6 +142,11 @@ export async function compactToText(
         signal,
       );
       if (!valid()) return cancelled();
+      if (options.retryBinding && !sameCompactionBinding(options.retryBinding, resolved.binding)) {
+        outcome = "discarded";
+        failure = "background retry provider or authentication binding changed";
+        return { cancel: true };
+      }
       secrets = [
         resolved.auth.apiKey,
         ...Object.values(resolved.auth.headers ?? {}),
@@ -220,6 +225,7 @@ export async function compactToText(
                 localAbort = true;
                 throw abortError();
               }
+              lastHttpStatus = undefined;
               diagnostics.endpoint(input instanceof Request ? input.url : String(input));
               const response = await (fetch ?? globalThis.fetch)(input, init);
               lastHttpStatus = response.status;
@@ -275,6 +281,12 @@ export async function compactToText(
       }
       if (options.preparation)
         options.preparation.attempt.failure = {
+          retryable:
+            !validationFailure &&
+            preparationFailureRetryable(error, {
+              timedOut: diagnostics.deadline,
+              httpStatus: lastHttpStatus,
+            }),
           diagnostic: `Text summary failed; history preserved. ${failure} [${diagnostics.compact()}]`,
         };
       return { cancel: true };

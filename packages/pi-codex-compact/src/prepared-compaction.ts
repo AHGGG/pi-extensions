@@ -24,7 +24,12 @@ import {
   projectedKeptMessages,
   projectSessionCheckpointContext,
 } from "./checkpoint-projection.js";
-import { compactionBindingChanges, resolveCompactionBinding, sameCompactionBinding } from "./compaction-binding.js";
+import {
+  type CompactionBinding,
+  compactionBindingChanges,
+  resolveCompactionBinding,
+  sameCompactionBinding,
+} from "./compaction-binding.js";
 import {
   activeTools,
   type CompactionAttempt,
@@ -69,6 +74,7 @@ export function captureCheckpointPreparation(
   onRouteResolved: (protocol: RemoteCompactionProtocol) => void,
   fetch?: typeof globalThis.fetch,
   autoProtocols?: AutoCompactionProtocols,
+  retryBinding?: CompactionBinding,
 ): CheckpointPreparation | undefined {
   const settings = effectiveCodexCompactSettings(runtime.get().settings, ctx.model?.provider);
   const textSummary = settings.compactionMode === "text-summary";
@@ -202,6 +208,7 @@ export function captureCheckpointPreparation(
         fetch,
         {
           autoProtocols,
+          retryBinding,
           textSummaryInput,
           preparation: { attempt, branchIsCurrent, failureReportOwner: guard.failureReportOwner },
           deadlineSignal: guard.deadlineSignal,
@@ -220,6 +227,28 @@ export function captureCheckpointPreparation(
           : () => Math.ceil((systemPrompt.length + toolsKey.length) / 4),
         isCurrent,
         runtime,
+        (retryGuard) => {
+          if (
+            !attempt.failure?.retryable ||
+            !attempt.binding ||
+            !valid() ||
+            retryGuard.signal.aborted ||
+            !retryGuard.isCurrent()
+          )
+            return undefined;
+          return captureCheckpointPreparation(
+            pi,
+            ctx,
+            runtime,
+            ownerSignal,
+            rejected,
+            ownerIsCurrent,
+            onRouteResolved,
+            fetch,
+            autoProtocols,
+            retryBinding ?? attempt.binding,
+          );
+        },
       );
       return prepared;
     },
@@ -245,6 +274,7 @@ function createPreparedCheckpoint(
   promptAndToolsTokens: (ctx: ExtensionContext) => number,
   isCurrent: () => boolean,
   runtime: CodexCompactSettingsRuntime,
+  retry: NonNullable<PreparedCheckpoint["retry"]>,
 ): PreparedCheckpoint {
   const details = result && "compaction" in result ? parseCheckpointDetails(result.compaction?.details) : undefined;
   const textDetails =
@@ -262,6 +292,8 @@ function createPreparedCheckpoint(
   return {
     checkpointId: resultId,
     usable: !!resultId,
+    retry: resultId ? undefined : retry,
+    retryable: !resultId && attempt.failure?.retryable === true && isCurrent(),
     failure: resultId ? undefined : (attempt.failure?.diagnostic ?? "checkpoint preparation failed"),
     async adopt(event, ctx, guard) {
       data.validationFailure = undefined;

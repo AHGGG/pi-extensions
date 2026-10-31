@@ -41,7 +41,7 @@ import {
 import { captureCompactionBranch } from "./compaction-ownership.js";
 import { validateContextManagementHistory } from "./context-management.js";
 import { type CompactionRoute, type RemoteCompactionProtocol, resolveCompactionRoute } from "./model-api.js";
-import { preparationFailureDetail } from "./preparation-failure.js";
+import { preparationFailureDetail, preparationFailureRetryable } from "./preparation-failure.js";
 import { type RejectedRoutes, rejectionRouteKey } from "./rejection-state.js";
 import { requestRemoteCompaction } from "./remote.js";
 import { abortError, type RemoteCompactionRequest, type RemoteCompactionResponse } from "./remote-types.js";
@@ -55,6 +55,7 @@ export interface CompactionAttempt {
   binding?: CompactionBinding;
   failure?: {
     diagnostic: string;
+    retryable?: boolean;
   };
 }
 
@@ -78,6 +79,7 @@ export function promptAndToolsTokens(pi: ExtensionAPI, ctx: ExtensionContext): n
 }
 
 export interface CompactionOperationOptions {
+  retryBinding?: CompactionBinding;
   textSummaryInput?: TextSummaryInput;
   autoProtocols?: AutoCompactionProtocols;
   preparation?: {
@@ -212,7 +214,7 @@ export async function compactRemotely(
     JSON.stringify([pi.getActiveTools(), activeTools(pi)]) === tools &&
     branchIsCurrent(ctx.sessionManager.getBranch());
   const operationStarted = performance.now();
-  let outcome: "failed" | "prepared" | "ready" | "recovered" = "failed";
+  let outcome: "failed" | "prepared" | "ready" | "recovered" | "discarded" = "failed";
   let validationMs = 0;
   let failureDetail = "none";
   const diagnostics = new RequestDiagnostics();
@@ -233,6 +235,7 @@ export async function compactRemotely(
   const diagnosticCleanups: (() => void)[] = [];
   let lastHttpStatus: number | undefined;
   let lastTransportFailure: string | undefined;
+  let lastTransportRetryable = false;
   let rejectionError: Error | undefined;
   let autoBinding: CompactionBinding | undefined;
   let automaticEndpoint: string | undefined;
@@ -300,6 +303,11 @@ export async function compactRemotely(
       remoteSignal,
     );
     if (!stillCurrent()) return { cancel: true };
+    if (options.retryBinding && !sameCompactionBinding(options.retryBinding, resolved.binding)) {
+      outcome = "discarded";
+      failureDetail = "background retry provider or authentication binding changed";
+      return { cancel: true };
+    }
     const { auth, provider } = resolved;
     route = resolved.route;
     if (
@@ -447,6 +455,7 @@ export async function compactRemotely(
         remoteAttempted = true;
         lastHttpStatus = undefined;
         lastTransportFailure = undefined;
+        lastTransportRetryable = false;
         const diagnosticAttempt =
           route.protocol === "context-management" ? diagnostics.currentAttempt : diagnostics.beginAttempt();
         if (route.protocol !== "context-management") {
@@ -468,6 +477,7 @@ export async function compactRemotely(
             ...(input instanceof Request ? [input.signal] : []),
           ]),
         }).catch((error: unknown) => {
+          lastTransportRetryable = preparationFailureRetryable(error);
           const detail = preparationFailureDetail(error, { remoteAttempted: true });
           lastTransportFailure =
             detail.startsWith("network request failed") ||
@@ -500,7 +510,8 @@ export async function compactRemotely(
               diagnostics.end(diagnosticAttempt);
             },
           });
-          void observed.body.pipeTo(transform.writable, { signal: requestSignal }).catch(() => {
+          void observed.body.pipeTo(transform.writable, { signal: requestSignal }).catch((error: unknown) => {
+            if (!requestSignal.aborted && preparationFailureRetryable(error)) lastTransportRetryable = true;
             diagnostics.pipeError(diagnosticAttempt, requestSignal.aborted);
           });
           observed = new Response(transform.readable, {
@@ -548,6 +559,7 @@ export async function compactRemotely(
       if (ownsStatus()) ctx.ui.setStatus(STATUS_KEY, "Responses Context Management (experimental)…");
       lastHttpStatus = undefined;
       lastTransportFailure = undefined;
+      lastTransportRetryable = false;
       response = await dispatch();
     }
     diagnostics.seal();
@@ -609,6 +621,15 @@ export async function compactRemotely(
             remoteAttempted,
           }));
       options.preparation.attempt.failure = {
+        retryable:
+          !rejectionError &&
+          !ownerSignal.aborted &&
+          !event.signal.aborted &&
+          ((lastTransportRetryable && (lastHttpStatus === undefined || lastHttpStatus < 400)) ||
+            preparationFailureRetryable(error, {
+              timedOut: diagnostics.deadline,
+              httpStatus: lastHttpStatus,
+            })),
         diagnostic:
           route.protocol === "context-management"
             ? `${detail.split(" (no safe error details available)")[0]} [${diagnostics.compact()}]`
@@ -745,7 +766,7 @@ export async function compactRemotely(
     ) {
       diagnostics.seal();
       ctx.ui.notify(
-        `[codex-compact] Compaction outcome=${outcome}; operationMs=${Math.floor(performance.now() - operationStarted)} validationMs=${Math.floor(validationMs)}; ${diagnostics.summary()}${failureDetail !== "none" || diagnostics.hadStreamRetry ? `\nstreamOutcome=${diagnostics.hadStreamRetry && (outcome === "prepared" || outcome === "ready") ? "recovered-after-retry" : outcome === "recovered" ? "failed-recovered-via-readable" : "failed"} failure=${failureDetail}\n${diagnostics.report()}` : ""}`,
+        `[codex-compact] Compaction outcome=${outcome}; operationMs=${Math.floor(performance.now() - operationStarted)} validationMs=${Math.floor(validationMs)}; ${diagnostics.summary()}${failureDetail !== "none" || diagnostics.hadStreamRetry ? `\nstreamOutcome=${diagnostics.hadStreamRetry && (outcome === "prepared" || outcome === "ready") ? "recovered-after-retry" : outcome === "recovered" ? "failed-recovered-via-readable" : outcome === "discarded" ? "discarded" : "failed"} failure=${failureDetail}\n${diagnostics.report()}` : ""}`,
         "info",
       );
     }

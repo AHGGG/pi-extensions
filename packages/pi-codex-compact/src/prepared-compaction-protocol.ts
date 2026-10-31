@@ -34,6 +34,10 @@ export interface PreparedCheckpoint {
   readonly usable: boolean;
   /** Safe, bounded display text: no credentials, request/response bodies, or conversation content. */
   readonly failure?: string;
+  /** True only for a failed transient provider/transport attempt. Missing means do not retry. */
+  readonly retryable?: boolean;
+  /** Fresh one-shot capture bound to this failed attempt's provider/authentication. Missing means do not retry. */
+  retry?(guard: ApplicationGuard): CheckpointPreparation | undefined;
   adopt(event: SessionBeforeCompactEvent, ctx: ExtensionContext, guard: ApplicationGuard): Promise<CheckpointAdoption>;
   draft(ctx: ExtensionContext, guard: ApplicationGuard): Promise<CheckpointDraft>;
 }
