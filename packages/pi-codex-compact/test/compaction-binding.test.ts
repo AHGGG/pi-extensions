@@ -423,6 +423,30 @@ describe("compaction binding diagnostics", () => {
     assert.deepEqual(compactionBindingChanges(first.binding, second.binding), []);
   });
 
+  test("completed text summaries relax only stream identities and diagnostics follow the same guard", async () => {
+    const f = fixture();
+    const { binding } = await f.resolve();
+    const replacement = fixture().state.provider;
+    const options = { completedTextSummary: true };
+    for (let mask = 0; mask < 16; mask += 1) {
+      const right: CompactionBinding = {
+        key: mask & 1 ? "different-key" : binding.key,
+        provider: mask & 2 ? replacement : binding.provider,
+        stream: mask & 4 ? replacement.stream : binding.stream,
+        streamSimple: mask & 8 ? replacement.streamSimple : binding.streamSimple,
+      };
+      const expected = (mask & 3) === 0;
+      assert.equal(sameCompactionBinding(binding, right, options), expected);
+      assert.deepEqual(compactionBindingChanges(binding, right, options), [
+        ...(mask & 1 ? ["binding changed"] : []),
+        ...(mask & 2 ? ["provider instance changed"] : []),
+      ]);
+      assert.equal(sameCompactionBinding(binding, right), mask === 0);
+    }
+    assert.equal(sameCompactionBinding(undefined, binding, options), false);
+    assert.deepEqual(compactionBindingChanges(undefined, binding, options), ["prepared binding unavailable"]);
+  });
+
   test("stateful serialization hooks run once per resolution with no extra authentication lookup", async () => {
     const f = fixture();
     const counts = { model: 0, requestAuth: 0, providerAuth: 0 };

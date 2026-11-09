@@ -90,20 +90,33 @@ export async function resolveCompactionBinding(
   return { auth, route: route as Extract<CompactionRoute, { kind: "remote" }>, provider, binding };
 }
 
-export function sameCompactionBinding(left: CompactionBinding | undefined, right: CompactionBinding): boolean {
+interface BindingComparisonOptions {
+  /** Completed plaintext needs no stream replay; opaque checkpoints and retries stay strict. */
+  completedTextSummary?: boolean;
+}
+
+export function sameCompactionBinding(
+  left: CompactionBinding | undefined,
+  right: CompactionBinding,
+  options: BindingComparisonOptions = {},
+): boolean {
   return (
     !!left &&
     left.key === right.key &&
     left.provider === right.provider &&
-    left.stream === right.stream &&
-    left.streamSimple === right.streamSimple
+    (options.completedTextSummary === true ||
+      (left.stream === right.stream && left.streamSimple === right.streamSimple))
   );
 }
 
 /** Explain a rejection using fixed labels only; never change the acceptance guard. */
-export function compactionBindingChanges(left: CompactionBinding | undefined, right: CompactionBinding): string[] {
+export function compactionBindingChanges(
+  left: CompactionBinding | undefined,
+  right: CompactionBinding,
+  options: BindingComparisonOptions = {},
+): string[] {
   if (!left) return ["prepared binding unavailable"];
-  if (sameCompactionBinding(left, right)) return [];
+  if (sameCompactionBinding(left, right, options)) return [];
   const changes: string[] = [];
   if (left.key !== right.key) {
     const before = componentDigests.get(left);
@@ -114,7 +127,9 @@ export function compactionBindingChanges(left: CompactionBinding | undefined, ri
     if (changes.length === 0) changes.push("binding changed");
   }
   if (left.provider !== right.provider) changes.push("provider instance changed");
-  if (left.stream !== right.stream) changes.push("stream function changed");
-  if (left.streamSimple !== right.streamSimple) changes.push("streamSimple function changed");
+  if (!options.completedTextSummary) {
+    if (left.stream !== right.stream) changes.push("stream function changed");
+    if (left.streamSimple !== right.streamSimple) changes.push("streamSimple function changed");
+  }
   return changes;
 }

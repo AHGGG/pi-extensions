@@ -405,8 +405,12 @@ async function adoptPreparedCheckpoint(
     }
     if (signal.aborted) return { kind: "cancel" };
     if (!valid()) return { kind: "stale" };
-    if (!sameCompactionBinding(prepared.attempt.binding, binding.binding))
-      return stale(compactionBindingChanges(prepared.attempt.binding, binding.binding).join("; "), true);
+    const bindingOptions = { completedTextSummary: prepared.textSummary };
+    if (!sameCompactionBinding(prepared.attempt.binding, binding.binding, bindingOptions))
+      return stale(
+        compactionBindingChanges(prepared.attempt.binding, binding.binding, bindingOptions).join("; "),
+        true,
+      );
     if (prepared.attempt.failure) return { kind: "failed" };
     if (!result || !("compaction" in result) || !result.compaction)
       return stale("prepared checkpoint result is unavailable", true);
