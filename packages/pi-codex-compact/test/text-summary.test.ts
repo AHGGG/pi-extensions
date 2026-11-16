@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
+import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { AssistantMessage, Model, Provider } from "@earendil-works/pi-ai";
 import {
   buildSessionContext,
+  convertToLlm,
   type ExtensionContext,
   type SessionBeforeCompactEvent,
   SessionManager,
@@ -25,6 +27,7 @@ import {
 } from "../src/settings.js";
 import {
   activeCompactionId,
+  createTextSummaryDetails,
   matchedToolPairs,
   parseTextSummaryDetails,
   summaryFileOps,
@@ -430,7 +433,15 @@ test("direct foreground summary keeps native tail and persists plaintext identit
   );
   await h.emit("session_start");
   assert.equal(activeCompactionId(h.manager.getBranch()), h.engine.checkpointId(h.ctx));
-  assert.equal(await h.emit("context", { messages: h.manager.buildSessionContext().messages }), undefined);
+  const replay = (await h.emit("context", { messages: h.manager.buildSessionContext().messages })) as {
+    messages: AgentMessage[];
+  };
+  assert.equal(replay.messages[0].role, "compactionSummary");
+  assert.deepEqual(
+    convertToLlm(replay.messages).slice(1),
+    convertToLlm(h.manager.buildSessionContext().messages).slice(1),
+  );
+  await h.emit("session_shutdown");
 });
 
 test("prepared text summary retains last tool group once and preserves appended tool results", async () => {
@@ -1015,4 +1026,76 @@ test("a prepared source cannot return opaque history under Text summary's relaxe
   });
   assert.deepEqual(await h.emit("session_before_compact", h.event()), { cancel: true });
   assert.equal(h.payloads.length, 0);
+});
+
+test("prepared text summary replay keeps a stable boundary and preserves retained tool pairs", async () => {
+  const h = await fixture();
+  h.setReply(() => response("The latest user requested a checkpoint only. Do not continue the task."));
+  const preparation = h.engine.capture(h.ctx);
+  assert.ok(preparation);
+  const prepared = await preparation.start(h.guard);
+  const { draft } = await prepared.draft(h.ctx, h.guard);
+  assert.ok(draft);
+  h.manager.appendCompaction(draft.summary, draft.firstKeptEntryId, 65_000, draft.details, true);
+  h.manager.appendMessage({
+    ...assistant(""),
+    content: [{ type: "toolCall", id: "read-1", name: "read", arguments: { path: "README.md" } }],
+    stopReason: "toolUse",
+  });
+  h.manager.appendMessage({
+    role: "toolResult",
+    toolCallId: "read-1",
+    toolName: "read",
+    content: [{ type: "text", text: "Read completed." }],
+    isError: false,
+    timestamp: 3,
+  });
+  h.manager.appendMessage({ role: "user", content: "Pause and wait for approval.", timestamp: 4 });
+  const saved = JSON.stringify(h.manager.getBranch());
+  const original = h.manager.buildSessionContext().messages;
+  const first = (await h.emit("context", { messages: original })) as { messages: AgentMessage[] };
+  assert.ok(first?.messages);
+  assert.equal(first.messages.length, original.length);
+  const summary = first.messages[0];
+  assert.equal(summary.role, "compactionSummary");
+  if (summary.role === "compactionSummary") {
+    assert.equal(summary.summary, `${draft.summary}\n\nCompaction complete. Please continue.`);
+  }
+  const firstLlm = convertToLlm(first.messages);
+  assert.deepEqual(firstLlm.slice(1), convertToLlm(original).slice(1));
+  assert.equal(matchedToolPairs(first.messages), true);
+  assert.equal(JSON.stringify(h.manager.getBranch()), saved);
+  assert.equal(await h.emit("context", { messages: first.messages }), undefined);
+
+  h.manager.appendMessage(assistant("Still waiting for approval."));
+  const next = (await h.emit("context", { messages: h.manager.buildSessionContext().messages })) as {
+    messages: AgentMessage[];
+  };
+  assert.deepEqual(convertToLlm(next.messages).slice(0, firstLlm.length), firstLlm);
+  assert.equal(h.host.sentMessages.length, 0);
+  await h.emit("session_shutdown");
+});
+
+test("text summary context replay respects disabled and aborted requests and ignores other summaries", async () => {
+  const h = await fixture();
+  h.manager.appendCompaction(
+    "Saved text summary",
+    h.tailId,
+    65_000,
+    createTextSummaryDetails({ readFiles: [], modifiedFiles: [] }),
+    true,
+  );
+  const messages = h.manager.buildSessionContext().messages;
+  h.settings.enabled = false;
+  assert.equal(await h.emit("context", { messages }), undefined);
+  h.settings.enabled = true;
+  h.ctx.signal = AbortSignal.abort();
+  assert.equal(await h.emit("context", { messages }), undefined);
+  h.ctx.signal = new AbortController().signal;
+  assert.equal(await h.emit("context", { messages: messages.slice(1) }), undefined);
+  assert.equal(await h.emit("context", { messages: [messages[0], ...messages] }), undefined);
+  h.manager.appendCompaction("New native summary", h.tailId, 100, {}, false);
+  assert.equal(await h.emit("context", { messages: h.manager.buildSessionContext().messages }), undefined);
+  assert.equal(h.host.sentMessages.length, 0);
+  await h.emit("session_shutdown");
 });

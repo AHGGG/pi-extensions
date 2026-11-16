@@ -42,6 +42,7 @@ import {
 } from "./settings.js";
 import { terminalText } from "./terminal.js";
 import { activeCompactionId, parseTextSummaryDetails, textSummaryReserve } from "./text-summary.js";
+import { textSummaryMessagesForWork } from "./text-summary-replay.js";
 
 const STATUS_KEY = "codex-compact";
 const CONTINUATION_TYPE = "codex-compact:continue-v1";
@@ -568,6 +569,11 @@ export function createCodexCompactExtension(
     pi.on("context", async (event, ctx) => {
       if (!settingsFor(ctx.model?.provider).enabled) return undefined;
       const settings = settingsFor(ctx.model?.provider);
+      if (!ctx.signal?.aborted) {
+        const messages = textSummaryMessagesForWork(event.messages, ctx.sessionManager.getBranch());
+        if (messages) return { messages };
+      }
+
       const checkpoint = activeCheckpoint(ctx);
       if (!checkpoint) return undefined;
       const route = resolveCompactionRoute(ctx.model, settings);

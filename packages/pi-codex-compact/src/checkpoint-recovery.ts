@@ -15,7 +15,12 @@ import {
 import { formatSummaryFilePaths } from "./summary-file-paths.js";
 
 export const RECOVERY_INSTRUCTION =
-  "Summarize the preceding conversation and encrypted checkpoint into a plaintext continuation checkpoint. Preserve user goals, constraints, decisions, completed work, pending tasks, and relevant file paths. Do not continue the task, call tools, or emit another encrypted checkpoint. Later retained messages are provided separately by the client.";
+  "Summarize the preceding conversation and encrypted checkpoint into a plaintext continuation checkpoint. " +
+  "This is internal maintenance, not a user request. " +
+  "Preserve the actual user’s request, progress, and unfinished work. " +
+  "Preserve user goals, constraints, decisions, completed work, pending tasks, and relevant file paths. " +
+  "For this response only, return the summary without performing tasks or calling tools. " +
+  "Do not emit another encrypted checkpoint. Later retained messages are provided separately by the client.";
 
 export function summaryPrefix(
   messages: AgentMessage[],
